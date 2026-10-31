@@ -188,7 +188,9 @@ impl PlasticCircuit {
         let mut result = BooleanState::new(self.neuron_count);
         for (i, &value) in inputs.iter().enumerate() {
             if gates::ge(value, threshold) {
-                result.set(i, true).map_err(|_| bad("invalid output index"))?;
+                result
+                    .set(i, true)
+                    .map_err(|_| bad("invalid output index"))?;
             }
         }
         Ok(result)
@@ -296,13 +298,21 @@ mod tests {
         target.set(2, true).unwrap();
         for _ in 0..8 {
             assert_eq!(learner.train(&graph, &positive, &target).unwrap(), 1);
-            assert_eq!(learner.train(&graph, &negative, &BooleanState::new(3)).unwrap(), 1);
+            assert_eq!(
+                learner
+                    .train(&graph, &negative, &BooleanState::new(3))
+                    .unwrap(),
+                1
+            );
         }
         let cases = [(positive, true), (negative, false)];
         let score = |model: &PlasticCircuit| -> usize {
-            cases.iter().filter(|(stimulus, expected)| {
-                model.predict(&graph, stimulus, 1).unwrap().get(2).unwrap() == *expected
-            }).count()
+            cases
+                .iter()
+                .filter(|(stimulus, expected)| {
+                    model.predict(&graph, stimulus, 1).unwrap().get(2).unwrap() == *expected
+                })
+                .count()
         };
         assert_eq!(score(&frozen_zero), 1);
         assert_eq!(score(&frozen_topology), 1);
@@ -315,8 +325,12 @@ mod tests {
         let mut circuit = PlasticCircuit::new(&graph, 0)?;
         let target = stimulus(2);
         circuit.train(&graph, &stimulus(0), &target)?;
-        let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let file = std::env::temp_dir().join(format!("v888-plastic-{}-{unique}.bin",std::process::id()));
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let file =
+            std::env::temp_dir().join(format!("v888-plastic-{}-{unique}.bin", std::process::id()));
         circuit.save(&file)?;
         let after = PlasticCircuit::load(&file, &graph)?;
         assert_eq!(after, circuit);

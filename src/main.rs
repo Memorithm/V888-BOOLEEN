@@ -1,13 +1,13 @@
 use std::error::Error;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
-use v888_booleen::plasticity::PlasticCircuit;
 use std::fs::{self, OpenOptions};
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 use v888_booleen::connectome::Connectome;
 use v888_booleen::engine::BooleanEngine;
-use v888_booleen::learning_bench::benchmark;
 use v888_booleen::full_synapse::{pack_records, FullSynapseReader};
+use v888_booleen::learning_bench::benchmark;
+use v888_booleen::plasticity::PlasticCircuit;
 use v888_booleen::synapse_pairs::{pack, propagate_one_step, SynapsePairsReader};
 fn require<'a>(args: &'a [String], name: &str) -> Result<&'a str, Box<dyn Error>> {
     let ix = args
@@ -26,10 +26,7 @@ fn optional<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 
 type Episode = (usize, usize, bool);
 
-fn read_training_episodes(
-    graph: &Connectome,
-    path: &Path,
-) -> Result<Vec<Episode>, Box<dyn Error>> {
+fn read_training_episodes(graph: &Connectome, path: &Path) -> Result<Vec<Episode>, Box<dyn Error>> {
     const MAX_EXAMPLES: usize = 65_536;
     let mut records = Vec::new();
     for (i, text) in BufReader::new(File::open(path)?).lines().enumerate() {
@@ -71,7 +68,9 @@ fn run_one_episode(
     threshold: u128,
 ) -> Result<bool, Box<dyn Error>> {
     let mut stimulus = v888_booleen::BooleanState::new(graph.ids.len());
-    stimulus.set(record.0, true).map_err(|_| "invalid source index")?;
+    stimulus
+        .set(record.0, true)
+        .map_err(|_| "invalid source index")?;
     let output = model.predict(graph, &stimulus, threshold)?;
     Ok(output.get(record.1).map_err(|_| "invalid target index")?)
 }
@@ -223,13 +222,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         Some("train-plasticity") => {
             let graph = Connectome::load(Path::new(require(&args, "--graph")?))?;
-            let records = read_training_episodes(
-                &graph,
-                Path::new(require(&args, "--episodes")?),
-            )?;
-            let epochs = optional(&args, "--epochs")
-                .unwrap_or("1")
-                .parse::<u32>()?;
+            let records = read_training_episodes(&graph, Path::new(require(&args, "--episodes")?))?;
+            let epochs = optional(&args, "--epochs").unwrap_or("1").parse::<u32>()?;
             if epochs == 0 || epochs > 64 || records.len() as u64 * u64::from(epochs) > 1_000_000 {
                 return Err("training episode budget exceeded".into());
             }
@@ -243,7 +237,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                     if fire {
                         teacher.set(target, true).map_err(|_| "invalid teacher")?;
                     }
-                    updates = updates.checked_add(model.train(&graph, &stimulus, &teacher)?)
+                    updates = updates
+                        .checked_add(model.train(&graph, &stimulus, &teacher)?)
                         .ok_or("training update overflow")?;
                     stimulus.set(source, false).map_err(|_| "invalid source")?;
                     if fire {
@@ -252,27 +247,40 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
             model.save(Path::new(require(&args, "--output")?))?;
-            println!("plasticity_training_episodes={} edge_updates={} checkpoint_weight_bytes={}", records.len() as u64 * u64::from(epochs), updates, model.weight_bytes());
+            println!(
+                "plasticity_training_episodes={} edge_updates={} checkpoint_weight_bytes={}",
+                records.len() as u64 * u64::from(epochs),
+                updates,
+                model.weight_bytes()
+            );
             println!("plasticity_supervision=artificial_labels_not_insect_behavior");
         }
         Some("score-plasticity") => {
             let graph = Connectome::load(Path::new(require(&args, "--graph")?))?;
             let model = PlasticCircuit::load(Path::new(require(&args, "--weights")?), &graph)?;
             let records = read_training_episodes(&graph, Path::new(require(&args, "--episodes")?))?;
-            let threshold = optional(&args, "--threshold").unwrap_or("1").parse::<u128>()?;
+            let threshold = optional(&args, "--threshold")
+                .unwrap_or("1")
+                .parse::<u128>()?;
             let mut correct = 0_u64;
             for &record in &records {
                 if run_one_episode(&model, &graph, record, threshold)? == record.2 {
                     correct += 1;
                 }
             }
-            println!("plasticity_correct={} plasticity_examples={}", correct, records.len());
+            println!(
+                "plasticity_correct={} plasticity_examples={}",
+                correct,
+                records.len()
+            );
             println!("plasticity_scope=explicit_supervised_recall");
         }
         Some("run-plasticity") => {
             let graph = Connectome::load(Path::new(require(&args, "--graph")?))?;
             let model = PlasticCircuit::load(Path::new(require(&args, "--weights")?), &graph)?;
-            let threshold = optional(&args, "--threshold").unwrap_or("1").parse::<u128>()?;
+            let threshold = optional(&args, "--threshold")
+                .unwrap_or("1")
+                .parse::<u128>()?;
             let mut input = v888_booleen::BooleanState::new(graph.ids.len());
             for seed in require(&args, "--seed")?.split(',') {
                 let id = seed.parse::<u64>()?;
@@ -280,7 +288,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                 input.set(index, true).map_err(|_| "invalid seed index")?;
             }
             let output = model.predict(&graph, &input, threshold)?;
-            println!("plasticity_active={} plasticity_threshold={threshold}", output.active_count());
+            println!(
+                "plasticity_active={} plasticity_threshold={threshold}",
+                output.active_count()
+            );
             println!("plasticity_scope=one_synchronous_experimental_step");
         }
         Some("bench-learning") => {
@@ -288,9 +299,18 @@ fn main() -> Result<(), Box<dyn Error>> {
             let r = benchmark(&graph)?;
             println!("v888_learning_report_schema=retention-v1");
             println!("dataset_neurons={} dataset_edges={}", r.neurons, r.edges);
-            println!("supervised_positive_source={} supervised_negative_source={} target_neuron={}", r.positive_source_id, r.negative_source_id, r.target_id);
-            println!("training_episodes={} test_episodes={} positive_test_examples={}", r.training_episodes, r.tested_episodes, r.positive_examples);
-            println!("frozen_zero_correct={} frozen_topology_correct={} learned_correct={}", r.frozen_zero_correct, r.frozen_topology_correct, r.learned_correct);
+            println!(
+                "supervised_positive_source={} supervised_negative_source={} target_neuron={}",
+                r.positive_source_id, r.negative_source_id, r.target_id
+            );
+            println!(
+                "training_episodes={} test_episodes={} positive_test_examples={}",
+                r.training_episodes, r.tested_episodes, r.positive_examples
+            );
+            println!(
+                "frozen_zero_correct={} frozen_topology_correct={} learned_correct={}",
+                r.frozen_zero_correct, r.frozen_topology_correct, r.learned_correct
+            );
             println!("plastic_weight_bytes={}", r.learned_weight_bytes);
             println!("train_elapsed_us={} eval_frozen_zero_us={} eval_frozen_topology_us={} eval_learned_us={}", r.train_elapsed.as_micros(), r.frozen_zero_eval_elapsed.as_micros(), r.frozen_topology_eval_elapsed.as_micros(), r.learned_eval_elapsed.as_micros());
             println!("evaluation_scope=seen_pattern_retention_not_generalization_or_biology");

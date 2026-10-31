@@ -64,7 +64,9 @@ pub fn benchmark(graph: &Connectome) -> io::Result<RetentionReport> {
     let mut good_input = BooleanState::new(graph.ids.len());
     good_input.set(good, true).map_err(|_| bad("good input"))?;
     let mut bad_input = BooleanState::new(graph.ids.len());
-    bad_input.set(bad_source, true).map_err(|_| bad("bad input"))?;
+    bad_input
+        .set(bad_source, true)
+        .map_err(|_| bad("bad input"))?;
     let mut desired = BooleanState::new(graph.ids.len());
     desired.set(target, true).map_err(|_| bad("target"))?;
     let no_spike = BooleanState::new(graph.ids.len());

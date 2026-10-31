@@ -50,26 +50,50 @@ fn train_save_score_infer_and_reject_bad_checkpoint() -> io::Result<()> {
     let bad = bad_graph_path.to_str().unwrap();
     let (ok, stdout, stderr) = call(&[
         "train-plasticity",
-        "--graph", g, "--episodes", ep, "--epochs", "4", "--output", w,
+        "--graph",
+        g,
+        "--episodes",
+        ep,
+        "--epochs",
+        "4",
+        "--output",
+        w,
     ])?;
     assert!(ok, "{stderr}");
     assert!(stdout.contains("plasticity_training_episodes=8"));
     assert!(weights_path.exists());
     let (ok, stdout, stderr) = call(&[
         "score-plasticity",
-        "--graph", g, "--weights", w, "--episodes", ep,
+        "--graph",
+        g,
+        "--weights",
+        w,
+        "--episodes",
+        ep,
     ])?;
     assert!(ok, "{stderr}");
     assert!(stdout.contains("plasticity_correct=2 plasticity_examples=2"));
     let (ok, stdout, stderr) = call(&[
         "run-plasticity",
-        "--graph", g, "--weights", w, "--seed", "10",
+        "--graph",
+        g,
+        "--weights",
+        w,
+        "--seed",
+        "10",
     ])?;
     assert!(ok, "{stderr}");
     assert!(stdout.contains("plasticity_active=1"));
     let (ok, _, _) = call(&[
         "train-plasticity",
-        "--graph", g, "--episodes", ep, "--epochs", "4", "--output", w,
+        "--graph",
+        g,
+        "--episodes",
+        ep,
+        "--epochs",
+        "4",
+        "--output",
+        w,
     ])?;
     assert!(!ok, "checkpoint must not be overwritten");
     let mut changed = original;
@@ -77,15 +101,15 @@ fn train_save_score_infer_and_reject_bad_checkpoint() -> io::Result<()> {
     changed.save(&bad_graph_path)?;
     let (ok, _, _) = call(&[
         "score-plasticity",
-        "--graph", bad, "--weights", w, "--episodes", ep,
+        "--graph",
+        bad,
+        "--weights",
+        w,
+        "--episodes",
+        ep,
     ])?;
     assert!(!ok, "graph fingerprint must reject wrong graph");
-    for path in [
-        graph_path,
-        episodes_path,
-        weights_path,
-        bad_graph_path,
-    ] {
+    for path in [graph_path, episodes_path, weights_path, bad_graph_path] {
         fs::remove_file(path)?;
     }
     Ok(())
