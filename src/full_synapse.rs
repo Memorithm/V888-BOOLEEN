@@ -108,9 +108,7 @@ impl SynapseRow {
             match (COLUMNS[index].kind, value) {
                 (_, Cell::Null) => {}
                 (ColumnType::Text, Cell::Text(bytes)) => {
-                    if bytes.len() > MAX_TEXT_BYTES
-                        || std::str::from_utf8(bytes).is_err()
-                    {
+                    if bytes.len() > MAX_TEXT_BYTES || std::str::from_utf8(bytes).is_err() {
                         return Err(invalid("invalid UTF-8 or oversized text"));
                     }
                     presence |= 1 << index;
@@ -127,8 +125,8 @@ impl SynapseRow {
             match value {
                 Cell::Null => {}
                 Cell::Text(bytes) => {
-                    let len = u32::try_from(bytes.len())
-                        .map_err(|_| invalid("text size overflow"))?;
+                    let len =
+                        u32::try_from(bytes.len()).map_err(|_| invalid("text size overflow"))?;
                     output.write_all(&len.to_le_bytes())?;
                     output.write_all(bytes)?;
                 }
@@ -261,9 +259,27 @@ mod tests {
         assert_eq!(COLUMNS[19].name, "acetylcholine");
         assert_eq!(COLUMNS[28].name, "syn_top_p");
         assert_eq!(COLUMNS[29].name, "label");
-        assert_eq!(COLUMNS.iter().filter(|c| c.kind == ColumnType::Text).count(), 10);
-        assert_eq!(COLUMNS.iter().filter(|c| c.kind == ColumnType::FloatBits).count(), 19);
-        assert_eq!(COLUMNS.iter().filter(|c| c.kind == ColumnType::Int32).count(), 1);
+        assert_eq!(
+            COLUMNS
+                .iter()
+                .filter(|c| c.kind == ColumnType::Text)
+                .count(),
+            10
+        );
+        assert_eq!(
+            COLUMNS
+                .iter()
+                .filter(|c| c.kind == ColumnType::FloatBits)
+                .count(),
+            19
+        );
+        assert_eq!(
+            COLUMNS
+                .iter()
+                .filter(|c| c.kind == ColumnType::Int32)
+                .count(),
+            1
+        );
     }
 
     #[test]
