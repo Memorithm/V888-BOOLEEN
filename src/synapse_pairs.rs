@@ -140,6 +140,11 @@ impl SynapsePairsReader {
         self.count
     }
 
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
     pub fn visit<F>(&mut self, mut visitor: F) -> io::Result<()>
     where
         F: FnMut(SynapsePair) -> io::Result<()>,
@@ -246,5 +251,54 @@ mod tests {
         let mut target = Cursor::new(Vec::new());
         assert!(pack(&mut empty, &mut target, 0).is_err());
         assert!(pack(&mut empty, &mut target, 300_000_001).is_err());
+    }
+
+    #[test]
+    fn stream_reader_and_contact_recurrence() -> io::Result<()> {
+        let graph = Connectome {
+            ids: vec![10, 20, 30],
+            offsets: vec![0, 1, 2, 2],
+            targets: vec![1, 2],
+            counts: vec![2, 1],
+        };
+        let rows = [
+            SynapsePair { pre: Some(10), post: Some(20) },
+            SynapsePair { pre: Some(10), post: Some(20) },
+            SynapsePair { pre: Some(20), post: Some(30) },
+            SynapsePair { pre: None, post: Some(30) },
+            SynapsePair { pre: Some(0), post: Some(20) },
+            SynapsePair { pre: Some(10), post: None },
+        ];
+        let raw: Vec<u8> = rows.iter().flat_map(|pair| pair.encode()).collect();
+        let mut output = Cursor::new(Vec::<u8>::new());
+        assert_eq!(pack(&mut Cursor::new(raw), &mut output, 6)?, 6);
+        let path = std::env::temp_dir().join(format!(
+            "v888-synapse-pairs-{}-{:?}.bin",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(&path, output.into_inner())?;
+        let result = (|| -> io::Result<()> {
+            let mut reader = SynapsePairsReader::open(&path)?;
+            assert_eq!(reader.len(), 6);
+            assert!(!reader.is_empty());
+            let mut decoded = Vec::new();
+            reader.visit(|pair| { decoded.push(pair); Ok(()) })?;
+            assert_eq!(decoded, rows);
+            let mut state = BooleanState::new(graph.ids.len());
+            state.set(0, true).unwrap();
+            let mut reader = SynapsePairsReader::open(&path)?;
+            let (next, contacts) = propagate_one_step(&graph, &state, &mut reader, 2)?;
+            assert_eq!(contacts, 2);
+            assert_eq!(next.active_count(), 1);
+            assert_eq!(next.get(1), Ok(true));
+            let mut reader = SynapsePairsReader::open(&path)?;
+            let (after, contacts) = propagate_one_step(&graph, &next, &mut reader, 2)?;
+            assert_eq!(contacts, 1);
+            assert_eq!(after.active_count(), 0);
+            Ok(())
+        })();
+        std::fs::remove_file(path)?;
+        result
     }
 }
