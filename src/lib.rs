@@ -57,7 +57,10 @@ impl BooleanState {
 
     #[must_use]
     pub fn active_count(&self) -> u64 {
-        self.words.iter().map(|word| u64::from(word.count_ones())).sum()
+        self.words
+            .iter()
+            .map(|word| u64::from(word.count_ones()))
+            .sum()
     }
 
     /// Vue en lecture seule des mots, bit 0 = position 0.

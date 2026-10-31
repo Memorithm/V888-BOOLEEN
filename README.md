@@ -22,6 +22,15 @@ Transformer le connectome **BANC V888** (cerveau et chaîne nerveuse ventrale de
 
 **B888-0 : initialisation Rust.** Aucun fichier de données BANC n'est inclus. Le programme contient seulement un état booléen compact et des tests. Aucun simulateur fonctionnel et aucun entraînement n'existent encore.
 
+## Qualification GitHub
+
+Les branches de recherche sont qualifiées sur une révision SHA exacte par
+`Memorithm/RemoteOps`, dans un conteneur Rust 1.89 sans réseau ni secrets.
+Un statut GitHub `remoteops/v888-rust-qualification` n'est publié que si format,
+Clippy, tests et CLI réussissent. Le workflow local `.github/workflows/ci.yml`
+teste ensuite les commits de `main` sur le pool de compilation Dell isolé
+après admission explicite dans son groupe de runners.
+
 ## Commandes
 
 - Vérifier le format : cargo fmt --all -- --check
