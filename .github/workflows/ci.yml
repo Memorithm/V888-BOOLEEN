@@ -1,5 +1,10 @@
 name: V888 BOOLEEN Rust CI
 
+# Persistent, nonprivileged Dell-General runners are admitted only for the
+# approved main workflow. PR Rust source is qualified separately by the
+# trusted RemoteOps SHA-pinned offline Docker CI (context:
+# remoteops/v888-rust-qualification). Never execute PR workflow code on the
+# privileged RemoteOps control runner or bypass the organization's group ACL.
 on:
   push:
     branches: [main]
@@ -10,18 +15,16 @@ permissions:
 
 jobs:
   rust:
-    # RemoteOps: qualified nonprivileged Memorithm CI pool, never the
-    # privileged remoteops/dell-t430 control runner.
-    if: >-
-      github.repository == 'Memorithm/V888-BOOLEEN' &&
-      (github.event_name != 'pull_request' ||
-       github.event.pull_request.head.repo.full_name == 'Memorithm/V888-BOOLEEN')
+    if: github.repository == 'Memorithm/V888-BOOLEEN' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, Linux, X64, memorithm-ci, dell-general, ci-light, trusted-main]
     timeout-minutes: 15
+    env:
+      CARGO_NET_OFFLINE: "true"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+          ref: ${{ github.sha }}
       - name: Use host-managed isolated Rust 1.89 (no root, no network install)
         shell: bash
         run: |
@@ -36,8 +39,8 @@ jobs:
       - name: Formatting
         run: cargo fmt --all -- --check
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --offline --all-targets -- -D warnings
       - name: Tests
-        run: cargo test
+        run: cargo test --offline
       - name: Smoke
-        run: cargo run -- info
+        run: cargo run --offline -- info
