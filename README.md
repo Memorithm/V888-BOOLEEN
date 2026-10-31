@@ -18,9 +18,15 @@ Transformer le connectome **BANC V888** (cerveau et chaîne nerveuse ventrale de
 6. Exécution native Rust ; aucun composant NVIDIA propriétaire obligatoire ; machines administrées via Memorithm/RemoteOps.
 7. Aucun code, poids ou schéma logiciel tiers repris sans droits explicites ; conserver les attributions scientifiques obligatoires des données utilisées.
 
-## État vérifiable
+## État vérifiable — 31 octobre 2026
 
-**B888-0 : initialisation Rust.** Aucun fichier de données BANC n'est inclus. Le programme contient seulement un état booléen compact et des tests. Aucun simulateur fonctionnel et aucun entraînement n'existent encore.
+- **Base Rust et CI Dell : opérationnelles**. L'intégration continue est verte pour le commit `660afd29763639d46ab43ef56fc4c8bcf80341ae` (PR #4).
+- **Connectome GCS v888-v2 réellement construit** : 188 508 identifiants neuronaux, 11 752 828 connexions orientées, fichier `brain-v888-gcs-v2.v888b` sur Dell (SHA-256 `f0aa259df38269499ec03ba033f0ae54a71a31187976c4ea9284e08efb4b5135`). Deux cycles d'exécution et une propagation positive sur une connexion réelle ont été vérifiés.
+- **Synapses individuelles réellement acquises** : Parquet v888-v2 de 17 146 564 854 octets, SHA-256 `e75d1430089a55ef0e2eb40ba88803d0ddc59175c98af03ba78ef58d26832092`, 155 247 357 lignes et 30 colonnes inspectées. Le fichier original est conservé hors GitHub.
+- **Codec Rust individuel `V888SYB1` (PR #4 fusionnée)** : encode sans perte les deux identifiants des synapses et leur nullité, sans filtrage. La matérialisation réelle de ce deuxième binaire est contrôlée séparément par RemoteOps.
+- **Dynamique** : propagation booléenne expérimentale, sans preuve de fidélité physiologique. Pas encore d'apprentissage ni de validation des capacités cognitives.
+
+Ces observations sont tracées dans [Couverture scientifique et vérifications](docs/COVERAGE.md). En particulier, **les 28 autres champs synaptiques n'ont pas encore été transcodés dans le moteur Rust**, même s'ils restent préservés dans le Parquet original. Le décalage entre le nombre de liens scientifiques publié et le nombre de lignes du Parquet GCS n'est pas résolu.
 
 ## Qualification GitHub
 
@@ -41,6 +47,7 @@ après admission explicite dans son groupe de runners.
 ## Documents
 
 - [Plan scientifique](docs/ROADMAP.md)
+- [Couverture biologique et preuves](docs/COVERAGE.md)
 - [Contrat d'exactitude et de provenance](docs/CONTRACT.md)
 - [Sources biologiques et licences](docs/SOURCES.md)
 - [Exploitation sous RemoteOps](docs/REMOTEOPS.md)
@@ -49,11 +56,7 @@ après admission explicite dans son groupe de runners.
 
 Code réservé à ses titulaires : aucune licence de redistribution n'est accordée par défaut. Les conditions des sources scientifiques s'appliquent séparément.
 
-## Experimental Boolean brain engine
+## Moteur booléen expérimental
 
-An original executable Rust directed graph, versioned reversible CSR edge storage,
-bit-packed neuron activity, Boolean-gate recurrence and a synthetic demo are
-implemented. This is **not yet the full BANC v888 dataset**: acquisition and import
-of the actual neuron/synapse source tables remain mandatory for that claim.
+Le moteur Rust est exécutable. `cargo run -- demo` utilise des données synthétiques, tandis que les exécutions réelles sont qualifiées via RemoteOps sur le Dell. Consulte les [spécifications du moteur](docs/ENGINE.md), du [flux individuel des synapses](docs/SYNAPSE_PAIRS.md) et des [portes booléennes de neurotransmetteurs](docs/NT_BOOLEAN.md).
 
-See [engine specification](docs/ENGINE.md) and run `cargo run -- demo`.
