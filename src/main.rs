@@ -43,6 +43,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                 graph.edges()
             );
         }
+        Some("info") => {
+            println!("V888 BOOLEEN experimental engine - no source dataset bundled");
+            println!("Use info --graph <file> after importing real BANC v888 data");
+        }
         Some("export") => {
             Connectome::load(Path::new(require(&args, "--graph")?))?
                 .export_csv(Path::new(require(&args, "--output")?))?;
