@@ -3,6 +3,7 @@ pub mod engine;
 pub mod full_synapse;
 pub mod gates;
 pub mod nt_gates;
+pub mod plasticity;
 pub mod synapse_pairs;
 
 // Brique d'état booléen. Ne constitue pas une simulation du cerveau.
