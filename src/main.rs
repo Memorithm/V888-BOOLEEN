@@ -3,6 +3,7 @@ use std::fs::{self, OpenOptions};
 use std::path::Path;
 use v888_booleen::connectome::Connectome;
 use v888_booleen::engine::BooleanEngine;
+use v888_booleen::learning_bench::benchmark;
 use v888_booleen::full_synapse::{pack_records, FullSynapseReader};
 use v888_booleen::synapse_pairs::{pack, propagate_one_step, SynapsePairsReader};
 fn require<'a>(args: &'a [String], name: &str) -> Result<&'a str, Box<dyn Error>> {
@@ -36,6 +37,7 @@ fn help() {
     println!("  validate-all --file all.v888all");
     println!("  gzip -dc all.v888all.gz | v888-booleen validate-all --file -");
     println!("  run-synapses --graph brain.v888b --pairs synapses.v888syn --seed ID[,ID] [--threshold 3] [--steps 2]");
+    println!("  bench-learning --graph brain.v888b  (supervised retention only)");
 }
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -159,6 +161,18 @@ fn main() -> Result<(), Box<dyn Error>> {
                     brain.active.active_count()
                 );
             }
+        }
+        Some("bench-learning") => {
+            let graph = Connectome::load(Path::new(require(&args, "--graph")?))?;
+            let r = benchmark(&graph)?;
+            println!("v888_learning_report_schema=retention-v1");
+            println!("dataset_neurons={} dataset_edges={}", r.neurons, r.edges);
+            println!("supervised_positive_source={} supervised_negative_source={} target_neuron={}", r.positive_source_id, r.negative_source_id, r.target_id);
+            println!("training_episodes={} test_episodes={} positive_test_examples={}", r.training_episodes, r.tested_episodes, r.positive_examples);
+            println!("frozen_zero_correct={} frozen_topology_correct={} learned_correct={}", r.frozen_zero_correct, r.frozen_topology_correct, r.learned_correct);
+            println!("plastic_weight_bytes={}", r.learned_weight_bytes);
+            println!("train_elapsed_us={} eval_frozen_zero_us={} eval_frozen_topology_us={} eval_learned_us={}", r.train_elapsed.as_micros(), r.frozen_zero_eval_elapsed.as_micros(), r.frozen_topology_eval_elapsed.as_micros(), r.learned_eval_elapsed.as_micros());
+            println!("evaluation_scope=seen_pattern_retention_not_generalization_or_biology");
         }
         Some("demo") => {
             let graph = Connectome {
