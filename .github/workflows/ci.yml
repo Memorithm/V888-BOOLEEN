@@ -22,13 +22,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Install Rust toolchain
-        run: rustup toolchain install 1.89.0 --profile minimal --component rustfmt --component clippy
+      - name: Use host-managed isolated Rust 1.89 (no root, no network install)
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin=/opt/memorithm-ci-toolchains/rust-1.89.0/bin
+          test -x "$bin/rustc"
+          test -x "$bin/cargo"
+          test -x "$bin/cargo-clippy"
+          test -x "$bin/rustfmt"
+          test "$("$bin/rustc" --version | awk '{print $2}')" = 1.89.0
+          printf '%s\n' "$bin" >> "$GITHUB_PATH"
       - name: Formatting
-        run: cargo +1.89.0 fmt --all -- --check
+        run: cargo fmt --all -- --check
       - name: Clippy
-        run: cargo +1.89.0 clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
       - name: Tests
-        run: cargo +1.89.0 test
+        run: cargo test
       - name: Smoke
-        run: cargo +1.89.0 run -- info
+        run: cargo run -- info
