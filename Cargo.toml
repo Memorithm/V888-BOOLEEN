@@ -1,0 +1,14 @@
+[package]
+name = "v888-booleen"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "V888 BOOLEEN: recherche sur une representation booleenne du connectome BANC V888."
+
+[lib]
+name = "v888_booleen"
+path = "src/lib.rs"
+
+[[bin]]
+name = "v888-booleen"
+path = "src/main.rs"
