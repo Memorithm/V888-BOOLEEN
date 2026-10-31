@@ -9,19 +9,25 @@ permissions:
 
 jobs:
   rust:
-    runs-on: ubuntu-24.04
+    # RemoteOps: qualified nonprivileged Memorithm CI pool, never the
+    # privileged remoteops/dell-t430 control runner.
+    if: >-
+      github.repository == 'Memorithm/V888-BOOLEEN' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == 'Memorithm/V888-BOOLEEN')
+    runs-on: [self-hosted, Linux, X64, memorithm-ci, dell-general, ci-light, trusted-main]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Install Rust components
+      - name: Install Rust toolchain
         run: rustup toolchain install 1.89.0 --profile minimal --component rustfmt --component clippy
       - name: Formatting
         run: cargo +1.89.0 fmt --all -- --check
-      - name: Lints
+      - name: Clippy
         run: cargo +1.89.0 clippy --all-targets -- -D warnings
       - name: Tests
         run: cargo +1.89.0 test
-      - name: CLI smoke
+      - name: Smoke
         run: cargo +1.89.0 run -- info
