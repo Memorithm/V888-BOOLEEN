@@ -132,7 +132,16 @@ mod tests {
         let one = PLUS_ONE_BITS;
         assert_eq!(argmax_eight([None; 8]), Ok(None));
         assert_eq!(
-            argmax_eight([None, Some(half), None, Some(one), Some(one), None, None, None]),
+            argmax_eight([
+                None,
+                Some(half),
+                None,
+                Some(one),
+                Some(one),
+                None,
+                None,
+                None
+            ]),
             Ok(Some(3))
         );
         assert_eq!(
