@@ -3,6 +3,7 @@ use std::fs::{self, OpenOptions};
 use std::path::Path;
 use v888_booleen::connectome::Connectome;
 use v888_booleen::engine::BooleanEngine;
+use v888_booleen::full_synapse::{pack_records, FullSynapseReader};
 use v888_booleen::synapse_pairs::{pack, propagate_one_step, SynapsePairsReader};
 fn require<'a>(args: &'a [String], name: &str) -> Result<&'a str, Box<dyn Error>> {
     let ix = args
@@ -27,6 +28,9 @@ fn help() {
     println!("  demo");
     println!("  pack-synapses --expected-rows N --output synapses.v888syn < records.bin");
     println!("  synapse-info --pairs synapses.v888syn");
+    println!("  pack-all --expected-rows N --output all.v888all < all30-fields.bin");
+    println!("  all-info --file all.v888all");
+    println!("  validate-all --file all.v888all");
     println!("  run-synapses --graph brain.v888b --pairs synapses.v888syn --seed ID[,ID] [--threshold 3] [--steps 2]");
 }
 fn main() -> Result<(), Box<dyn Error>> {
@@ -84,6 +88,30 @@ fn main() -> Result<(), Box<dyn Error>> {
                 fs::remove_file(path)?;
             }
             println!("synapses_packed={}", result?);
+        }
+        Some("pack-all") => {
+            let expected = require(&args, "--expected-rows")?.parse::<u64>()?;
+            let path = Path::new(require(&args, "--output")?);
+            let mut output = OpenOptions::new().write(true).create_new(true).open(path)?;
+            let result = pack_records(&mut std::io::stdin().lock(), &mut output, expected);
+            if result.is_err() {
+                drop(output);
+                fs::remove_file(path)?;
+            }
+            println!("full_synapse_rows_packed={}", result?);
+        }
+        Some("all-info") => {
+            let rows = FullSynapseReader::open(Path::new(require(&args, "--file")?))?;
+            println!("full_synapse_rows={} fields=30 format=V888C30A", rows.len());
+        }
+        Some("validate-all") => {
+            let mut reader = FullSynapseReader::open(Path::new(require(&args, "--file")?))?;
+            let mut counted = 0_u64;
+            reader.visit(|_row| {
+                counted += 1;
+                Ok(())
+            })?;
+            println!("full_synapse_verified_rows={counted} format=V888C30A");
         }
         Some("synapse-info") => {
             let source = SynapsePairsReader::open(Path::new(require(&args, "--pairs")?))?;
