@@ -29,7 +29,9 @@ fn help() {
     println!("  pack-synapses --expected-rows N --output synapses.v888syn < records.bin");
     println!("  synapse-info --pairs synapses.v888syn");
     println!("  pack-all --expected-rows N --output all.v888all < all30-fields.bin");
-    println!("  pack-all --expected-rows N --output - < all30-fields.bin | gzip -1 > all.v888all.gz");
+    println!(
+        "  pack-all --expected-rows N --output - < all30-fields.bin | gzip -1 > all.v888all.gz"
+    );
     println!("  all-info --file all.v888all");
     println!("  validate-all --file all.v888all");
     println!("  gzip -dc all.v888all.gz | v888-booleen validate-all --file -");
