@@ -1,5 +1,6 @@
 pub mod connectome;
 pub mod engine;
+pub mod full_synapse;
 pub mod gates;
 pub mod nt_gates;
 pub mod synapse_pairs;
