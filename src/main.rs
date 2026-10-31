@@ -1,9 +1,9 @@
 use std::error::Error;
+use std::fs::{self, OpenOptions};
 use std::path::Path;
 use v888_booleen::connectome::Connectome;
 use v888_booleen::engine::BooleanEngine;
 use v888_booleen::synapse_pairs::{pack, propagate_one_step, SynapsePairsReader};
-use std::fs::{self, OpenOptions};
 fn require<'a>(args: &'a [String], name: &str) -> Result<&'a str, Box<dyn Error>> {
     let ix = args
         .iter()
@@ -95,9 +95,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let threshold = optional(&args, "--threshold")
                 .unwrap_or("3")
                 .parse::<u64>()?;
-            let steps = optional(&args, "--steps")
-                .unwrap_or("2")
-                .parse::<u32>()?;
+            let steps = optional(&args, "--steps").unwrap_or("2").parse::<u32>()?;
             if steps > 10 {
                 return Err("synapse stream limited to 10 steps per invocation".into());
             }

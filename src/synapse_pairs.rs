@@ -121,7 +121,8 @@ impl SynapsePairsReader {
         if &header[0..8] != MAGIC {
             return Err(invalid("invalid synapse format magic"));
         }
-        if u64::from_le_bytes(header[8..16].try_into().map_err(|_| invalid("version"))?) != VERSION {
+        if u64::from_le_bytes(header[8..16].try_into().map_err(|_| invalid("version"))?) != VERSION
+        {
             return Err(invalid("unsupported synapse format version"));
         }
         let count = u64::from_le_bytes(header[16..24].try_into().map_err(|_| invalid("count"))?);
@@ -173,7 +174,10 @@ pub fn propagate_one_step(
     }
     let mut active_pre = HashSet::new();
     for (index, &id) in graph.ids.iter().enumerate() {
-        if active.get(index).map_err(|_| invalid("invalid active index"))? {
+        if active
+            .get(index)
+            .map_err(|_| invalid("invalid active index"))?
+        {
             active_pre.insert(id);
         }
     }
@@ -193,7 +197,8 @@ pub fn propagate_one_step(
     let mut next = BooleanState::new(graph.ids.len());
     for (i, &sum) in sums.iter().enumerate() {
         if gates::ge(sum, threshold as u128) {
-            next.set(i, true).map_err(|_| invalid("invalid target index"))?;
+            next.set(i, true)
+                .map_err(|_| invalid("invalid target index"))?;
         }
     }
     Ok((next, matched_contacts))
@@ -207,14 +212,30 @@ mod tests {
     #[test]
     fn exact_pair_encoding_with_nulls_and_zero() {
         for pair in [
-            SynapsePair { pre: None, post: None },
-            SynapsePair { pre: Some(0), post: None },
-            SynapsePair { pre: None, post: Some(u64::MAX) },
-            SynapsePair { pre: Some(u64::MAX), post: Some(0) },
+            SynapsePair {
+                pre: None,
+                post: None,
+            },
+            SynapsePair {
+                pre: Some(0),
+                post: None,
+            },
+            SynapsePair {
+                pre: None,
+                post: Some(u64::MAX),
+            },
+            SynapsePair {
+                pre: Some(u64::MAX),
+                post: Some(0),
+            },
         ] {
             assert_eq!(SynapsePair::decode(pair.encode()).unwrap(), pair);
         }
-        let mut invalid = SynapsePair { pre: None, post: None }.encode();
+        let mut invalid = SynapsePair {
+            pre: None,
+            post: None,
+        }
+        .encode();
         invalid[1] = 1;
         assert!(SynapsePair::decode(invalid).is_err());
         invalid[1] = 0;
@@ -225,14 +246,29 @@ mod tests {
     #[test]
     fn exact_binary_stream_roundtrip() {
         let original = [
-            SynapsePair { pre: Some(10), post: Some(20) },
-            SynapsePair { pre: Some(10), post: Some(20) },
-            SynapsePair { pre: None, post: Some(20) },
-            SynapsePair { pre: Some(30), post: None },
+            SynapsePair {
+                pre: Some(10),
+                post: Some(20),
+            },
+            SynapsePair {
+                pre: Some(10),
+                post: Some(20),
+            },
+            SynapsePair {
+                pre: None,
+                post: Some(20),
+            },
+            SynapsePair {
+                pre: Some(30),
+                post: None,
+            },
         ];
         let raw: Vec<u8> = original.iter().flat_map(|pair| pair.encode()).collect();
         let mut target = Cursor::new(Vec::new());
-        assert_eq!(pack(&mut Cursor::new(raw.clone()), &mut target, 4).unwrap(), 4);
+        assert_eq!(
+            pack(&mut Cursor::new(raw.clone()), &mut target, 4).unwrap(),
+            4
+        );
         assert_eq!(target.get_ref().len(), 24 + 4 * 17);
         let mut invalid = Cursor::new(Vec::new());
         assert!(pack(&mut Cursor::new(raw), &mut invalid, 5).is_err());
@@ -262,12 +298,30 @@ mod tests {
             counts: vec![2, 1],
         };
         let rows = [
-            SynapsePair { pre: Some(10), post: Some(20) },
-            SynapsePair { pre: Some(10), post: Some(20) },
-            SynapsePair { pre: Some(20), post: Some(30) },
-            SynapsePair { pre: None, post: Some(30) },
-            SynapsePair { pre: Some(0), post: Some(20) },
-            SynapsePair { pre: Some(10), post: None },
+            SynapsePair {
+                pre: Some(10),
+                post: Some(20),
+            },
+            SynapsePair {
+                pre: Some(10),
+                post: Some(20),
+            },
+            SynapsePair {
+                pre: Some(20),
+                post: Some(30),
+            },
+            SynapsePair {
+                pre: None,
+                post: Some(30),
+            },
+            SynapsePair {
+                pre: Some(0),
+                post: Some(20),
+            },
+            SynapsePair {
+                pre: Some(10),
+                post: None,
+            },
         ];
         let raw: Vec<u8> = rows.iter().flat_map(|pair| pair.encode()).collect();
         let mut output = Cursor::new(Vec::<u8>::new());
@@ -283,7 +337,10 @@ mod tests {
             assert_eq!(reader.len(), 6);
             assert!(!reader.is_empty());
             let mut decoded = Vec::new();
-            reader.visit(|pair| { decoded.push(pair); Ok(()) })?;
+            reader.visit(|pair| {
+                decoded.push(pair);
+                Ok(())
+            })?;
             assert_eq!(decoded, rows);
             let mut state = BooleanState::new(graph.ids.len());
             state.set(0, true).unwrap();
