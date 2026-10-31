@@ -3,6 +3,7 @@ pub mod engine;
 pub mod full_synapse;
 pub mod gates;
 pub mod learning_bench;
+pub mod source_holdout;
 pub mod nt_gates;
 pub mod plasticity;
 pub mod synapse_pairs;
