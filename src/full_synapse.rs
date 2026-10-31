@@ -194,6 +194,28 @@ pub fn pack_records<R: Read, W: Write>(
     Ok(expected_rows)
 }
 
+/// Decode and verify an unseekable stream (stdin, pipe, decompressor).
+/// Reject unknown versions, invalid lengths, bad fields and extra bytes.
+pub fn validate_stream<R: Read>(input: &mut R) -> io::Result<u64> {
+    let mut magic = [0_u8; 8];
+    input.read_exact(&mut magic)?;
+    if &magic != MAGIC || read_u64(input)? != VERSION {
+        return Err(invalid("invalid full synapse binary version"));
+    }
+    let rows = read_u64(input)?;
+    if rows == 0 || rows > MAX_ROWS {
+        return Err(invalid("invalid row count in stream"));
+    }
+    for _ in 0..rows {
+        SynapseRow::read_from(input)?;
+    }
+    let mut extra = [0_u8; 1];
+    if input.read(&mut extra)? != 0 {
+        return Err(invalid("trailing full synapse data"));
+    }
+    Ok(rows)
+}
+
 pub struct FullSynapseReader {
     input: BufReader<File>,
     rows: u64,
@@ -337,6 +359,26 @@ mod tests {
         assert!(pack_records(&mut Cursor::new([0_u8; 3]), &mut out, 1).is_err());
         let mut out = Vec::new();
         assert!(pack_records(&mut Cursor::new([0_u8; 4]), &mut out, 0).is_err());
+    }
+
+    #[test]
+    fn exact_stdin_stream_roundtrip_and_no_trailing_bytes() -> io::Result<()> {
+        let mut row = SynapseRow::default();
+        row.values[0] = Cell::Text(b"fly".to_vec());
+        row.values[1] = Cell::FloatBits(0x8000_0000_0000_0000);
+        row.values[28] = Cell::FloatBits(0x7ff8_1234_5678_9abc);
+        row.values[29] = Cell::Int32(-7);
+        let mut raw = Vec::new();
+        row.write_to(&mut raw)?;
+        let mut binary = Vec::new();
+        assert_eq!(pack_records(&mut Cursor::new(raw), &mut binary, 1)?, 1);
+        assert_eq!(validate_stream(&mut Cursor::new(&binary))?, 1);
+        binary.push(0);
+        assert!(validate_stream(&mut Cursor::new(&binary)).is_err());
+        binary.pop();
+        binary.truncate(binary.len() - 1);
+        assert!(validate_stream(&mut Cursor::new(&binary)).is_err());
+        Ok(())
     }
 
     #[test]
