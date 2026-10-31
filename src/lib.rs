@@ -1,6 +1,7 @@
 pub mod connectome;
 pub mod engine;
 pub mod gates;
+pub mod synapse_pairs;
 
 // Brique d'état booléen. Ne constitue pas une simulation du cerveau.
 

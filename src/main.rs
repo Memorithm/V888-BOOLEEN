@@ -1,7 +1,9 @@
 use std::error::Error;
+use std::fs::{self, OpenOptions};
 use std::path::Path;
 use v888_booleen::connectome::Connectome;
 use v888_booleen::engine::BooleanEngine;
+use v888_booleen::synapse_pairs::{pack, propagate_one_step, SynapsePairsReader};
 fn require<'a>(args: &'a [String], name: &str) -> Result<&'a str, Box<dyn Error>> {
     let ix = args
         .iter()
@@ -23,6 +25,9 @@ fn help() {
     println!("  export --graph brain.v888b --output rows.csv");
     println!("  run --graph brain.v888b --seed ID[,ID] [--threshold 1] [--steps 3]");
     println!("  demo");
+    println!("  pack-synapses --expected-rows N --output synapses.v888syn < records.bin");
+    println!("  synapse-info --pairs synapses.v888syn");
+    println!("  run-synapses --graph brain.v888b --pairs synapses.v888syn --seed ID[,ID] [--threshold 3] [--steps 2]");
 }
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -67,6 +72,47 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("step=0 active={}", brain.active.active_count());
             for step in 1..=steps {
                 println!("step={step} active={}", brain.step(&graph)?);
+            }
+        }
+        Some("pack-synapses") => {
+            let expected = require(&args, "--expected-rows")?.parse::<u64>()?;
+            let path = Path::new(require(&args, "--output")?);
+            let mut output = OpenOptions::new().write(true).create_new(true).open(path)?;
+            let result = pack(&mut std::io::stdin().lock(), &mut output, expected);
+            if result.is_err() {
+                drop(output);
+                fs::remove_file(path)?;
+            }
+            println!("synapses_packed={}", result?);
+        }
+        Some("synapse-info") => {
+            let source = SynapsePairsReader::open(Path::new(require(&args, "--pairs")?))?;
+            println!("individual_synapse_pairs={} format=V888SYB1", source.len());
+        }
+        Some("run-synapses") => {
+            let graph = Connectome::load(Path::new(require(&args, "--graph")?))?;
+            let pair_file = Path::new(require(&args, "--pairs")?);
+            let threshold = optional(&args, "--threshold")
+                .unwrap_or("3")
+                .parse::<u64>()?;
+            let steps = optional(&args, "--steps").unwrap_or("2").parse::<u32>()?;
+            if steps > 10 {
+                return Err("synapse stream limited to 10 steps per invocation".into());
+            }
+            let mut brain = BooleanEngine::new(&graph, threshold)?;
+            for seed in require(&args, "--seed")?.split(',') {
+                brain.stimulate(&graph, seed.parse::<u64>()?)?;
+            }
+            println!("synapse_step=0 active={}", brain.active.active_count());
+            for step in 1..=steps {
+                let mut reader = SynapsePairsReader::open(pair_file)?;
+                let (next, counted) =
+                    propagate_one_step(&graph, &brain.active, &mut reader, threshold)?;
+                brain.active = next;
+                println!(
+                    "synapse_step={step} active={} counted_contacts={counted}",
+                    brain.active.active_count()
+                );
             }
         }
         Some("demo") => {
