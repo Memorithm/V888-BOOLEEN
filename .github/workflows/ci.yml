@@ -1,0 +1,27 @@
+name: V888 BOOLEEN Rust CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install Rust components
+        run: rustup toolchain install 1.89.0 --profile minimal --component rustfmt --component clippy
+      - name: Formatting
+        run: cargo +1.89.0 fmt --all -- --check
+      - name: Lints
+        run: cargo +1.89.0 clippy --all-targets -- -D warnings
+      - name: Tests
+        run: cargo +1.89.0 test
+      - name: CLI smoke
+        run: cargo +1.89.0 run -- info

@@ -1,0 +1,7 @@
+/target/
+/data/raw/
+/data/processed/
+/data/tmp/
+*.log
+*.env
+.DS_Store
