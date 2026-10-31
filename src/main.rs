@@ -29,8 +29,12 @@ fn help() {
     println!("  pack-synapses --expected-rows N --output synapses.v888syn < records.bin");
     println!("  synapse-info --pairs synapses.v888syn");
     println!("  pack-all --expected-rows N --output all.v888all < all30-fields.bin");
+    println!(
+        "  pack-all --expected-rows N --output - < all30-fields.bin | gzip -1 > all.v888all.gz"
+    );
     println!("  all-info --file all.v888all");
     println!("  validate-all --file all.v888all");
+    println!("  gzip -dc all.v888all.gz | v888-booleen validate-all --file -");
     println!("  run-synapses --graph brain.v888b --pairs synapses.v888syn --seed ID[,ID] [--threshold 3] [--steps 2]");
 }
 fn main() -> Result<(), Box<dyn Error>> {
@@ -91,26 +95,39 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         Some("pack-all") => {
             let expected = require(&args, "--expected-rows")?.parse::<u64>()?;
-            let path = Path::new(require(&args, "--output")?);
-            let mut output = OpenOptions::new().write(true).create_new(true).open(path)?;
-            let result = pack_records(&mut std::io::stdin().lock(), &mut output, expected);
-            if result.is_err() {
-                drop(output);
-                fs::remove_file(path)?;
+            let destination = require(&args, "--output")?;
+            if destination == "-" {
+                let mut stream = std::io::stdout().lock();
+                let rows = pack_records(&mut std::io::stdin().lock(), &mut stream, expected)?;
+                eprintln!("full_synapse_rows_packed={rows}");
+            } else {
+                let path = Path::new(destination);
+                let mut output = OpenOptions::new().write(true).create_new(true).open(path)?;
+                let result = pack_records(&mut std::io::stdin().lock(), &mut output, expected);
+                if result.is_err() {
+                    drop(output);
+                    fs::remove_file(path)?;
+                }
+                println!("full_synapse_rows_packed={}", result?);
             }
-            println!("full_synapse_rows_packed={}", result?);
         }
         Some("all-info") => {
             let rows = FullSynapseReader::open(Path::new(require(&args, "--file")?))?;
             println!("full_synapse_rows={} fields=30 format=V888C30A", rows.len());
         }
         Some("validate-all") => {
-            let mut reader = FullSynapseReader::open(Path::new(require(&args, "--file")?))?;
-            let mut counted = 0_u64;
-            reader.visit(|_row| {
-                counted += 1;
-                Ok(())
-            })?;
+            let input = require(&args, "--file")?;
+            let counted = if input == "-" {
+                v888_booleen::full_synapse::validate_stream(&mut std::io::stdin().lock())?
+            } else {
+                let mut reader = FullSynapseReader::open(Path::new(input))?;
+                let mut counted = 0_u64;
+                reader.visit(|_row| {
+                    counted += 1;
+                    Ok(())
+                })?;
+                counted
+            };
             println!("full_synapse_verified_rows={counted} format=V888C30A");
         }
         Some("synapse-info") => {
