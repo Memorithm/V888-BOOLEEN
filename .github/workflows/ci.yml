@@ -10,36 +10,38 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: v888-rust-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   rust:
-    # RemoteOps: qualified nonprivileged Memorithm CI pool, never the
-    # privileged remoteops/dell-t430 control runner.
+    # Safe shared GitHub runner: no self-hosted privileges, no access to Dell
+    # connectome files, no saved model checkpoints and no repository secrets.
     if: >-
       github.repository == 'Memorithm/V888-BOOLEEN' &&
       (github.event_name != 'pull_request' ||
        github.event.pull_request.head.repo.full_name == 'Memorithm/V888-BOOLEEN')
-    runs-on: [self-hosted, Linux, X64, memorithm-ci, dell-general, ci-light, trusted-main]
-    timeout-minutes: 15
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CARGO_NET_OFFLINE: "true"
+      RUSTUP_TOOLCHAIN: "1.89.0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Use host-managed isolated Rust 1.89 (no root, no network install)
+      - name: Install official pinned Rust toolchain
         shell: bash
         run: |
           set -euo pipefail
-          bin=/opt/memorithm-ci-toolchains/rust-1.89.0/bin
-          test -x "$bin/rustc"
-          test -x "$bin/cargo"
-          test -x "$bin/cargo-clippy"
-          test -x "$bin/rustfmt"
-          test "$("$bin/rustc" --version | awk '{print $2}')" = 1.89.0
-          printf '%s\n' "$bin" >> "$GITHUB_PATH"
+          rustup toolchain install 1.89.0 --profile minimal --component rustfmt --component clippy --no-self-update
+          test "$(rustc --version | awk '{print $2}')" = 1.89.0
       - name: Formatting
         run: cargo fmt --all -- --check
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --offline --all-targets -- -D warnings
       - name: Tests
-        run: cargo test
+        run: cargo test --offline
       - name: Smoke
-        run: cargo run -- info
+        run: cargo run --offline -- info
