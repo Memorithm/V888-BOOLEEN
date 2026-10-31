@@ -6,8 +6,8 @@ Projet et concept : initiative du porteur Memorithm. Les données sources anatom
 
 | Objet | Fait vérifié | Preuve |
 |---|---|---|
-| Métadonnées neuronales | `banc_888_meta.feather`, 57 503 026 octets, SHA-256 `86ccf5df0c67419f8c5f43e93a7ed38d23a080e9f7fde26737290252f3780098` | [RemoteOps 41232008901](https://github.com/Memorithm/RemoteOps/actions/runs/41232008901) |
-| Connectivité dirigée | `banc_888_edgelist_simple_v2.feather`, 305 250 378 octets, SHA-256 `363fdef3813b72a5e45a42f17034cd5a544b654c838929cecf6e1ce5f60625cb` | Même run |
+| Métadonnées neuronales | `banc_888_meta.feather`, 57 503 026 octets, SHA-256 `empreinte consignée dans le manifeste privé sur Dell (valeur à relever)` | [RemoteOps 41232008901](https://github.com/Memorithm/RemoteOps/actions/runs/41232008901) |
+| Connectivité dirigée | `banc_888_edgelist_simple_v2.feather`, 305 250 378 octets, SHA-256 `empreinte consignée dans le manifeste privé sur Dell (valeur à relever)` | Même run |
 | Conversion CSV | 188 508 identifiants, 11 752 828 lignes d'arêtes, SHA-256 CSV `8313b0271f96c8dd8000195539064c1e21ee48cbefe253c3d943b2af52d489f7` | [RemoteOps 41233291736](https://github.com/Memorithm/RemoteOps/actions/runs/41233291736) |
 | Graphe booléen Rust | `brain-v888-gcs-v2.v888b`, SHA-256 `f0aa259df38269499ec03ba033f0ae54a71a31187976c4ea9284e08efb4b5135` | [RemoteOps 41233545231](https://github.com/Memorithm/RemoteOps/actions/runs/41233545231) |
 | Propagation de contacts agrégés | Un stimulus sur une connexion réelle donne 1 activation au cycle 1 | [RemoteOps 41233769407](https://github.com/Memorithm/RemoteOps/actions/runs/41233769407) |
