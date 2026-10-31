@@ -35,7 +35,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rustup toolchain install 1.89.0 --profile minimal --component rustfmt --component clippy --no-self-update
+          rustup toolchain install 1.89.0 --profile minimal --component rustfmt --component clippy
           test "$(rustc --version | awk '{print $2}')" = 1.89.0
       - name: Formatting
         run: cargo fmt --all -- --check
