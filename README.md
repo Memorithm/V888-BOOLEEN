@@ -48,3 +48,12 @@ après admission explicite dans son groupe de runners.
 ## Droits
 
 Code réservé à ses titulaires : aucune licence de redistribution n'est accordée par défaut. Les conditions des sources scientifiques s'appliquent séparément.
+
+## Experimental Boolean brain engine
+
+An original executable Rust directed graph, versioned reversible CSR edge storage,
+bit-packed neuron activity, Boolean-gate recurrence and a synthetic demo are
+implemented. This is **not yet the full BANC v888 dataset**: acquisition and import
+of the actual neuron/synapse source tables remain mandatory for that claim.
+
+See [engine specification](docs/ENGINE.md) and run `cargo run -- demo`.

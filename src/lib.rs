@@ -1,4 +1,8 @@
-//! Brique d'état booléen. Ne constitue pas une simulation du cerveau.
+pub mod connectome;
+pub mod engine;
+pub mod gates;
+
+// Brique d'état booléen. Ne constitue pas une simulation du cerveau.
 
 /// Un bit d'activation par position, stocké dans des mots de 64 bits.
 #[derive(Clone, Debug, PartialEq, Eq)]
