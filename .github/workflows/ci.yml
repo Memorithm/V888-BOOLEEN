@@ -1,42 +1,41 @@
 name: V888 BOOLEEN Rust CI
 
+# Persistent, nonprivileged Dell-General runners are admitted only for the
+# approved main workflow. PR Rust source is qualified separately by the
+# trusted RemoteOps SHA-pinned offline Docker CI (context:
+# remoteops/v888-rust-qualification). Never execute PR workflow code on the
+# privileged RemoteOps control runner or bypass the organization's group ACL.
 on:
   push:
-    branches: [main]
-  pull_request:
     branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: v888-rust-ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
 jobs:
   rust:
-    # Safe shared GitHub runner: no self-hosted privileges, no access to Dell
-    # connectome files, no saved model checkpoints and no repository secrets.
-    if: >-
-      github.repository == 'Memorithm/V888-BOOLEEN' &&
-      (github.event_name != 'pull_request' ||
-       github.event.pull_request.head.repo.full_name == 'Memorithm/V888-BOOLEEN')
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    if: github.repository == 'Memorithm/V888-BOOLEEN' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, X64, memorithm-ci, dell-general, ci-light, trusted-main]
+    timeout-minutes: 15
     env:
       CARGO_NET_OFFLINE: "true"
-      RUSTUP_TOOLCHAIN: "1.89.0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Install official pinned Rust toolchain
+          ref: ${{ github.sha }}
+      - name: Use host-managed isolated Rust 1.89 (no root, no network install)
         shell: bash
         run: |
           set -euo pipefail
-          rustup toolchain install 1.89.0 --profile minimal --component rustfmt --component clippy
-          test "$(rustc --version | awk '{print $2}')" = 1.89.0
+          bin=/opt/memorithm-ci-toolchains/rust-1.89.0/bin
+          test -x "$bin/rustc"
+          test -x "$bin/cargo"
+          test -x "$bin/cargo-clippy"
+          test -x "$bin/rustfmt"
+          test "$("$bin/rustc" --version | awk '{print $2}')" = 1.89.0
+          printf '%s\n' "$bin" >> "$GITHUB_PATH"
       - name: Formatting
         run: cargo fmt --all -- --check
       - name: Clippy
