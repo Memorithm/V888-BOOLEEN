@@ -73,6 +73,26 @@ impl BooleanState {
             .sum()
     }
 
+    /// Traverse uniquement les indices des bits actifs, par ordre croissant.
+    ///
+    /// Une présentation à un seul neurone actif ne nécessite donc plus
+    /// d'examiner individuellement 188 508 neurones pendant la propagation.
+    /// Le parcours reste borné aux mots présents et n'alloue aucun vecteur.
+    pub fn active_indices(&self) -> impl Iterator<Item = usize> + '_ {
+        self.words.iter().enumerate().flat_map(|(word_index, &word)| {
+            let mut remaining = word;
+            std::iter::from_fn(move || {
+                if remaining == 0 {
+                    None
+                } else {
+                    let bit = remaining.trailing_zeros() as usize;
+                    remaining &= remaining - 1;
+                    Some(word_index * 64 + bit)
+                }
+            })
+        }).filter(move |&index| index < self.len)
+    }
+
     /// Vue en lecture seule des mots, bit 0 = position 0.
     #[must_use]
     pub fn words(&self) -> &[u64] {
@@ -122,6 +142,41 @@ mod tests {
             state.set(index, false).unwrap();
         }
         assert_eq!(state, BooleanState::new(65));
+    }
+
+    #[test]
+    fn active_bit_indices_are_ordered_across_word_boundaries() {
+        let mut state = BooleanState::new(130);
+        assert_eq!(state.active_indices().collect::<Vec<_>>(), Vec::<usize>::new());
+        for index in [129, 1, 128, 64, 63, 0, 65, 127] {
+            state.set(index, true).unwrap();
+        }
+        assert_eq!(
+            state.active_indices().collect::<Vec<_>>(),
+            vec![0, 1, 63, 64, 65, 127, 128, 129]
+        );
+        state.set(64, false).unwrap();
+        assert_eq!(
+            state.active_indices().collect::<Vec<_>>(),
+            vec![0, 1, 63, 65, 127, 128, 129]
+        );
+        assert_eq!(state.active_count(), 7);
+    }
+
+    #[test]
+    fn active_bit_iterator_equals_reference_scan_for_every_length() {
+        for len in [0, 1, 63, 64, 65, 127, 128, 129, 130, 188_508] {
+            let mut state = BooleanState::new(len);
+            for i in 0..len {
+                if i % 17 == 3 || i % 113 == 0 {
+                    state.set(i, true).unwrap();
+                }
+            }
+            let expected: Vec<usize> = (0..len)
+                .filter(|&index| state.get(index).unwrap())
+                .collect();
+            assert_eq!(state.active_indices().collect::<Vec<_>>(), expected);
+        }
     }
 
     #[test]
