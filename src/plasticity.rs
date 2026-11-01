@@ -399,9 +399,11 @@ mod tests {
                         u128::from(graph.counts[edge]) * u128::from(fast.weights[edge]);
                 }
             }
-            let expected: Vec<usize> = totals.iter().enumerate().filter_map(
-                |(index, &sum)| (sum >= threshold).then_some(index)
-            ).collect();
+            let expected: Vec<usize> = totals
+                .iter()
+                .enumerate()
+                .filter_map(|(index, &sum)| (sum >= threshold).then_some(index))
+                .collect();
             assert_eq!(fast_output.active_indices().collect::<Vec<_>>(), expected);
         }
         Ok(())
