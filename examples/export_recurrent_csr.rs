@@ -6,7 +6,9 @@ use v888_booleen::recurrent_csr;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.len() != 2 {
-        return Err("usage: cargo run --example export_recurrent_csr -- INPUT.v888b OUTPUT.csr".into());
+        return Err(
+            "usage: cargo run --example export_recurrent_csr -- INPUT.v888b OUTPUT.csr".into(),
+        );
     }
     let graph = Connectome::load(Path::new(&args[0]))?;
     let path = Path::new(&args[1]);
@@ -35,4 +37,3 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 }
-
