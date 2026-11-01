@@ -66,7 +66,9 @@ fn find_four_sources(graph: &Connectome) -> io::Result<([usize; 4], usize)> {
 
 fn stimulus(neurons: usize, source: usize) -> io::Result<BooleanState> {
     let mut state = BooleanState::new(neurons);
-    state.set(source, true).map_err(|_| invalid("invalid source"))?;
+    state
+        .set(source, true)
+        .map_err(|_| invalid("invalid source"))?;
     Ok(state)
 }
 
@@ -81,7 +83,11 @@ fn score(
     let mut correct = 0_u32;
     for example in 0..PRESENTATIONS {
         let positive = example & 1 == 0;
-        let input = if positive { source_positive } else { source_negative };
+        let input = if positive {
+            source_positive
+        } else {
+            source_negative
+        };
         if model
             .predict(graph, input, 1)?
             .get(target)
