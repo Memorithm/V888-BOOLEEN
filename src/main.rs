@@ -7,8 +7,8 @@ use v888_booleen::connectome::Connectome;
 use v888_booleen::engine::BooleanEngine;
 use v888_booleen::full_synapse::{pack_records, FullSynapseReader};
 use v888_booleen::learning_bench::benchmark;
-use v888_booleen::source_holdout::benchmark_disjoint_sources;
 use v888_booleen::plasticity::PlasticCircuit;
+use v888_booleen::source_holdout::benchmark_disjoint_sources;
 use v888_booleen::synapse_pairs::{pack, propagate_one_step, SynapsePairsReader};
 fn require<'a>(args: &'a [String], name: &str) -> Result<&'a str, Box<dyn Error>> {
     let ix = args
@@ -303,14 +303,21 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("dataset_neurons={} dataset_edges={}", r.neurons, r.edges);
             println!("train_positive_source={} train_negative_source={} test_positive_source={} test_negative_source={} target_id={}",
                 r.training_source_ids[0], r.training_source_ids[1], r.test_source_ids[0], r.test_source_ids[1], r.target_id);
-            println!("train_episodes={} seen_test_episodes={} unseen_test_episodes={}",
-                r.train_episodes, r.seen_test_episodes, r.unseen_test_episodes);
+            println!(
+                "train_episodes={} seen_test_episodes={} unseen_test_episodes={}",
+                r.train_episodes, r.seen_test_episodes, r.unseen_test_episodes
+            );
             println!("frozen_zero_seen_correct={} frozen_zero_unseen_correct={} frozen_topology_seen_correct={} frozen_topology_unseen_correct={}",
                 r.zero_seen_correct, r.zero_unseen_correct, r.topology_seen_correct, r.topology_unseen_correct);
-            println!("learned_seen_correct={} learned_unseen_correct={} plastic_weight_bytes={}",
-                r.learned_seen_correct, r.learned_unseen_correct, r.weight_bytes);
-            println!("train_elapsed_us={} eval_elapsed_us={}",
-                r.training_elapsed.as_micros(), r.evaluation_elapsed.as_micros());
+            println!(
+                "learned_seen_correct={} learned_unseen_correct={} plastic_weight_bytes={}",
+                r.learned_seen_correct, r.learned_unseen_correct, r.weight_bytes
+            );
+            println!(
+                "train_elapsed_us={} eval_elapsed_us={}",
+                r.training_elapsed.as_micros(),
+                r.evaluation_elapsed.as_micros()
+            );
             println!("evaluation_scope=artificial_labels_disjoint_sources_not_biological_learning");
         }
         Some("bench-learning") => {
