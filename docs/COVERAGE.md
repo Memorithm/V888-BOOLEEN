@@ -20,16 +20,20 @@ Ces fichiers ne sont **pas** déposés dans GitHub. Les manifestes de provenance
 
 L'article Bates, Phelps, Kim, Yang et collaborateurs, *Nature*, 2026, DOI 10.1038/s41586-026-10735-w, décrit **218 460 852 liens synaptiques** pour la table de détection v2. L'objet enrichi actuel téléchargé depuis GCS comprend **155 247 357 lignes**. Il n'est donc pas démontré que cet objet enrichi recouvre tous les liens du jeu scientifique d'origine ; les sélections, exclusions ou changements de version ne sont pas encore entièrement reconciliés. Aucun lien manquant ne doit être inventé.
 
-Le graphe CSR représente les **connexions agrégées** ; il ne conserve pas l'identité de chaque synapse. Le codec `V888SYB1` représente chaque synapse du Parquet lu, mais **uniquement ses deux racines et leurs bits de validité**. L'archive Parquet conserve les 28 autres colonnes, notamment identifiant, coordonnées, région, volume, étiquettes et prédictions de neurotransmetteurs. Leur conversion sans perte vers des circuits individuels n'est pas encore achevée.
+Le graphe CSR représente les **connexions agrégées** ; il ne conserve pas l'identité de chaque synapse. Le codec `V888SYB1` représente chaque synapse du Parquet lu, mais **uniquement ses deux racines et leurs bits de validité**. L'archive Parquet conserve les 28 autres colonnes, notamment identifiant, coordonnées, région, volume, étiquettes et prédictions de neurotransmetteurs. Une archive distincte préserve les 30 champs du jeu enrichi : son flux décompressé a la même empreinte que le flux source, et un lecteur Rust indépendant a décodé 155 247 357 lignes et 30 champs. [Construction et comparaison](https://github.com/Memorithm/RemoteOps/actions/runs/41250446671) · [Décodage Rust](https://github.com/Memorithm/RemoteOps/actions/runs/41248147098). Ces validations de stockage ne démontrent pas l'exploitation de tous les champs dans la dynamique du moteur.
 
 Le module `nt_gates` permet une comparaison booléenne des bits des probabilités sans FPU **une fois ces bits fournis** ; il ne confirme aucune nature excitatrice/inhibitrice biologique.
 
 ## Validation manquante avant l'expression « cerveau intégral »
 
 1. Réconcilier les 155,2 M lignes enrichies et les 218,5 M liens mentionnés dans l'article, avec documentation de filtrage exacte.
-2. Encoder et décoder **tous les 30 champs** des synapses avec bitmaps NULL, bits IEEE-754 intacts et chaîne UTF-8 intacte ; preuve de round-trip.
+2. Vérifier et documenter l'exploitation effective des champs préservés dans le moteur ; la préservation du flux et le décodage Rust ne constituent pas une validation de leur rôle dynamique.
 3. Contrôler la topologie, les synapses dupliquées, les cellules non identifiées, les annotations et les valeurs non renseignées sur l'ensemble des sources.
 4. Qualifier des règles dynamiques et d'apprentissage, puis tester sur des tâches réellement mesurables et des graphes témoins comparables.
 5. Séparer les preuves de calcul exact de toute hypothèse de simulation biologique réaliste.
 
 Sources : Bates et al., *Nature* (2026), https://doi.org/10.1038/s41586-026-10735-w ; BANC v888, https://doi.org/10.7910/DVN/7WTH1N. Les mesures chiffrées locales proviennent uniquement des actions ci-dessus.
+
+## Contrôle de généralisation à sources exclues — 1 novembre 2026
+
+Sur le graphe réel, avec une cible et quatre sources distinctes, le modèle entraîné obtient 40/40 sur les deux sources vues et 20/40 sur les deux sources exclues de l'entraînement ; les deux témoins figés obtiennent 20/40 dans les deux cas. Les étiquettes sont artificielles. Ce résultat ne démontre ni transfert aux sources inédites ni apprentissage biologique. [Journal RemoteOps](https://github.com/Memorithm/RemoteOps/actions/runs/41284536812).
