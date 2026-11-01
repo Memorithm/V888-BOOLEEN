@@ -108,7 +108,7 @@ fn score(
 pub fn benchmark_disjoint_sources(graph: &Connectome) -> io::Result<HoldoutReport> {
     graph.validate()?;
     let (sources, target) = find_four_sources(graph)?;
-    if sources.iter().any(|&s| s == usize::MAX) {
+    if sources.contains(&usize::MAX) {
         return Err(invalid("source selection incomplete"));
     }
     let input: Vec<BooleanState> = sources
