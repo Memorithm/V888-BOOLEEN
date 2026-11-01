@@ -11,10 +11,7 @@ fn invalid(message: &str) -> io::Error {
 /// Reject incompatible rows instead of silently filtering or merging them.
 fn export(graph: &Connectome, output: &mut impl Write) -> io::Result<u64> {
     graph.validate()?;
-    if graph.ids.is_empty()
-        || graph.ids.contains(&0)
-        || graph.edges() > 20_000_000
-    {
+    if graph.ids.is_empty() || graph.ids.contains(&0) || graph.edges() > 20_000_000 {
         return Err(invalid("consumer node/edge limits or zero root ID"));
     }
     let mut contacts = 0_u64;
@@ -22,10 +19,10 @@ fn export(graph: &Connectome, output: &mut impl Write) -> io::Result<u64> {
         let start = graph.offsets[source] as usize;
         let end = graph.offsets[source + 1] as usize;
         let row = &graph.targets[start..end];
-        if row.windows(2).any(|pair| pair[0] >= pair[1])
-            || row.contains(&(source as u32))
-        {
-            return Err(invalid("consumer rejects duplicate/unsorted targets or self loops"));
+        if row.windows(2).any(|pair| pair[0] >= pair[1]) || row.contains(&(source as u32)) {
+            return Err(invalid(
+                "consumer rejects duplicate/unsorted targets or self loops",
+            ));
         }
         for &count in &graph.counts[start..end] {
             if count == 0 {
