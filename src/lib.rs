@@ -78,18 +78,22 @@ impl BooleanState {
     /// d'examiner individuellement 188 508 neurones pendant la propagation.
     /// Le parcours reste borné aux mots présents et n'alloue aucun vecteur.
     pub fn active_indices(&self) -> impl Iterator<Item = usize> + '_ {
-        self.words.iter().enumerate().flat_map(|(word_index, &word)| {
-            let mut remaining = word;
-            std::iter::from_fn(move || {
-                if remaining == 0 {
-                    None
-                } else {
-                    let bit = remaining.trailing_zeros() as usize;
-                    remaining &= remaining - 1;
-                    Some(word_index * 64 + bit)
-                }
+        self.words
+            .iter()
+            .enumerate()
+            .flat_map(|(word_index, &word)| {
+                let mut remaining = word;
+                std::iter::from_fn(move || {
+                    if remaining == 0 {
+                        None
+                    } else {
+                        let bit = remaining.trailing_zeros() as usize;
+                        remaining &= remaining - 1;
+                        Some(word_index * 64 + bit)
+                    }
+                })
             })
-        }).filter(move |&index| index < self.len)
+            .filter(move |&index| index < self.len)
     }
 
     /// Vue en lecture seule des mots, bit 0 = position 0.
@@ -146,7 +150,10 @@ mod tests {
     #[test]
     fn active_bit_indices_are_ordered_across_word_boundaries() {
         let mut state = BooleanState::new(130);
-        assert_eq!(state.active_indices().collect::<Vec<_>>(), Vec::<usize>::new());
+        assert_eq!(
+            state.active_indices().collect::<Vec<_>>(),
+            Vec::<usize>::new()
+        );
         for index in [129, 1, 128, 64, 63, 0, 65, 127] {
             state.set(index, true).unwrap();
         }
