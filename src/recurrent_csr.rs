@@ -64,7 +64,9 @@ pub fn write(graph: &Connectome, output: &mut impl Write) -> io::Result<u64> {
 /// Validation precedes any use by a recurrent consumer.
 pub fn read(bytes: &[u8]) -> io::Result<Connectome> {
     fn take<const N: usize>(bytes: &[u8], cursor: &mut usize) -> io::Result<[u8; N]> {
-        let end = cursor.checked_add(N).ok_or_else(|| invalid("cursor overflow"))?;
+        let end = cursor
+            .checked_add(N)
+            .ok_or_else(|| invalid("cursor overflow"))?;
         let value = bytes
             .get(*cursor..end)
             .ok_or_else(|| invalid("truncated recurrent CSR"))?;
@@ -147,7 +149,7 @@ mod tests {
         let mut bytes = original.clone();
         bytes.push(0);
         assert!(read(&bytes).is_err());
-        for (offset, value) in [(7, b'1'), (24, 0), (48, 4), (68, 2), (72, 0), (76, 0)] {
+        for (offset, value) in [(7, b'1'), (24, 0), (48, 4), (68, 2), (72, 2), (76, 0)] {
             let mut bytes = original.clone();
             bytes[offset] = value;
             assert!(read(&bytes).is_err(), "accepted corruption at {offset}");
