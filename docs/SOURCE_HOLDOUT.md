@@ -1,0 +1,11 @@
+# B888-5 — Test de généralisation avec neurones sources exclus de l'entraînement
+
+**Hypothèse falsifiable :** les poids synaptiques locaux à 4 bits, initialisés à zéro et modifiés seulement sur les arêtes actives pendant l'entraînement, savent retenir une association enseignée, mais ne doivent pas nécessairement **transférer** cette association à de nouvelles entrées.
+
+Le banc choisit, dans les arêtes originales du connectome, un neurone cible avec **quatre neurones sources distincts**, tous réellement connectés à cette cible. Il interdit les sources dupliquées et les boucles source=cible. Deux sources sont utilisées en entraînement : une demande d'activation et une demande de silence de la cible, répétées huit fois (16 épisodes). Deux **autres sources, jamais activées pendant l'entraînement**, servent au test. Les étiquettes de ces nouvelles sources (une positive, une négative) sont purement artificielles et équilibrées.
+
+Trois bras utilisent le même graphe et les mêmes neurones : (a) coefficients nuls figés ; (b) coefficients unitaires figés ; (c) coefficients 4 bits entraînés. Chaque bras est évalué sur **40 présentations des motifs vus** et **40 présentations des deux sources jamais vues**. Les données originales restent inchangées. Le banc affiche les résultats réels, même si l'architecture échoue ; aucune assertion de succès OOD n'est imposée.
+
+Ce contrôle est un **contre-exemple potentiel** à une généralisation spontanée : un succès sur la rétention ne prouve pas un succès sur de nouvelles sources, même lorsqu'elles partagent une cible anatomique. Les étiquettes ne correspondent à aucune tâche cognitive ou physiologique de drosophile, et le banc ne démontre aucun apprentissage du comportement. La séparation TRAIN/TEST est faite par **identité du neurone source**, pas simplement par date de présentation.
+
+Ce test ne constitue pas une comparaison complète à budgets égaux : pour une véritable homologation il faudra davantage de cibles, plusieurs partitions, tâches biologiquement pertinentes et témoins apprenants (notamment des règles partagées capables de transférer). Les scores ne doivent pas être utilisés pour revendiquer une performance générale sur un jeu d'évaluation artificiel et construit.
