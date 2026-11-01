@@ -128,11 +128,8 @@ impl PlasticCircuit {
             return Err(bad("teacher length mismatch"));
         }
         let mut updated = 0_u64;
-        for (source, window) in graph.offsets.windows(2).enumerate() {
-            if !input.get(source).map_err(|_| bad("invalid source index"))? {
-                continue;
-            }
-            for edge in window[0]..window[1] {
+        for source in input.active_indices() {
+            for edge in graph.offsets[source]..graph.offsets[source + 1] {
                 let edge = edge as usize;
                 let target = graph.targets[edge] as usize;
                 self.weights[edge] = if teacher
@@ -164,11 +161,8 @@ impl PlasticCircuit {
             return Err(bad("threshold must be positive"));
         }
         let mut inputs = vec![0_u128; self.neuron_count];
-        for (source, window) in graph.offsets.windows(2).enumerate() {
-            if !input.get(source).map_err(|_| bad("invalid source index"))? {
-                continue;
-            }
-            for edge in window[0]..window[1] {
+        for source in input.active_indices() {
+            for edge in graph.offsets[source]..graph.offsets[source + 1] {
                 let edge = edge as usize;
                 let weight = self.weights[edge];
                 if weight == 0 {
@@ -339,6 +333,79 @@ mod tests {
         assert!(PlasticCircuit::load(&file, &bad_graph).is_err());
         assert!(circuit.save(&file).is_err());
         std::fs::remove_file(file)?;
+        Ok(())
+    }
+
+    #[test]
+    fn sparse_multi_source_updates_equal_dense_reference() -> io::Result<()> {
+        let count = 130;
+        let graph = {
+            let mut offsets = vec![0_u64];
+            let mut targets = Vec::new();
+            let mut counts = Vec::new();
+            for source in 0..count {
+                if matches!(source, 0 | 63 | 64 | 129) {
+                    targets.extend([3, 5, 124]);
+                    counts.extend([1, 2, 3]);
+                }
+                offsets.push(targets.len() as u64);
+            }
+            Connectome {
+                ids: (0..count as u64).collect(),
+                offsets,
+                targets,
+                counts,
+            }
+        };
+        graph.validate()?;
+        let mut input = BooleanState::new(count);
+        for source in [0, 63, 64, 129] {
+            input.set(source, true).unwrap();
+        }
+        let mut teacher = BooleanState::new(count);
+        for target in [3, 124] {
+            teacher.set(target, true).unwrap();
+        }
+        let mut fast = PlasticCircuit::new(&graph, 0)?;
+        let mut dense_reference = fast.clone();
+        for _ in 0..3 {
+            fast.train(&graph, &input, &teacher)?;
+            for (source, window) in graph.offsets.windows(2).enumerate() {
+                if !input.get(source).unwrap() {
+                    continue;
+                }
+                for edge in window[0]..window[1] {
+                    let edge = edge as usize;
+                    let target = graph.targets[edge] as usize;
+                    dense_reference.weights[edge] = if teacher.get(target).unwrap() {
+                        increment_four(dense_reference.weights[edge])
+                    } else {
+                        decrement_four(dense_reference.weights[edge])
+                    };
+                }
+            }
+            assert_eq!(fast.weights, dense_reference.weights);
+        }
+        for threshold in [1_u128, 2, 6, 10, 200] {
+            let fast_output = fast.predict(&graph, &input, threshold)?;
+            let mut totals = vec![0_u128; count];
+            for (source, window) in graph.offsets.windows(2).enumerate() {
+                if !input.get(source).unwrap() {
+                    continue;
+                }
+                for edge in window[0]..window[1] {
+                    let edge = edge as usize;
+                    totals[graph.targets[edge] as usize] +=
+                        u128::from(graph.counts[edge]) * u128::from(fast.weights[edge]);
+                }
+            }
+            let expected: Vec<usize> = totals
+                .iter()
+                .enumerate()
+                .filter_map(|(index, &sum)| (sum >= threshold).then_some(index))
+                .collect();
+            assert_eq!(fast_output.active_indices().collect::<Vec<_>>(), expected);
+        }
         Ok(())
     }
 
