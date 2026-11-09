@@ -98,7 +98,7 @@ fn help() {
     println!("  export --graph brain.v888b --output rows.csv");
     println!("  run --graph brain.v888b --seed ID[,ID] [--threshold 1] [--steps 3]");
     println!("  demo");
-    println!("  recall-circuits --graph brain.v888b --cues ID[,ID] [--policy directed|strongest-k|symmetric-hypothesis] [--hops 2] [--min-cues 2] [--top 20] [--budget 100000] [--regions labels.csv]");
+    println!("  recall-circuits --graph brain.v888b --cues ID[,ID] [--policy directed|strongest-k|symmetric-hypothesis] [--hops 2] [--min-cues 1] [--top 20] [--budget 100000] [--regions labels.csv]");
     println!("  explore-circuits --graph brain.v888b --seed ID[,ID] [--policy directed|strongest-k|symmetric-hypothesis] [--fanout 8] [--regions labels.csv] [--threshold 1] [--steps 3]");
     println!("  recall-circuits --graph brain.v888b --cues ID[,ID] [--policy directed|strongest-k|symmetric-hypothesis] [--fanout 8] [--hops 2] [--min-cues 2] [--top-k 10] [--edge-budget 100000] [--regions labels.csv]");
     println!("  pack-synapses --expected-rows N --output synapses.v888syn < records.bin");
