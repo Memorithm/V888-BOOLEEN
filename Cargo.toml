@@ -1,5 +1,6 @@
 [package]
 name = "v888-booleen"
+default-run = "v888-booleen"
 version = "0.1.0"
 edition = "2021"
 publish = false
