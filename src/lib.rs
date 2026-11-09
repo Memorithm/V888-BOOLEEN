@@ -6,6 +6,7 @@ pub mod learning_bench;
 pub mod nt_gates;
 pub mod plasticity;
 pub mod recurrent_csr;
+pub mod region_activation;
 pub mod source_holdout;
 pub mod synapse_pairs;
 
