@@ -103,6 +103,38 @@ impl Subcircuit {
         Ok(false)
     }
 
+    /// Recall only when the latest `required_consecutive_steps` snapshots all match.
+    /// Unlike `recall_over_time`, earlier intermittent matches cannot satisfy this rule.
+    /// The caller supplies snapshots in chronological order, oldest first.
+    pub fn recall_latest_streak(
+        &self,
+        snapshots: &[BooleanState],
+        minimum_active: usize,
+        required_consecutive_steps: usize,
+    ) -> Result<bool, RecallError> {
+        if snapshots.is_empty() {
+            return Err(RecallError::EmptyHistory);
+        }
+        if minimum_active == 0 || required_consecutive_steps == 0 {
+            return Err(RecallError::ZeroBudget);
+        }
+        if snapshots
+            .iter()
+            .any(|state| state.len() != self.universe_len)
+        {
+            return Err(RecallError::LengthMismatch);
+        }
+        if required_consecutive_steps > snapshots.len() || minimum_active > self.members.len() {
+            return Ok(false);
+        }
+        for snapshot in snapshots.iter().rev().take(required_consecutive_steps) {
+            if !self.recall(snapshot, minimum_active)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     /// Materialize recalled members as a packed BooleanState, with no invented edges.
     pub fn select(&self, state: &BooleanState) -> Result<BooleanState, RecallError> {
         if state.len() != self.universe_len {
@@ -172,6 +204,27 @@ mod tests {
         );
         assert_eq!(
             circuit.recall_over_time(&[BooleanState::new(5)], 1, 1),
+            Err(RecallError::LengthMismatch)
+        );
+    }
+
+    #[test]
+    fn latest_streak_requires_contiguous_recent_activation() {
+        let circuit = Subcircuit::new(3, vec![0, 2]).unwrap();
+        let mut active = BooleanState::new(3);
+        active.set(0, true).unwrap();
+        active.set(2, true).unwrap();
+        let quiet = BooleanState::new(3);
+        let history = [active.clone(), quiet.clone(), active.clone(), active];
+        assert_eq!(circuit.recall_over_time(&history, 2, 3), Ok(true));
+        assert_eq!(circuit.recall_latest_streak(&history, 2, 3), Ok(false));
+        assert_eq!(circuit.recall_latest_streak(&history, 2, 2), Ok(true));
+        assert_eq!(circuit.recall_latest_streak(&history, 2, 5), Ok(false));
+        assert_eq!(circuit.recall_latest_streak(&history, 0, 1), Err(RecallError::ZeroBudget));
+        assert_eq!(circuit.recall_latest_streak(&history, 2, 0), Err(RecallError::ZeroBudget));
+        assert_eq!(circuit.recall_latest_streak(&[], 2, 1), Err(RecallError::EmptyHistory));
+        assert_eq!(
+            circuit.recall_latest_streak(&[BooleanState::new(2)], 1, 1),
             Err(RecallError::LengthMismatch)
         );
     }
