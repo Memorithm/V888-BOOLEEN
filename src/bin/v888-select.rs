@@ -118,7 +118,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let steps = number(&args, "--steps", 3_u32)?;
         probe(&graph, &selected, seeds, threshold, steps)?;
     }
-    selected.save(output_path)?;
+    selected.save_new(output_path)?;
     println!("derived_circuit_saved={}", output_path.display());
     println!("source_connectome_unchanged=true derived_projection_is_lossy=true");
     Ok(())
