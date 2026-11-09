@@ -1,3 +1,4 @@
+pub mod activity_atlas;
 pub mod circuit_explorer;
 pub mod connectome;
 pub mod consolidation;
