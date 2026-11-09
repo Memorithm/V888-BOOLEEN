@@ -66,6 +66,15 @@ pub struct TickSummary {
     pub silenced: u64,
 }
 
+/// Per-neuron change across two equal-duration simulation experiments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ActivationDelta {
+    pub neuron_id: u64,
+    pub before_ticks: u32,
+    pub after_ticks: u32,
+    pub delta_ticks: i64,
+}
+
 #[derive(Debug, Clone)]
 pub struct ActivityAtlas {
     graph_hash: u64,
@@ -197,6 +206,44 @@ impl ActivityAtlas {
         });
         indices.truncate(limit.min(10_000));
         Ok(indices.into_iter().map(|i| self.neuron_at(graph, i)).collect())
+    }
+
+    /// Compare two experiments on the same graph, in descending order of
+    /// absolute activation-frequency difference. Requires identical durations
+    /// to avoid comparing different observation budgets.
+    ///
+    /// Positive delta means more active ticks in `other`. Only changed neurons
+    /// are returned. Neither learning nor biological causation is inferred.
+    pub fn compare_activation(
+        &self,
+        other: &Self,
+        graph: &Connectome,
+        limit: usize,
+    ) -> io::Result<Vec<ActivationDelta>> {
+        self.validate_graph(graph)?;
+        other.validate_graph(graph)?;
+        if self.ticks != other.ticks {
+            return Err(bad("activity comparison requires identical tick budgets"));
+        }
+        let mut indices: Vec<usize> = (0..graph.ids.len())
+            .filter(|&i| self.active_ticks[i] != other.active_ticks[i])
+            .collect();
+        indices.sort_unstable_by(|a, b| {
+            self.active_ticks[*b]
+                .abs_diff(other.active_ticks[*b])
+                .cmp(&self.active_ticks[*a].abs_diff(other.active_ticks[*a]))
+                .then_with(|| graph.ids[*a].cmp(&graph.ids[*b]))
+        });
+        indices.truncate(limit.min(10_000));
+        Ok(indices
+            .into_iter()
+            .map(|i| ActivationDelta {
+                neuron_id: graph.ids[i],
+                before_ticks: self.active_ticks[i],
+                after_ticks: other.active_ticks[i],
+                delta_ticks: i64::from(other.active_ticks[i]) - i64::from(self.active_ticks[i]),
+            })
+            .collect())
     }
 
     /// Lossless state/timeline archive; checked graph identity prevents
@@ -364,6 +411,32 @@ mod tests {
         assert_eq!(restored.timeline(), atlas.timeline());
         assert_eq!(restored.neuron(&graph, 10).unwrap(), Some(first));
         assert_eq!(restored.top_neurons(&graph, 3).unwrap(), atlas.top_neurons(&graph, 3).unwrap());
+    }
+    #[test]
+    fn compares_equal_budget_experiments_and_rejects_unequal() {
+        let graph = sample();
+        let mut before = ActivityAtlas::new(&graph).unwrap();
+        let mut after = ActivityAtlas::new(&graph).unwrap();
+        let mut a = BooleanState::new(3);
+        let mut b = BooleanState::new(3);
+        a.set(0, true).unwrap();
+        b.set(1, true).unwrap();
+        before.observe(&graph, &a).unwrap();
+        after.observe(&graph, &b).unwrap();
+        let deltas = before.compare_activation(&after, &graph, 3).unwrap();
+        assert_eq!(
+            deltas,
+            vec![
+                ActivationDelta { neuron_id: 10, before_ticks: 1, after_ticks: 0, delta_ticks: -1 },
+                ActivationDelta { neuron_id: 20, before_ticks: 0, after_ticks: 1, delta_ticks: 1 },
+            ]
+        );
+        assert!(before.compare_activation(&after, &graph, 0).unwrap().is_empty());
+        after.observe(&graph, &b).unwrap();
+        assert!(before.compare_activation(&after, &graph, 3).is_err());
+        let mut changed = graph.clone();
+        changed.counts[0] += 1;
+        assert!(before.compare_activation(&after, &changed, 3).is_err());
     }
     #[test]
     fn rejects_mismatch_and_truncation() {
