@@ -40,6 +40,7 @@ impl Routing {
 #[derive(Clone, Debug)]
 pub struct RegionLabels {
     labels: Vec<String>,
+    graph_ids: Vec<u64>,
 }
 
 impl RegionLabels {
@@ -81,7 +82,10 @@ impl RegionLabels {
             seen[index] = true;
             labels[index] = label.to_owned();
         }
-        Ok(Self { labels })
+        Ok(Self {
+            labels,
+            graph_ids: graph.ids.clone(),
+        })
     }
 
     fn label(&self, index: usize) -> &str {
@@ -174,6 +178,9 @@ impl<'a> CircuitExplorer<'a> {
     }
 
     pub fn stimulate(&mut self, neuron_id: u64) -> io::Result<()> {
+        if self.active.len() != self.graph.ids.len() {
+            return Err(invalid("graph/state size mismatch"));
+        }
         let index = self
             .graph
             .index(neuron_id)
@@ -184,8 +191,11 @@ impl<'a> CircuitExplorer<'a> {
     }
 
     pub fn snapshot(&self, regions: Option<&RegionLabels>) -> io::Result<ActivityReport> {
-        if regions.is_some_and(|r| r.labels.len() != self.graph.ids.len()) {
-            return Err(invalid("region labels and graph size differ"));
+        if self.active.len() != self.graph.ids.len() {
+            return Err(invalid("graph/state size mismatch"));
+        }
+        if regions.is_some_and(|r| r.graph_ids.as_slice() != self.graph.ids.as_slice()) {
+            return Err(invalid("region label neuron IDs do not match this graph"));
         }
         let mut active_by_region = BTreeMap::new();
         let mut sampled_neuron_ids = Vec::new();
@@ -211,8 +221,11 @@ impl<'a> CircuitExplorer<'a> {
     /// One synchronous step, using preserved contact counts as experimental
     /// positive signals. This does not infer neurotransmitter signs or delays.
     pub fn step(&mut self, regions: Option<&RegionLabels>) -> io::Result<ActivityReport> {
-        if regions.is_some_and(|r| r.labels.len() != self.graph.ids.len()) {
-            return Err(invalid("region labels and graph size differ"));
+        if self.active.len() != self.graph.ids.len() {
+            return Err(invalid("graph/state size mismatch"));
+        }
+        if regions.is_some_and(|r| r.graph_ids.as_slice() != self.graph.ids.as_slice()) {
+            return Err(invalid("region label neuron IDs do not match this graph"));
         }
         let before = self.active.clone();
         let mut incoming = vec![0_u128; self.graph.ids.len()];
@@ -327,8 +340,8 @@ impl<'a> CircuitExplorer<'a> {
         {
             return Err(invalid("recall limits or cue count invalid"));
         }
-        if regions.is_some_and(|r| r.labels.len() != self.graph.ids.len()) {
-            return Err(invalid("region labels and graph size differ"));
+        if regions.is_some_and(|r| r.graph_ids.as_slice() != self.graph.ids.as_slice()) {
+            return Err(invalid("region label neuron IDs do not match this graph"));
         }
         let mut cue_indices = Vec::with_capacity(cues.len());
         for &id in cues {
@@ -361,8 +374,14 @@ impl<'a> CircuitExplorer<'a> {
                         }
                         if contacts > 0 && target != cue {
                             let strength = path_strength.min(contacts);
-                            let current = next.entry(target).or_insert(0);
-                            *current = (*current).max(strength);
+                            if let Some(current) = next.get_mut(&target) {
+                                *current = (*current).max(strength);
+                            } else {
+                                if next.len() >= 100_000 {
+                                    return Err(invalid("recall frontier memory budget exceeded"));
+                                }
+                                next.insert(target, strength);
+                            }
                         }
                         Ok(())
                     };
@@ -383,10 +402,7 @@ impl<'a> CircuitExplorer<'a> {
                         }
                     }
                 }
-                if next.len() > 100_000 {
-                    return Err(invalid("recall frontier memory budget exceeded"));
-                }
-                for (&target, &strength) in &next {
+                 for (&target, &strength) in &next {
                     let entry = best_for_cue.entry(target).or_insert((strength, hop));
                     if strength > entry.0 || (strength == entry.0 && hop < entry.1) {
                         *entry = (strength, hop);
@@ -454,6 +470,35 @@ mod tests {
             targets: vec![1, 2, 3],
             counts: vec![1, 3, 2],
         }
+    }
+
+    #[test]
+    fn invalid_public_state_never_indexes_graph_offsets() {
+        let graph = graph();
+        let mut explorer = CircuitExplorer::new(&graph, Routing::Directed, 1).unwrap();
+        explorer.active = BooleanState::new(graph.ids.len() + 1);
+        explorer.active.set(graph.ids.len(), true).unwrap();
+        assert!(explorer.snapshot(None).is_err());
+        assert!(explorer.step(None).is_err());
+        assert!(explorer.stimulate(10).is_err());
+    }
+
+    #[test]
+    fn region_labels_require_original_neuron_id_alignment() {
+        let g = graph();
+        let labels =
+            RegionLabels::from_reader(&g, Cursor::new(b"neuron_id,region\n10,input\n")).unwrap();
+        let swapped = Connectome {
+            ids: vec![11, 20, 30, 40],
+            offsets: g.offsets.clone(),
+            targets: g.targets.clone(),
+            counts: g.counts.clone(),
+        };
+        let mut explorer = CircuitExplorer::new(&swapped, Routing::Directed, 1).unwrap();
+        explorer.stimulate(11).unwrap();
+        assert!(explorer.snapshot(Some(&labels)).is_err());
+        assert!(explorer.step(Some(&labels)).is_err());
+        assert!(explorer.recall(&[11], 1, 1, 2, 100, Some(&labels)).is_err());
     }
 
     #[test]
