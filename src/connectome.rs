@@ -159,6 +159,9 @@ impl Connectome {
     }
 
     pub fn save(&self, path: &Path) -> io::Result<()> {
+        // Preserve the previous behavior: invalid graphs must not truncate
+        // an existing anatomical or derived file.
+        self.validate()?;
         self.write_to(BufWriter::new(File::create(path)?))
     }
 
