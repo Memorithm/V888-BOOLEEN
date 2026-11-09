@@ -137,9 +137,10 @@ impl Connectome {
         result.validate()?;
         Ok(result)
     }
-    pub fn save(&self, path: &Path) -> io::Result<()> {
+    /// Write a lossless CSR serialization. The graph may be a derived
+    /// projection, but every stored edge row remains exact.
+    fn write_to<W: Write>(&self, mut out: W) -> io::Result<()> {
         self.validate()?;
-        let mut out = BufWriter::new(File::create(path)?);
         out.write_all(MAGIC)?;
         out.write_all(&1_u64.to_le_bytes())?;
         out.write_all(&(self.ids.len() as u64).to_le_bytes())?;
@@ -156,6 +157,20 @@ impl Connectome {
         }
         out.flush()
     }
+
+    pub fn save(&self, path: &Path) -> io::Result<()> {
+        self.write_to(BufWriter::new(File::create(path)?))
+    }
+
+    /// Create a new graph file, refusing to overwrite existing files,
+    /// including symlinks to original biological source material.
+    pub fn save_new(&self, path: &Path) -> io::Result<()> {
+        use std::fs::OpenOptions;
+        self.write_to(BufWriter::new(
+            OpenOptions::new().write(true).create_new(true).open(path)?,
+        ))
+    }
+
     pub fn load(path: &Path) -> io::Result<Self> {
         let file = File::open(path)?;
         let size = file.metadata()?.len();
