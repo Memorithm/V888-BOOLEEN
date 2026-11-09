@@ -257,6 +257,178 @@ impl<'a> CircuitExplorer<'a> {
     }
 }
 
+/// One bounded, cue-specific path used as evidence for associative recall.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CueContribution {
+    pub cue_id: u64,
+    pub strongest_path: u64,
+    pub hops: u8,
+}
+
+/// A candidate reached from multiple distinct cue neurons.
+/// Scores are deterministic *topological* evidence, not learned probabilities.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecallHit {
+    pub neuron_id: u64,
+    pub region: String,
+    pub distinct_cues: usize,
+    pub score: u128,
+    pub nearest_hops: u8,
+    pub evidence: Vec<CueContribution>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecallReport {
+    pub hits: Vec<RecallHit>,
+    pub edges_examined: u64,
+    pub source_expansions: u64,
+}
+
+impl CircuitExplorer<'_> {
+    /// Deterministic associative recall on the selected virtual circuit.
+    ///
+    /// Each cue independently explores at most three hops. At each hop only
+    /// the strongest bottleneck path to a target is retained; between hops
+    /// the strongest cue-to-target path wins. Each cue contributes at most
+    /// once to a target, so repeated walks never inflate cue support.
+    ///
+    /// The edge budget is shared across all cues/hops; exhaustion is an
+    /// error, not a silently truncated result. This computes structural
+    /// associations, *not* a trained or biologically observed memory.
+    pub fn recall(
+        &self,
+        cues: &[u64],
+        max_hops: u8,
+        min_distinct_cues: usize,
+        top_k: usize,
+        max_examined_edges: u64,
+        regions: Option<&RegionLabels>,
+    ) -> io::Result<RecallReport> {
+        if cues.is_empty()
+            || cues.len() > 64
+            || !(1..=3).contains(&max_hops)
+            || min_distinct_cues == 0
+            || min_distinct_cues > cues.len()
+            || !(1..=256).contains(&top_k)
+            || !(1..=1_000_000).contains(&max_examined_edges)
+        {
+            return Err(invalid("recall limits or cue count invalid"));
+        }
+        if regions.is_some_and(|r| r.labels.len() != self.graph.ids.len()) {
+            return Err(invalid("region labels and graph size differ"));
+        }
+        let mut cue_indices = Vec::with_capacity(cues.len());
+        for &id in cues {
+            cue_indices.push(
+                self.graph
+                    .index(id)
+                    .ok_or_else(|| invalid("unknown recall cue neuron"))?,
+            );
+        }
+        cue_indices.sort_unstable();
+        cue_indices.dedup();
+        if cue_indices.len() != cues.len() {
+            return Err(invalid("duplicate recall cue neuron"));
+        }
+
+        let mut examined = 0_u64;
+        let mut expansions = 0_u64;
+        let mut matches: BTreeMap<usize, Vec<CueContribution>> = BTreeMap::new();
+        for &cue in &cue_indices {
+            let mut frontier = BTreeMap::from([(cue, u64::MAX)]);
+            let mut best_for_cue: BTreeMap<usize, (u64, u8)> = BTreeMap::new();
+            for hop in 1..=max_hops {
+                let mut next: BTreeMap<usize, u64> = BTreeMap::new();
+                for (&source, &path_strength) in &frontier {
+                    expansions += 1;
+                    let mut visit = |target: usize, contacts: u64| -> io::Result<()> {
+                        examined += 1;
+                        if examined > max_examined_edges {
+                            return Err(invalid("recall edge exploration budget exceeded"));
+                        }
+                        if contacts > 0 && target != cue {
+                            let strength = path_strength.min(contacts);
+                            let current = next.entry(target).or_insert(0);
+                            *current = (*current).max(strength);
+                        }
+                        Ok(())
+                    };
+                    if let Some((offsets, edges)) = &self.selected {
+                        for &edge in &edges[offsets[source]..offsets[source + 1]] {
+                            visit(self.graph.targets[edge] as usize, self.graph.counts[edge])?;
+                        }
+                    } else {
+                        for edge in self.graph.offsets[source] as usize
+                            ..self.graph.offsets[source + 1] as usize
+                        {
+                            visit(self.graph.targets[edge] as usize, self.graph.counts[edge])?;
+                        }
+                    }
+                    if let Some(reverse) = &self.reverse {
+                        for &(target, contacts) in &reverse[source] {
+                            visit(target, contacts)?;
+                        }
+                    }
+                }
+                if next.len() > 100_000 {
+                    return Err(invalid("recall frontier memory budget exceeded"));
+                }
+                for (&target, &strength) in &next {
+                    let entry = best_for_cue.entry(target).or_insert((strength, hop));
+                    if strength > entry.0 || (strength == entry.0 && hop < entry.1) {
+                        *entry = (strength, hop);
+                    }
+                }
+                frontier = next;
+                if frontier.is_empty() {
+                    break;
+                }
+            }
+            for (target, (strength, hops)) in best_for_cue {
+                matches.entry(target).or_default().push(CueContribution {
+                    cue_id: self.graph.ids[cue],
+                    strongest_path: strength,
+                    hops,
+                });
+            }
+        }
+
+        let mut hits = Vec::new();
+        for (target, evidence) in matches {
+            if evidence.len() < min_distinct_cues {
+                continue;
+            }
+            let mut score = 0_u128;
+            let mut nearest_hops = u8::MAX;
+            for item in &evidence {
+                score = gates::add(score, u128::from(item.strongest_path))?;
+                nearest_hops = nearest_hops.min(item.hops);
+            }
+            hits.push(RecallHit {
+                neuron_id: self.graph.ids[target],
+                region: regions.map_or("UNMAPPED", |r| r.label(target)).to_owned(),
+                distinct_cues: evidence.len(),
+                score,
+                nearest_hops,
+                evidence,
+            });
+        }
+        hits.sort_unstable_by(|a, b| {
+            b.distinct_cues
+                .cmp(&a.distinct_cues)
+                .then_with(|| b.score.cmp(&a.score))
+                .then_with(|| a.nearest_hops.cmp(&b.nearest_hops))
+                .then_with(|| a.neuron_id.cmp(&b.neuron_id))
+        });
+        hits.truncate(top_k);
+        Ok(RecallReport {
+            hits,
+            edges_examined: examined,
+            source_expansions: expansions,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,6 +483,50 @@ mod tests {
         let second = explorer.step(Some(&regions)).unwrap();
         assert_eq!(second.sampled_neuron_ids, vec![40]);
         assert_eq!(second.active_by_region["output"], 1);
+    }
+
+    #[test]
+    fn recall_combines_distinct_cue_paths_and_retrieves_two_hop_associations() {
+        let g = Connectome {
+            ids: vec![10, 20, 30, 40, 50],
+            offsets: vec![0, 2, 4, 5, 5, 5],
+            targets: vec![2, 3, 2, 4, 4],
+            counts: vec![2, 8, 5, 1, 3],
+        };
+        let regions = RegionLabels::from_reader(
+            &g,
+            Cursor::new(b"neuron_id,region\\n30,association\\n"),
+        ).unwrap();
+        let directed = CircuitExplorer::new(&g, Routing::Directed, 1).unwrap();
+        let before = directed.active.clone();
+        let one = directed.recall(&[10, 20], 1, 2, 10, 100, Some(&regions)).unwrap();
+        assert_eq!(one.hits.len(), 1);
+        assert_eq!(one.hits[0].neuron_id, 30);
+        assert_eq!(one.hits[0].region, "association");
+        assert_eq!(one.hits[0].score, 7);
+        assert_eq!(one.hits[0].distinct_cues, 2);
+        assert_eq!(one.hits[0].evidence.len(), 2);
+
+        let two = directed.recall(&[10, 20], 2, 2, 10, 100, None).unwrap();
+        assert_eq!(two.hits.iter().map(|h| h.neuron_id).collect::<Vec<_>>(), vec![30, 50]);
+        assert_eq!(two.hits[1].score, 5);
+        assert_eq!(two.hits[1].nearest_hops, 2);
+        assert_eq!(before, directed.active);
+        assert_eq!(g.ids, vec![10, 20, 30, 40, 50]);
+
+        let strongest = CircuitExplorer::new(&g, Routing::StrongestK(1), 1).unwrap();
+        assert!(strongest.recall(&[10, 20], 1, 2, 10, 100, None).unwrap().hits.is_empty());
+    }
+
+    #[test]
+    fn recall_fails_closed_on_budget_unknown_or_duplicate_cues() {
+        let g = graph();
+        let explorer = CircuitExplorer::new(&g, Routing::Directed, 1).unwrap();
+        assert!(explorer.recall(&[10, 20], 2, 1, 10, 1, None).is_err());
+        assert!(explorer.recall(&[10, 10], 1, 1, 10, 100, None).is_err());
+        assert!(explorer.recall(&[10, 99], 1, 1, 10, 100, None).is_err());
+        assert!(explorer.recall(&[10], 0, 1, 10, 100, None).is_err());
+        assert!(explorer.recall(&[10], 1, 2, 10, 100, None).is_err());
     }
 
     #[test]
