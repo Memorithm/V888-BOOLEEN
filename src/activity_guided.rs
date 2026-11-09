@@ -78,7 +78,9 @@ pub struct SelectionReport {
 
 fn charge(scanned: &mut u64, limit: u64) -> io::Result<()> {
     if *scanned >= limit {
-        return Err(invalid("edge scanning budget exceeded; no partial circuit returned"));
+        return Err(invalid(
+            "edge scanning budget exceeded; no partial circuit returned",
+        ));
     }
     *scanned += 1;
     Ok(())
@@ -194,7 +196,9 @@ pub fn derive_circuit(
                 continue;
             }
             if targets.len() == config.max_result_edges {
-                return Err(invalid("projection edge budget exceeded; no partial circuit returned"));
+                return Err(invalid(
+                    "projection edge budget exceeded; no partial circuit returned",
+                ));
             }
             targets.push(u32::try_from(target).map_err(|_| invalid("target index overflow"))?);
             counts.push(graph.counts[edge]);

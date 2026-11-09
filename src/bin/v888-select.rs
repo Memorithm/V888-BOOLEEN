@@ -10,18 +10,18 @@ use v888_booleen::connectome::Connectome;
 use v888_booleen::engine::BooleanEngine;
 
 fn required<'a>(args: &'a [String], key: &str) -> Result<&'a str, Box<dyn Error>> {
-    let at = args.iter().position(|arg| arg == key).ok_or(format!("missing {key}"))?;
+    let at = args
+        .iter()
+        .position(|arg| arg == key)
+        .ok_or(format!("missing {key}"))?;
     Ok(args.get(at + 1).ok_or(format!("missing value for {key}"))?)
 }
 fn optional<'a>(args: &'a [String], key: &str) -> Option<&'a str> {
-    args.iter().position(|arg| arg == key)
+    args.iter()
+        .position(|arg| arg == key)
         .and_then(|at| args.get(at + 1).map(String::as_str))
 }
-fn number<T: std::str::FromStr>(
-    args: &[String],
-    key: &str,
-    default: T,
-) -> Result<T, Box<dyn Error>>
+fn number<T: std::str::FromStr>(args: &[String], key: &str, default: T) -> Result<T, Box<dyn Error>>
 where
     <T as std::str::FromStr>::Err: Error + 'static,
 {
@@ -46,7 +46,9 @@ fn probe(
     for text in seeds.split(',') {
         let id = text.parse::<u64>()?;
         reference.stimulate(original, id)?;
-        selected.stimulate(reduced, id).map_err(|_| "probe seed not present in selected circuit")?;
+        selected
+            .stimulate(reduced, id)
+            .map_err(|_| "probe seed not present in selected circuit")?;
     }
 
     for tick in 0..=steps {
@@ -55,7 +57,11 @@ fn probe(
         for index in reference.active.active_indices() {
             if let Some(mapped) = reduced.index(original.ids[index]) {
                 reference_inside += 1;
-                if selected.active.get(mapped).map_err(|_| "invalid circuit index")? {
+                if selected
+                    .active
+                    .get(mapped)
+                    .map_err(|_| "invalid circuit index")?
+                {
                     overlap += 1;
                 }
             }
