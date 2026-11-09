@@ -148,8 +148,16 @@ fn main() -> Result<(), Box<dyn Error>> {
             // Explicitly reject unknown flags; they must never silently
             // increase a recall budget or alter the requested hit count.
             let allowed = [
-                "--graph", "--cues", "--policy", "--fanout", "--hops",
-                "--min-cues", "--top", "--top-k", "--budget", "--edge-budget",
+                "--graph",
+                "--cues",
+                "--policy",
+                "--fanout",
+                "--hops",
+                "--min-cues",
+                "--top",
+                "--top-k",
+                "--budget",
+                "--edge-budget",
                 "--regions",
             ];
             for flag in args.iter().skip(1).filter(|arg| arg.starts_with("--")) {
