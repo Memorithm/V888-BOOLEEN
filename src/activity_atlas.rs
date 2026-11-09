@@ -205,7 +205,10 @@ impl ActivityAtlas {
                 .then_with(|| graph.ids[*a].cmp(&graph.ids[*b]))
         });
         indices.truncate(limit.min(10_000));
-        Ok(indices.into_iter().map(|i| self.neuron_at(graph, i)).collect())
+        Ok(indices
+            .into_iter()
+            .map(|i| self.neuron_at(graph, i))
+            .collect())
     }
 
     /// Compare two experiments on the same graph, in descending order of
@@ -311,7 +314,9 @@ impl ActivityAtlas {
                 if neuron >= graph.ids.len() {
                     return Err(bad("nonzero archive padding bits"));
                 }
-                previous.set(neuron, true).map_err(|_| bad("archive index"))?;
+                previous
+                    .set(neuron, true)
+                    .map_err(|_| bad("archive index"))?;
                 word &= word - 1;
             }
         }
@@ -410,7 +415,10 @@ mod tests {
         let restored = ActivityAtlas::read(&graph, data.as_slice()).unwrap();
         assert_eq!(restored.timeline(), atlas.timeline());
         assert_eq!(restored.neuron(&graph, 10).unwrap(), Some(first));
-        assert_eq!(restored.top_neurons(&graph, 3).unwrap(), atlas.top_neurons(&graph, 3).unwrap());
+        assert_eq!(
+            restored.top_neurons(&graph, 3).unwrap(),
+            atlas.top_neurons(&graph, 3).unwrap()
+        );
     }
     #[test]
     fn compares_equal_budget_experiments_and_rejects_unequal() {
@@ -427,11 +435,24 @@ mod tests {
         assert_eq!(
             deltas,
             vec![
-                ActivationDelta { neuron_id: 10, before_ticks: 1, after_ticks: 0, delta_ticks: -1 },
-                ActivationDelta { neuron_id: 20, before_ticks: 0, after_ticks: 1, delta_ticks: 1 },
+                ActivationDelta {
+                    neuron_id: 10,
+                    before_ticks: 1,
+                    after_ticks: 0,
+                    delta_ticks: -1
+                },
+                ActivationDelta {
+                    neuron_id: 20,
+                    before_ticks: 0,
+                    after_ticks: 1,
+                    delta_ticks: 1
+                },
             ]
         );
-        assert!(before.compare_activation(&after, &graph, 0).unwrap().is_empty());
+        assert!(before
+            .compare_activation(&after, &graph, 0)
+            .unwrap()
+            .is_empty());
         after.observe(&graph, &b).unwrap();
         assert!(before.compare_activation(&after, &graph, 3).is_err());
         let mut changed = graph.clone();

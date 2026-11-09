@@ -8,18 +8,27 @@ use v888_booleen::connectome::Connectome;
 use v888_booleen::engine::BooleanEngine;
 
 fn arg<'a>(args: &'a [String], flag: &str) -> Result<&'a str, Box<dyn Error>> {
-    let index = args.iter().position(|v| v == flag).ok_or(format!("missing {flag}"))?;
-    Ok(args.get(index + 1).ok_or(format!("missing value for {flag}"))?)
+    let index = args
+        .iter()
+        .position(|v| v == flag)
+        .ok_or(format!("missing {flag}"))?;
+    Ok(args
+        .get(index + 1)
+        .ok_or(format!("missing value for {flag}"))?)
 }
 fn optional<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
-    args.iter().position(|v| v == flag).and_then(|i| args.get(i + 1).map(String::as_str))
+    args.iter()
+        .position(|v| v == flag)
+        .and_then(|i| args.get(i + 1).map(String::as_str))
 }
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("record") => {
             let graph = Connectome::load(Path::new(arg(&args, "--graph")?))?;
-            let threshold = optional(&args, "--threshold").unwrap_or("1").parse::<u64>()?;
+            let threshold = optional(&args, "--threshold")
+                .unwrap_or("1")
+                .parse::<u64>()?;
             let steps = optional(&args, "--steps").unwrap_or("3").parse::<u32>()?;
             if steps > 1000 {
                 return Err("recording limited to 1000 steps".into());
@@ -51,14 +60,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         Some("compare") => {
             let graph = Connectome::load(Path::new(arg(&args, "--graph")?))?;
-            let before = ActivityAtlas::read(
-                &graph,
-                BufReader::new(File::open(arg(&args, "--before")?)?),
-            )?;
-            let after = ActivityAtlas::read(
-                &graph,
-                BufReader::new(File::open(arg(&args, "--after")?)?),
-            )?;
+            let before =
+                ActivityAtlas::read(&graph, BufReader::new(File::open(arg(&args, "--before")?)?))?;
+            let after =
+                ActivityAtlas::read(&graph, BufReader::new(File::open(arg(&args, "--after")?)?))?;
             let limit = optional(&args, "--top").unwrap_or("20").parse::<usize>()?;
             if limit > 10_000 {
                 return Err("top limit 10000".into());
@@ -86,7 +91,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             if limit > 10_000 {
                 return Err("top limit 10000".into());
             }
-            println!("atlas_ticks={} graph_neurons={}", atlas.ticks(), graph.ids.len());
+            println!(
+                "atlas_ticks={} graph_neurons={}",
+                atlas.ticks(),
+                graph.ids.len()
+            );
             for event in atlas.timeline() {
                 println!(
                     "tick={} active={} new={} silent={}",
