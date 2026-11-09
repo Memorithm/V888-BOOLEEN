@@ -146,14 +146,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         Some("recall-circuits") => {
             let graph = Connectome::load(Path::new(require(&args, "--graph")?))?;
-            let fanout = optional(&args, "--fanout").unwrap_or("8").parse::<usize>()?;
-            let policy = Routing::parse(
-                optional(&args, "--policy").unwrap_or("directed"),
-                fanout,
-            )?;
+            let fanout = optional(&args, "--fanout")
+                .unwrap_or("8")
+                .parse::<usize>()?;
+            let policy = Routing::parse(optional(&args, "--policy").unwrap_or("directed"), fanout)?;
             let hops = optional(&args, "--hops").unwrap_or("2").parse::<u8>()?;
-            let min_cues = optional(&args, "--min-cues").unwrap_or("2").parse::<usize>()?;
-            let top_k = optional(&args, "--top-k").unwrap_or("10").parse::<usize>()?;
+            let min_cues = optional(&args, "--min-cues")
+                .unwrap_or("2")
+                .parse::<usize>()?;
+            let top_k = optional(&args, "--top-k")
+                .unwrap_or("10")
+                .parse::<usize>()?;
             let edge_budget = optional(&args, "--edge-budget")
                 .unwrap_or("100000")
                 .parse::<u64>()?;
@@ -169,14 +172,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 None => None,
             };
             let explorer = CircuitExplorer::new(&graph, policy, 1)?;
-            let report = explorer.recall(
-                &cues,
-                hops,
-                min_cues,
-                top_k,
-                edge_budget,
-                regions.as_ref(),
-            )?;
+            let report =
+                explorer.recall(&cues, hops, min_cues, top_k, edge_budget, regions.as_ref())?;
             println!(
                 "recall_scope=structural_not_learned routing={policy:?} cues={} hops={} edges_examined={} source_expansions={} hits={}",
                 cues.len(),
@@ -203,10 +200,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let fanout = optional(&args, "--fanout")
                 .unwrap_or("8")
                 .parse::<usize>()?;
-            let policy = Routing::parse(
-                optional(&args, "--policy").unwrap_or("directed"),
-                fanout,
-            )?;
+            let policy = Routing::parse(optional(&args, "--policy").unwrap_or("directed"), fanout)?;
             let hops = optional(&args, "--hops").unwrap_or("2").parse::<u8>()?;
             let top = optional(&args, "--top").unwrap_or("20").parse::<usize>()?;
             let budget = optional(&args, "--budget")
@@ -227,14 +221,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 None => None,
             };
             let explorer = CircuitExplorer::new(&graph, policy, 1)?;
-            let report = explorer.recall(
-                &cues,
-                hops,
-                min_cues,
-                top,
-                budget,
-                regions.as_ref(),
-            )?;
+            let report = explorer.recall(&cues, hops, min_cues, top, budget, regions.as_ref())?;
             println!(
                 "recall_policy={policy:?} cues={} hops={hops} min_cues={min_cues} edges_examined={} source_expansions={} returned={} anatomical_edges_preserved=true model=topological_not_learned",
                 cues.len(),
@@ -259,10 +246,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let fanout = optional(&args, "--fanout")
                 .unwrap_or("8")
                 .parse::<usize>()?;
-            let policy = Routing::parse(
-                optional(&args, "--policy").unwrap_or("directed"),
-                fanout,
-            )?;
+            let policy = Routing::parse(optional(&args, "--policy").unwrap_or("directed"), fanout)?;
             let threshold = optional(&args, "--threshold")
                 .unwrap_or("1")
                 .parse::<u128>()?;
