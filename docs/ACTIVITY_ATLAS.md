@@ -34,3 +34,13 @@ Remplacer ROOT_ID par un identifiant réellement présent dans le graphe ; aucun
 ## Cycle de développement expérimental
 
 Utiliser cet atlas pour comparer les politiques de routage B888-3 (PR #18), puis les stratégies d'apprentissage B888-4 (PR #19) à budget et stimuli identiques : taux d'activation, persistance, répétition, silences et changements après entraînement. Les différences éventuelles doivent être **mesurées** sur Dell via RemoteOps et ne prouvent pas à elles seules la mémoire, la généralisation ni la fidélité biologique.
+
+## Comparaison fonctionnelle avant/après
+
+Deux enregistrements indépendants du même graphe, avec **exactement le même nombre de cycles**, peuvent être comparés neuron par neurone :
+
+```bash
+cargo run --release --bin v888-activity -- compare --graph data/processed/brain.v888b --before baseline.v888atl --after trained.v888atl --top 30
+```
+
+Le résultat ordonne les changements de fréquence d'activation par amplitude décroissante, puis identifiant original. Le delta signé `after_ticks - before_ticks` est calculé sans flottants. Les archives d'identité de graphe différente ou de budgets de cycles différents sont rejetées. Le nombre de neurones retournés est borné à 10 000. Pour attribuer un changement à une stratégie d'apprentissage, conserver en plus des archives les mêmes stimuli, graines, budget de calcul et conditions d'expérience ; la comparaison seule n'établit pas de causalité.
