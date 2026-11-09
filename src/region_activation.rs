@@ -40,8 +40,13 @@ mod tests {
         state.set(0, true).unwrap();
         state.set(2, true).unwrap();
         state.set(4, true).unwrap();
-        let labels = [Some("zone-b".into()), Some("zone-a".into()), None,
-            Some("zone-a".into()), Some("zone-b".into())];
+        let labels = [
+            Some("zone-b".into()),
+            Some("zone-a".into()),
+            None,
+            Some("zone-a".into()),
+            Some("zone-b".into()),
+        ];
         let counts = activation_by_region(&state, &labels).unwrap();
         assert_eq!(counts["zone-a"], (0, 2));
         assert_eq!(counts["zone-b"], (2, 2));
@@ -50,10 +55,15 @@ mod tests {
     #[test]
     fn refuses_mismatched_annotation_lengths() {
         let state = BooleanState::new(2);
-        assert_eq!(activation_by_region(&state, &[None]), Err(RegionError::LengthMismatch));
+        assert_eq!(
+            activation_by_region(&state, &[None]),
+            Err(RegionError::LengthMismatch)
+        );
     }
     #[test]
     fn empty_annotations_are_not_invented() {
-        assert!(activation_by_region(&BooleanState::new(0), &[]).unwrap().is_empty());
+        assert!(activation_by_region(&BooleanState::new(0), &[])
+            .unwrap()
+            .is_empty());
     }
 }

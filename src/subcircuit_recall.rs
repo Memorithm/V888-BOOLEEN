@@ -31,7 +31,10 @@ impl Subcircuit {
         if members.windows(2).any(|pair| pair[0] == pair[1]) {
             return Err(RecallError::DuplicateMember);
         }
-        Ok(Self { members, universe_len })
+        Ok(Self {
+            members,
+            universe_len,
+        })
     }
 
     #[must_use]
@@ -79,7 +82,10 @@ impl Subcircuit {
         if minimum_matching_steps == 0 || minimum_active == 0 {
             return Err(RecallError::ZeroBudget);
         }
-        if snapshots.iter().any(|state| state.len() != self.universe_len) {
+        if snapshots
+            .iter()
+            .any(|state| state.len() != self.universe_len)
+        {
             return Err(RecallError::LengthMismatch);
         }
         if minimum_matching_steps > snapshots.len() || minimum_active > self.members.len() {
@@ -127,7 +133,14 @@ mod tests {
         assert_eq!(circuit.recall(&state, 2), Ok(true));
         assert_eq!(circuit.recall(&state, 3), Ok(false));
         assert_eq!(circuit.recall(&state, 4), Ok(false));
-        assert_eq!(circuit.select(&state).unwrap().active_indices().collect::<Vec<_>>(), vec![1, 129]);
+        assert_eq!(
+            circuit
+                .select(&state)
+                .unwrap()
+                .active_indices()
+                .collect::<Vec<_>>(),
+            vec![1, 129]
+        );
     }
 
     #[test]
@@ -145,9 +158,18 @@ mod tests {
         assert_eq!(circuit.recall_over_time(&history, 2, 3), Ok(false));
         assert_eq!(circuit.recall_over_time(&history, 2, 5), Ok(false));
         assert_eq!(circuit.recall_over_time(&history, 1, 3), Ok(true));
-        assert_eq!(circuit.recall_over_time(&[], 1, 1), Err(RecallError::EmptyHistory));
-        assert_eq!(circuit.recall_over_time(&history, 0, 1), Err(RecallError::ZeroBudget));
-        assert_eq!(circuit.recall_over_time(&history, 1, 0), Err(RecallError::ZeroBudget));
+        assert_eq!(
+            circuit.recall_over_time(&[], 1, 1),
+            Err(RecallError::EmptyHistory)
+        );
+        assert_eq!(
+            circuit.recall_over_time(&history, 0, 1),
+            Err(RecallError::ZeroBudget)
+        );
+        assert_eq!(
+            circuit.recall_over_time(&history, 1, 0),
+            Err(RecallError::ZeroBudget)
+        );
         assert_eq!(
             circuit.recall_over_time(&[BooleanState::new(5)], 1, 1),
             Err(RecallError::LengthMismatch)
@@ -158,10 +180,22 @@ mod tests {
     fn invalid_membership_and_budget_are_rejected() {
         assert_eq!(Subcircuit::new(2, vec![]), Err(RecallError::EmptyCircuit));
         assert_eq!(Subcircuit::new(2, vec![2]), Err(RecallError::OutOfBounds));
-        assert_eq!(Subcircuit::new(2, vec![1, 1]), Err(RecallError::DuplicateMember));
+        assert_eq!(
+            Subcircuit::new(2, vec![1, 1]),
+            Err(RecallError::DuplicateMember)
+        );
         let circuit = Subcircuit::new(2, vec![1]).unwrap();
-        assert_eq!(circuit.recall(&BooleanState::new(1), 1), Err(RecallError::LengthMismatch));
-        assert_eq!(circuit.select(&BooleanState::new(1)), Err(RecallError::LengthMismatch));
-        assert_eq!(circuit.recall(&BooleanState::new(2), 0), Err(RecallError::ZeroBudget));
+        assert_eq!(
+            circuit.recall(&BooleanState::new(1), 1),
+            Err(RecallError::LengthMismatch)
+        );
+        assert_eq!(
+            circuit.select(&BooleanState::new(1)),
+            Err(RecallError::LengthMismatch)
+        );
+        assert_eq!(
+            circuit.recall(&BooleanState::new(2), 0),
+            Err(RecallError::ZeroBudget)
+        );
     }
 }
