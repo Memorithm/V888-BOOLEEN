@@ -252,6 +252,20 @@ impl PlasticCircuit {
         })
     }
 
+    /// Rebuild a circuit from explicit four-bit weights (checkpoint resume).
+    /// Length and nibble range are validated against the graph.
+    pub fn from_weights(graph: &Connectome, weights: Vec<u8>) -> io::Result<Self> {
+        graph.validate()?;
+        if weights.len() != graph.edges() || weights.iter().any(|&w| w > MAX_WEIGHT) {
+            return Err(bad("weights do not match graph or are not four-bit"));
+        }
+        Ok(Self {
+            weights,
+            topology: graph_fingerprint(graph),
+            neuron_count: graph.ids.len(),
+        })
+    }
+
     #[must_use]
     pub fn weights(&self) -> &[u8] {
         &self.weights

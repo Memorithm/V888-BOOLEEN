@@ -5,6 +5,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 use v888_booleen::circuit_explorer::{ActivityReport, CircuitExplorer, RegionLabels, Routing};
 use v888_booleen::connectome::Connectome;
+use v888_booleen::consolidation::sweep as consolidation_sweep;
 use v888_booleen::engine::BooleanEngine;
 use v888_booleen::full_synapse::{pack_records, FullSynapseReader};
 use v888_booleen::learning_bench::benchmark;
@@ -115,6 +116,7 @@ fn help() {
     println!("  bench-learning --graph brain.v888b  (supervised retention only)");
     println!("  bench-holdout --graph brain.v888b (unseen-source generalization control)");
     println!("  bench-strategies [--graph brain.v888b] [--seed 1] [--rounds 8]  (equal-budget strategy comparison)");
+    println!("  bench-consolidation [--graph brain.v888b] [--seed 1] [--rounds-a 8] [--rounds-b 8] [--periods 2,4,8,1000]  (learn A then B, retention of A)");
     println!("  train-plasticity --graph brain.v888b --episodes labeled.csv --output weights.v888pls [--epochs 1]");
     println!("  score-plasticity --graph brain.v888b --weights weights.v888pls --episodes labeled.csv [--threshold 1]");
     println!("  run-plasticity --graph brain.v888b --weights weights.v888pls --seed ID[,ID] [--threshold 1]");
@@ -472,6 +474,57 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("plastic_weight_bytes={}", r.learned_weight_bytes);
             println!("train_elapsed_us={} eval_frozen_zero_us={} eval_frozen_topology_us={} eval_learned_us={}", r.train_elapsed.as_micros(), r.frozen_zero_eval_elapsed.as_micros(), r.frozen_topology_eval_elapsed.as_micros(), r.learned_eval_elapsed.as_micros());
             println!("evaluation_scope=seen_pattern_retention_not_generalization_or_biology");
+        }
+        Some("bench-consolidation") => {
+            let seed = optional(&args, "--seed").unwrap_or("1").parse::<u64>()?;
+            let rounds_a = optional(&args, "--rounds-a")
+                .unwrap_or("8")
+                .parse::<u32>()?;
+            let rounds_b = optional(&args, "--rounds-b")
+                .unwrap_or("8")
+                .parse::<u32>()?;
+            let periods = optional(&args, "--periods")
+                .unwrap_or("2,4,8,1000")
+                .split(',')
+                .map(str::parse::<u32>)
+                .collect::<Result<Vec<_>, _>>()?;
+            let owned = match optional(&args, "--graph") {
+                Some(path) => Some(Connectome::load(Path::new(path))?),
+                None => None,
+            };
+            let outcomes = consolidation_sweep(owned.as_ref(), seed, rounds_a, rounds_b, &periods)?;
+            println!("v888_consolidation_report_schema=b888-4-consolidation-v1");
+            println!(
+                "graph={} seed={seed} rounds_a={rounds_a} rounds_b={rounds_b}",
+                if owned.is_some() {
+                    "provided"
+                } else {
+                    "synthetic-comparison"
+                }
+            );
+            for r in &outcomes {
+                println!(
+                    "protect_period={} a_after_a={}/{} a_after_b={}/{} b_after_b={}/{} protected_edges={}",
+                    r.config.protect_period, r.a_correct_after_a, r.presentations,
+                    r.a_correct_after_b, r.presentations, r.b_correct_after_b, r.presentations,
+                    r.protected_edges
+                );
+                println!(
+                    "protect_period={} a_visited={} a_changed={} b_visited={} b_changed={} b_blocked={} b_effective_rate={} observed_activations={}",
+                    r.config.protect_period, r.phase_a.edges_visited, r.phase_a.weights_changed,
+                    r.phase_b.edges_visited, r.phase_b.weights_changed, r.phase_b.blocked,
+                    r.recovery_rate_b().map_or("n/a".to_string(), |v| format!("{v:.4}")),
+                    r.observed_activations
+                );
+                println!(
+                    "protect_period={} weight_bytes={} overhead_bytes={} elapsed_us={} topology_unchanged={}",
+                    r.config.protect_period, r.weight_bytes, r.overhead_bytes,
+                    r.elapsed.as_micros(), r.topology_unchanged
+                );
+            }
+            println!(
+                "evaluation_scope=artificial_labels_overlapping_sources_not_biological_memory"
+            );
         }
         Some("bench-strategies") => {
             let seed = optional(&args, "--seed").unwrap_or("1").parse::<u64>()?;

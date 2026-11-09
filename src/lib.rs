@@ -1,5 +1,6 @@
 pub mod circuit_explorer;
 pub mod connectome;
+pub mod consolidation;
 pub mod engine;
 pub mod full_synapse;
 pub mod gates;
