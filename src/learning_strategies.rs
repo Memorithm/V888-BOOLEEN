@@ -106,6 +106,30 @@ pub fn apply_update(
     observed_or_teacher: &BooleanState,
     reward: RewardSignal,
 ) -> io::Result<UpdateReport> {
+    apply_update_gated(
+        circuit,
+        graph,
+        strategy,
+        input,
+        observed_or_teacher,
+        reward,
+        &mut |_| true,
+    )
+}
+
+/// Like [`apply_update`], but `allow(edge)` is asked before each update that
+/// would be attempted; a refused edge is neither visited nor changed.
+/// Edges the strategy would skip anyway (reward-modulated, silent target)
+/// are not offered to `allow`.
+pub(crate) fn apply_update_gated(
+    circuit: &mut PlasticCircuit,
+    graph: &Connectome,
+    strategy: LearningStrategy,
+    input: &BooleanState,
+    observed_or_teacher: &BooleanState,
+    reward: RewardSignal,
+    allow: &mut dyn FnMut(usize) -> bool,
+) -> io::Result<UpdateReport> {
     graph.validate()?;
     if circuit.weights().len() != graph.edges()
         || input.len() != graph.ids.len()
@@ -142,6 +166,9 @@ pub fn apply_update(
                     }
                 }
             };
+            if !allow(edge) {
+                continue;
+            }
             report.edges_visited = add_count(report.edges_visited, 1)?;
             if circuit.apply_edge_step(edge, reinforce)? {
                 report.weights_changed = add_count(report.weights_changed, 1)?;
@@ -204,29 +231,49 @@ fn apply_labeled_episode(
     target: usize,
     fire: bool,
 ) -> io::Result<UpdateReport> {
+    apply_labeled_episode_gated(
+        circuit,
+        graph,
+        strategy,
+        (source, target, fire),
+        &mut |_| true,
+    )
+}
+
+/// One labeled episode `(source, target, fire)` with a per-edge gate.
+pub(crate) fn apply_labeled_episode_gated(
+    circuit: &mut PlasticCircuit,
+    graph: &Connectome,
+    strategy: LearningStrategy,
+    episode: (usize, usize, bool),
+    allow: &mut dyn FnMut(usize) -> bool,
+) -> io::Result<UpdateReport> {
+    let (source, target, fire) = episode;
     let neurons = graph.ids.len();
     match strategy {
         LearningStrategy::Supervised => {
             let input = stimulus(neurons, source)?;
             let teacher = teacher_for(neurons, target, fire)?;
-            apply_update(
+            apply_update_gated(
                 circuit,
                 graph,
                 strategy,
                 &input,
                 &teacher,
                 RewardSignal::None,
+                allow,
             )
         }
         LearningStrategy::AssociativeCoactivation => {
             let observed = observed_pair(neurons, source, target, fire)?;
-            apply_update(
+            apply_update_gated(
                 circuit,
                 graph,
                 strategy,
                 &observed,
                 &observed,
                 RewardSignal::None,
+                allow,
             )
         }
         LearningStrategy::RewardModulated => {
@@ -236,7 +283,9 @@ fn apply_labeled_episode(
             } else {
                 RewardSignal::Negative
             };
-            apply_update(circuit, graph, strategy, &observed, &observed, reward)
+            apply_update_gated(
+                circuit, graph, strategy, &observed, &observed, reward, allow,
+            )
         }
     }
 }
@@ -272,7 +321,7 @@ fn score_pair(
 }
 
 /// First target that already has four distinct observed presynaptic sources.
-fn find_four_sources(graph: &Connectome) -> io::Result<([usize; 4], usize)> {
+pub(crate) fn find_four_sources(graph: &Connectome) -> io::Result<([usize; 4], usize)> {
     let mut sources = vec![[usize::MAX; 4]; graph.ids.len()];
     let mut cardinality = vec![0_u8; graph.ids.len()];
     for source in 0..graph.ids.len() {

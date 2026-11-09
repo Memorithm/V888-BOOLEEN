@@ -4,7 +4,10 @@ use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use v888_booleen::connectome::Connectome;
-use v888_booleen::consolidation::sweep as consolidation_sweep;
+use v888_booleen::consolidation::{
+    matrix as consolidation_matrix, sweep as consolidation_sweep, to_csv as consolidation_csv,
+    Scenario, ALL_STRATEGIES,
+};
 use v888_booleen::engine::BooleanEngine;
 use v888_booleen::full_synapse::{pack_records, FullSynapseReader};
 use v888_booleen::learning_bench::benchmark;
@@ -99,6 +102,7 @@ fn help() {
     println!("  bench-holdout --graph brain.v888b (unseen-source generalization control)");
     println!("  bench-strategies [--graph brain.v888b] [--seed 1] [--rounds 8]  (equal-budget strategy comparison)");
     println!("  bench-consolidation [--graph brain.v888b] [--seed 1] [--rounds-a 8] [--rounds-b 8] [--periods 2,4,8,1000]  (learn A then B, retention of A)");
+    println!("  bench-consolidation-matrix [--graph brain.v888b] [--seeds 1,2,3] [--rounds-a 8] [--rounds-b 8] [--variants 2,4,1000:1] [--csv out.csv]  (3 strategies x conflict/disjoint x protection, CSV)");
     println!("  train-plasticity --graph brain.v888b --episodes labeled.csv --output weights.v888pls [--epochs 1]");
     println!("  score-plasticity --graph brain.v888b --weights weights.v888pls --episodes labeled.csv [--threshold 1]");
     println!("  run-plasticity --graph brain.v888b --weights weights.v888pls --seed ID[,ID] [--threshold 1]");
@@ -344,6 +348,55 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("plastic_weight_bytes={}", r.learned_weight_bytes);
             println!("train_elapsed_us={} eval_frozen_zero_us={} eval_frozen_topology_us={} eval_learned_us={}", r.train_elapsed.as_micros(), r.frozen_zero_eval_elapsed.as_micros(), r.frozen_topology_eval_elapsed.as_micros(), r.learned_eval_elapsed.as_micros());
             println!("evaluation_scope=seen_pattern_retention_not_generalization_or_biology");
+        }
+        Some("bench-consolidation-matrix") => {
+            let seeds = optional(&args, "--seeds")
+                .unwrap_or("1,2,3")
+                .split(',')
+                .map(str::parse::<u64>)
+                .collect::<Result<Vec<_>, _>>()?;
+            let rounds_a = optional(&args, "--rounds-a")
+                .unwrap_or("8")
+                .parse::<u32>()?;
+            let rounds_b = optional(&args, "--rounds-b")
+                .unwrap_or("8")
+                .parse::<u32>()?;
+            // variants: period[:min_weight], comma-separated
+            let variants = optional(&args, "--variants")
+                .unwrap_or("2,4,8,1000,1000:1,1000:15")
+                .split(',')
+                .map(|v| {
+                    let (p, w) = v.split_once(':').unwrap_or((v, "0"));
+                    Ok::<_, Box<dyn std::error::Error>>((p.parse::<u32>()?, w.parse::<u8>()?))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let owned = match optional(&args, "--graph") {
+                Some(path) => Some(Connectome::load(Path::new(path))?),
+                None => None,
+            };
+            let rows = consolidation_matrix(
+                owned.as_ref(),
+                &seeds,
+                rounds_a,
+                rounds_b,
+                &variants,
+                &ALL_STRATEGIES,
+                &[Scenario::Conflict, Scenario::Disjoint],
+            )?;
+            let csv = consolidation_csv(&rows);
+            if let Some(path) = optional(&args, "--csv") {
+                use std::io::Write;
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)?
+                    .write_all(csv.as_bytes())?;
+            }
+            println!("v888_consolidation_matrix_schema=b888-4-consolidation-matrix-v1");
+            print!("{csv}");
+            println!(
+                "evaluation_scope=artificial_labels_overlapping_sources_not_biological_memory"
+            );
         }
         Some("bench-consolidation") => {
             let seed = optional(&args, "--seed").unwrap_or("1").parse::<u64>()?;
