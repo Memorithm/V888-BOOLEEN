@@ -118,8 +118,9 @@ impl ActivityAtlas {
     /// Record a complete synchronous state, including tick zero if desired.
     /// Work scales with active neurons and transitions, not dense neurons per tick.
     pub fn observe(&mut self, graph: &Connectome, state: &BooleanState) -> io::Result<TickSummary> {
-        self.validate_graph(graph)?;
-        if state.len() != graph.ids.len() {
+        // The caller must keep the graph fixed for a recording session.
+        // Avoid hashing all 11M+ source edges at every simulated tick.
+        if state.len() != graph.ids.len() || self.previous.len() != graph.ids.len() {
             return Err(bad("state and graph size mismatch"));
         }
         if self.ticks == MAX_TICKS {
