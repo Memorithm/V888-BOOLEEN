@@ -49,3 +49,20 @@ cargo run --release -- recall-circuits --graph data/processed/brain.v888b --cues
 ```
 
 Les identifiants sont **des espaces réservés** à remplacer par des IDs réellement présents dans le graphe. La commande échoue explicitement si la limite globale d'arêtes est dépassée, si les indices sont inconnus ou dupliqués, ou si le front dépasse 100 000 cibles. `--min-cues 2` exige au moins deux indices distincts et ne fonctionne donc pas avec un seul indice (utiliser `--min-cues 1` dans ce cas). Le résultat est une **association structurelle déterministe**, pas une mémoire apprise ni une probabilité. Aucun score de qualité ni gain de performance n'est revendiqué sans comparaison sur un graphe et des objectifs préenregistrés.
+
+## Rappel associatif topologique (nouveau : `recall-circuits`)
+
+La méthode Rust `CircuitExplorer::recall` récupère des neurones-candidats à partir de plusieurs indices (`cues`) dans **la topologie existante**, sans entraîner ni créer de poids. Chaque indice explore jusqu'à trois sauts orientés selon la politique de connexion choisie. La force d'un chemin est son **contact minimal** (goulot synaptique) ; lorsqu'il existe plusieurs chemins pour un indice donné, seul le plus fort est retenu, et à égalité le plus court. Un indice contribue **au plus une fois par neurone cible**.
+
+Les candidats sont triés par nombre d'indices distincts qui les atteignent, puis somme des forces de leurs meilleurs chemins, nombre minimal de sauts et identifiant d'origine. Le résultat expose une preuve interprétable par indice (`cue_id`, `strongest_path`, `hops`) et la région explicite si connue.
+
+**Exemple de CLI :**
+
+```bash
+cargo run --release -- recall-circuits --graph data/processed/brain.v888b --cues 100,200 --policy directed --hops 2 --min-cues 2 --top 20 --budget 100000 --regions zones.csv
+cargo run --release -- recall-circuits --graph data/processed/brain.v888b --cues 100,200 --policy strongest-k --fanout 16 --hops 2 --min-cues 2
+```
+
+Les ID 100 et 200 sont **des exemples de syntaxe** et doivent être remplacés par des neurones réellement présents, faute de quoi la requête échoue. `--min-cues` indique le nombre minimal d'indices distincts nécessaires pour retenir une cible. `--budget` fixe une limite totale explicite d'arêtes explorées, partagée entre tous les indices et les sauts. Toute limite dépassée entraîne une **erreur**, jamais une liste silencieusement tronquée. Les tailles des fronts de recherche sont aussi limitées. Le résultat final est limité à `--top` (1 à 256).
+
+Cette méthode répond à « quels neurones relient ces indices dans le graphe ? » ; elle ne démontre **ni mémoire apprise**, ni compréhension d'un stimulus, ni bénéfice de généralisation. Une mesure contrôlée contre la sélection exhaustive et d'autres stratégies de connectivité reste indispensable. Le prototype permet d'enregistrer nombre d'arêtes lues et expansion des sources, mais les latences et la RAM doivent être mesurées sur machine physique sous RemoteOps.
