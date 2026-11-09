@@ -312,6 +312,10 @@ mod tests {
         derived.save_new(&path).unwrap();
         assert_eq!(Connectome::load(&path).unwrap(), derived);
         assert!(derived.save_new(&path).is_err());
+        // Saving an invalid graph must fail before truncating valid data.
+        let mut invalid = derived.clone();
+        invalid.counts.pop();
+        assert!(invalid.save(&path).is_err());
         assert_eq!(Connectome::load(&path).unwrap(), derived);
         std::fs::remove_file(&path).unwrap();
     }
