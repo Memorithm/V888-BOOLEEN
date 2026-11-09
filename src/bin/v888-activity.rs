@@ -1,7 +1,7 @@
 //! Record and inspect reproducible boolean activation trajectories.
 use std::error::Error;
 use std::fs::{File, OpenOptions};
-use std::io::{BufReader, BufWriter};
+use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
 use v888_booleen::activity_atlas::ActivityAtlas;
 use v888_booleen::connectome::Connectome;
@@ -44,7 +44,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .write(true)
                 .create_new(true)
                 .open(output_path)?;
-            atlas.write(&graph, BufWriter::new(output))?;
+            let mut writer = BufWriter::new(output);
+            atlas.write(&graph, &mut writer)?;
+            writer.flush()?;
             println!("atlas_saved={output_path} ticks={}", atlas.ticks());
         }
         Some("inspect") => {
