@@ -185,7 +185,7 @@ fn teacher_for(neurons: usize, target: usize, fire: bool) -> io::Result<BooleanS
 }
 
 /// Deterministic LCG shuffle so a seed reproduces the episode order exactly.
-fn shuffle_with_seed<T>(items: &mut [T], seed: u64) {
+pub(crate) fn shuffle_with_seed<T>(items: &mut [T], seed: u64) {
     let mut state = seed ^ 0x9E37_79B9_7F4A_7C15;
     for i in (1..items.len()).rev() {
         state = state
