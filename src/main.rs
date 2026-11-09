@@ -195,52 +195,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                 );
             }
         }
-        Some("recall-circuits") => {
-            let graph = Connectome::load(Path::new(require(&args, "--graph")?))?;
-            let fanout = optional(&args, "--fanout")
-                .unwrap_or("8")
-                .parse::<usize>()?;
-            let policy = Routing::parse(optional(&args, "--policy").unwrap_or("directed"), fanout)?;
-            let hops = optional(&args, "--hops").unwrap_or("2").parse::<u8>()?;
-            let top = optional(&args, "--top").unwrap_or("20").parse::<usize>()?;
-            let budget = optional(&args, "--budget")
-                .unwrap_or("100000")
-                .parse::<u64>()?;
-            let cues = require(&args, "--cues")?
-                .split(',')
-                .map(str::parse::<u64>)
-                .collect::<Result<Vec<_>, _>>()?;
-            let min_cues = optional(&args, "--min-cues")
-                .unwrap_or("1")
-                .parse::<usize>()?;
-            let regions = match optional(&args, "--regions") {
-                Some(path) => Some(RegionLabels::from_reader(
-                    &graph,
-                    BufReader::new(File::open(path)?),
-                )?),
-                None => None,
-            };
-            let explorer = CircuitExplorer::new(&graph, policy, 1)?;
-            let report = explorer.recall(&cues, hops, min_cues, top, budget, regions.as_ref())?;
-            println!(
-                "recall_policy={policy:?} cues={} hops={hops} min_cues={min_cues} edges_examined={} source_expansions={} returned={} anatomical_edges_preserved=true model=topological_not_learned",
-                cues.len(),
-                report.edges_examined,
-                report.source_expansions,
-                report.hits.len()
-            );
-            for hit in report.hits {
-                println!(
-                    "recall_id={} region={} supporting_cues={} score={} nearest_hops={} evidence={:?}",
-                    hit.neuron_id,
-                    hit.region,
-                    hit.distinct_cues,
-                    hit.score,
-                    hit.nearest_hops,
-                    hit.evidence,
-                );
-            }
-        }
         Some("explore-circuits") => {
             let graph = Connectome::load(Path::new(require(&args, "--graph")?))?;
             let fanout = optional(&args, "--fanout")
