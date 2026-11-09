@@ -49,6 +49,35 @@ fn main() -> Result<(), Box<dyn Error>> {
             writer.flush()?;
             println!("atlas_saved={output_path} ticks={}", atlas.ticks());
         }
+        Some("compare") => {
+            let graph = Connectome::load(Path::new(arg(&args, "--graph")?))?;
+            let before = ActivityAtlas::read(
+                &graph,
+                BufReader::new(File::open(arg(&args, "--before")?)?),
+            )?;
+            let after = ActivityAtlas::read(
+                &graph,
+                BufReader::new(File::open(arg(&args, "--after")?)?),
+            )?;
+            let limit = optional(&args, "--top").unwrap_or("20").parse::<usize>()?;
+            if limit > 10_000 {
+                return Err("top limit 10000".into());
+            }
+            let changed = before.compare_activation(&after, &graph, limit)?;
+            println!(
+                "comparison_ticks={} changed_sample={} before={} after={}",
+                before.ticks(),
+                changed.len(),
+                arg(&args, "--before")?,
+                arg(&args, "--after")?
+            );
+            for item in changed {
+                println!(
+                    "neuron_id={} before_ticks={} after_ticks={} delta_ticks={}",
+                    item.neuron_id, item.before_ticks, item.after_ticks, item.delta_ticks
+                );
+            }
+        }
         Some("inspect") => {
             let graph = Connectome::load(Path::new(arg(&args, "--graph")?))?;
             let file = BufReader::new(File::open(arg(&args, "--atlas")?)?);
@@ -81,6 +110,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         _ => {
             eprintln!("Usage: v888-activity record --graph brain.v888b --seed ID[,ID] --output history.v888atl [--threshold 1] [--steps 3]");
             eprintln!("       v888-activity inspect --graph brain.v888b --atlas history.v888atl [--top 20] [--neuron ID]");
+            eprintln!("       v888-activity compare --graph brain.v888b --before baseline.v888atl --after trained.v888atl [--top 20]");
             return Err("unknown subcommand".into());
         }
     }
