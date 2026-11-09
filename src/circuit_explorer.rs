@@ -402,7 +402,7 @@ impl<'a> CircuitExplorer<'a> {
                         }
                     }
                 }
-                 for (&target, &strength) in &next {
+                for (&target, &strength) in &next {
                     let entry = best_for_cue.entry(target).or_insert((strength, hop));
                     if strength > entry.0 || (strength == entry.0 && hop < entry.1) {
                         *entry = (strength, hop);
