@@ -1,3 +1,4 @@
+pub mod circuit_explorer;
 pub mod connectome;
 pub mod engine;
 pub mod full_synapse;
