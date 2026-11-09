@@ -7,6 +7,7 @@ use v888_booleen::connectome::Connectome;
 use v888_booleen::engine::BooleanEngine;
 use v888_booleen::full_synapse::{pack_records, FullSynapseReader};
 use v888_booleen::learning_bench::benchmark;
+use v888_booleen::learning_strategies::compare_strategies;
 use v888_booleen::plasticity::PlasticCircuit;
 use v888_booleen::source_holdout::benchmark_disjoint_sources;
 use v888_booleen::synapse_pairs::{pack, propagate_one_step, SynapsePairsReader};
@@ -95,6 +96,7 @@ fn help() {
     println!("  run-synapses --graph brain.v888b --pairs synapses.v888syn --seed ID[,ID] [--threshold 3] [--steps 2]");
     println!("  bench-learning --graph brain.v888b  (supervised retention only)");
     println!("  bench-holdout --graph brain.v888b (unseen-source generalization control)");
+    println!("  bench-strategies [--graph brain.v888b] [--seed 1] [--rounds 8]  (equal-budget strategy comparison)");
     println!("  train-plasticity --graph brain.v888b --episodes labeled.csv --output weights.v888pls [--epochs 1]");
     println!("  score-plasticity --graph brain.v888b --weights weights.v888pls --episodes labeled.csv [--threshold 1]");
     println!("  run-plasticity --graph brain.v888b --weights weights.v888pls --seed ID[,ID] [--threshold 1]");
@@ -340,6 +342,67 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("plastic_weight_bytes={}", r.learned_weight_bytes);
             println!("train_elapsed_us={} eval_frozen_zero_us={} eval_frozen_topology_us={} eval_learned_us={}", r.train_elapsed.as_micros(), r.frozen_zero_eval_elapsed.as_micros(), r.frozen_topology_eval_elapsed.as_micros(), r.learned_eval_elapsed.as_micros());
             println!("evaluation_scope=seen_pattern_retention_not_generalization_or_biology");
+        }
+        Some("bench-strategies") => {
+            let seed = optional(&args, "--seed").unwrap_or("1").parse::<u64>()?;
+            let rounds = optional(&args, "--rounds").unwrap_or("8").parse::<u32>()?;
+            let graph_path = optional(&args, "--graph");
+            let owned = match graph_path {
+                Some(path) => Some(Connectome::load(Path::new(path))?),
+                None => None,
+            };
+            let outcomes = compare_strategies(owned.as_ref(), seed, rounds)?;
+            println!("v888_strategy_report_schema=b888-4-v1");
+            println!(
+                "graph={} seed={} rounds={} strategies={}",
+                if graph_path.is_some() {
+                    "provided"
+                } else {
+                    "synthetic-comparison"
+                },
+                seed,
+                rounds,
+                outcomes.len()
+            );
+            for r in &outcomes {
+                println!(
+                    "strategy={} train_pos={} train_neg={} holdout_pos={} holdout_neg={} target={}",
+                    r.strategy.as_label(),
+                    r.train_pos_id,
+                    r.train_neg_id,
+                    r.holdout_pos_id,
+                    r.holdout_neg_id,
+                    r.target_id
+                );
+                println!(
+                    "strategy={} seen_before={}/{} seen_after={}/{} unseen_after={}/{} seen_after_reversal={}/{} reversal_task={}/{}",
+                    r.strategy.as_label(),
+                    r.seen_correct_before,
+                    r.seen_total,
+                    r.seen_correct_after,
+                    r.seen_total,
+                    r.unseen_correct_after,
+                    r.unseen_total,
+                    r.seen_correct_after_reversal,
+                    r.seen_total,
+                    r.reversal_task_correct,
+                    r.seen_total
+                );
+                println!(
+                    "strategy={} train_episodes={} reversal_episodes={} edges_visited={} weights_changed={} weight_bytes={} unpacked_weight_bytes={} train_us={} eval_us={} topology_unchanged={}",
+                    r.strategy.as_label(),
+                    r.train_episodes,
+                    r.reversal_episodes,
+                    r.edges_visited,
+                    r.weights_changed,
+                    r.weight_bytes,
+                    r.unpacked_weight_bytes,
+                    r.train_elapsed.as_micros(),
+                    r.eval_elapsed.as_micros(),
+                    r.topology_unchanged
+                );
+            }
+            println!("evaluation_scope=artificial_labels_equal_budget_retention_reversal_and_holdout_not_biology");
         }
         Some("demo") => {
             let graph = Connectome {
