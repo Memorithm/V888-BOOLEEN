@@ -287,7 +287,7 @@ impl ActivityAtlas {
             return Err(bad("trailing activity archive bytes"));
         }
         let mut iter = arrays.into_iter();
-        let mut atlas = Self {
+        let atlas = Self {
             graph_hash: hash,
             ticks,
             active_ticks: iter.next().ok_or_else(|| bad("missing activity array"))?,
