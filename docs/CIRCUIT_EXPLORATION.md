@@ -39,3 +39,13 @@ Remplacer `123456` par un ID effectivement présent dans le graphe, sans en inve
 Comparer sur le **même SHA de connectome, les mêmes graines et le même budget CPU** les trois politiques : taux d'activation, couverture de régions annotées, stabilité au fil des cycles, temps de préparation, temps par cycle, mémoire additionnelle et nombre d'arêtes réellement lues. Confronter les résultats aux mesures de récupération associative et de plasticité livrées séparément. Aucune métrique physique n'est prétendue avant mesure par RemoteOps sur Dell/Thor.
 
 Cette tranche B888-3 est indépendante du chantier de plasticité B888-4 attribué à Grok.
+
+## Rappel associatif multi-indices (structurel, non appris)
+
+Le module `CircuitExplorer::recall` et la commande `recall-circuits` exploitent plusieurs indices neuronaux distincts, sur au plus trois sauts. Pour chaque indice, le score d'un chemin est son minimum de contacts ; pour une cible, le chemin le plus fort de cet indice est conservé. Une cible peut être classée selon le nombre d'indices distincts qui l'atteignent, puis la somme des forces de chemins. Le rapport inclut les preuves individuelles `cue_id`, `strongest_path` et `hops`, ainsi que le nombre d'arêtes examinées.
+
+```bash
+cargo run --release -- recall-circuits --graph data/processed/brain.v888b --cues 123456,789012 --policy strongest-k --fanout 8 --hops 2 --min-cues 2 --top-k 10 --edge-budget 100000 --regions zones.csv
+```
+
+Les identifiants sont **des espaces réservés** à remplacer par des IDs réellement présents dans le graphe. La commande échoue explicitement si la limite globale d'arêtes est dépassée, si les indices sont inconnus ou dupliqués, ou si le front dépasse 100 000 cibles. `--min-cues 2` exige au moins deux indices distincts et ne fonctionne donc pas avec un seul indice (utiliser `--min-cues 1` dans ce cas). Le résultat est une **association structurelle déterministe**, pas une mémoire apprise ni une probabilité. Aucun score de qualité ni gain de performance n'est revendiqué sans comparaison sur un graphe et des objectifs préenregistrés.
