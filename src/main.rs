@@ -3,10 +3,13 @@ use std::fs::File;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader};
 use std::path::Path;
+use v888_booleen::circuit_explorer::{ActivityReport, CircuitExplorer, RegionLabels, Routing};
 use v888_booleen::connectome::Connectome;
+use v888_booleen::consolidation::sweep as consolidation_sweep;
 use v888_booleen::engine::BooleanEngine;
 use v888_booleen::full_synapse::{pack_records, FullSynapseReader};
 use v888_booleen::learning_bench::benchmark;
+use v888_booleen::learning_strategies::compare_strategies;
 use v888_booleen::plasticity::PlasticCircuit;
 use v888_booleen::source_holdout::benchmark_disjoint_sources;
 use v888_booleen::synapse_pairs::{pack, propagate_one_step, SynapsePairsReader};
@@ -76,6 +79,20 @@ fn run_one_episode(
     Ok(output.get(record.1).map_err(|_| "invalid target index")?)
 }
 
+fn print_circuit_report(step: u32, report: &ActivityReport) {
+    println!(
+        "circuit_step={step} active={} newly_active={} silenced={} active_sources={} routed_edges={} contact_mass={} regions={:?} sample_ids={:?}",
+        report.active_neurons,
+        report.newly_active,
+        report.silenced,
+        report.active_sources_visited,
+        report.routed_edges,
+        report.contact_mass,
+        report.active_by_region,
+        report.sampled_neuron_ids
+    );
+}
+
 fn help() {
     println!("V888 BOOLEEN experimental Boolean connectome (no biological data bundled)");
     println!("  build --edges edges.csv [--neurons ids.txt] --output brain.v888b");
@@ -83,6 +100,9 @@ fn help() {
     println!("  export --graph brain.v888b --output rows.csv");
     println!("  run --graph brain.v888b --seed ID[,ID] [--threshold 1] [--steps 3]");
     println!("  demo");
+    println!("  recall-circuits --graph brain.v888b --cues ID[,ID] [--policy directed|strongest-k|symmetric-hypothesis] [--hops 2] [--min-cues 1] [--top 20] [--budget 100000] [--regions labels.csv]");
+    println!("  explore-circuits --graph brain.v888b --seed ID[,ID] [--policy directed|strongest-k|symmetric-hypothesis] [--fanout 8] [--regions labels.csv] [--threshold 1] [--steps 3]");
+    println!("  recall-circuits --graph brain.v888b --cues ID[,ID] [--policy directed|strongest-k|symmetric-hypothesis] [--fanout 8] [--hops 2] [--min-cues 2] [--top-k 10] [--edge-budget 100000] [--regions labels.csv]");
     println!("  pack-synapses --expected-rows N --output synapses.v888syn < records.bin");
     println!("  synapse-info --pairs synapses.v888syn");
     println!("  pack-all --expected-rows N --output all.v888all < all30-fields.bin");
@@ -95,6 +115,8 @@ fn help() {
     println!("  run-synapses --graph brain.v888b --pairs synapses.v888syn --seed ID[,ID] [--threshold 3] [--steps 2]");
     println!("  bench-learning --graph brain.v888b  (supervised retention only)");
     println!("  bench-holdout --graph brain.v888b (unseen-source generalization control)");
+    println!("  bench-strategies [--graph brain.v888b] [--seed 1] [--rounds 8]  (equal-budget strategy comparison)");
+    println!("  bench-consolidation [--graph brain.v888b] [--seed 1] [--rounds-a 8] [--rounds-b 8] [--periods 2,4,8,1000]  (learn A then B, retention of A)");
     println!("  train-plasticity --graph brain.v888b --episodes labeled.csv --output weights.v888pls [--epochs 1]");
     println!("  score-plasticity --graph brain.v888b --weights weights.v888pls --episodes labeled.csv [--threshold 1]");
     println!("  run-plasticity --graph brain.v888b --weights weights.v888pls --seed ID[,ID] [--threshold 1]");
@@ -125,6 +147,118 @@ fn main() -> Result<(), Box<dyn Error>> {
         Some("export") => {
             Connectome::load(Path::new(require(&args, "--graph")?))?
                 .export_csv(Path::new(require(&args, "--output")?))?;
+        }
+        Some("recall-circuits") => {
+            // Explicitly reject unknown flags; they must never silently
+            // increase a recall budget or alter the requested hit count.
+            let allowed = [
+                "--graph",
+                "--cues",
+                "--policy",
+                "--fanout",
+                "--hops",
+                "--min-cues",
+                "--top",
+                "--top-k",
+                "--budget",
+                "--edge-budget",
+                "--regions",
+            ];
+            for flag in args.iter().skip(1).filter(|arg| arg.starts_with("--")) {
+                if !allowed.contains(&flag.as_str()) {
+                    return Err(format!("unknown recall-circuits option: {flag}").into());
+                }
+            }
+            if (optional(&args, "--top").is_some() && optional(&args, "--top-k").is_some())
+                || (optional(&args, "--budget").is_some()
+                    && optional(&args, "--edge-budget").is_some())
+            {
+                return Err("ambiguous recall aliases provided together".into());
+            }
+            let graph = Connectome::load(Path::new(require(&args, "--graph")?))?;
+            let fanout = optional(&args, "--fanout")
+                .unwrap_or("8")
+                .parse::<usize>()?;
+            let policy = Routing::parse(optional(&args, "--policy").unwrap_or("directed"), fanout)?;
+            let hops = optional(&args, "--hops").unwrap_or("2").parse::<u8>()?;
+            let min_cues = optional(&args, "--min-cues")
+                .unwrap_or("2")
+                .parse::<usize>()?;
+            let top_k = optional(&args, "--top-k")
+                .or_else(|| optional(&args, "--top"))
+                .unwrap_or("10")
+                .parse::<usize>()?;
+            let edge_budget = optional(&args, "--edge-budget")
+                .or_else(|| optional(&args, "--budget"))
+                .unwrap_or("100000")
+                .parse::<u64>()?;
+            let cues: Vec<u64> = require(&args, "--cues")?
+                .split(',')
+                .map(str::parse::<u64>)
+                .collect::<Result<_, _>>()?;
+            let regions = match optional(&args, "--regions") {
+                Some(path) => Some(RegionLabels::from_reader(
+                    &graph,
+                    BufReader::new(File::open(path)?),
+                )?),
+                None => None,
+            };
+            let explorer = CircuitExplorer::new(&graph, policy, 1)?;
+            let report =
+                explorer.recall(&cues, hops, min_cues, top_k, edge_budget, regions.as_ref())?;
+            println!(
+                "recall_scope=structural_not_learned routing={policy:?} cues={} hops={} edges_examined={} source_expansions={} hits={}",
+                cues.len(),
+                hops,
+                report.edges_examined,
+                report.source_expansions,
+                report.hits.len(),
+            );
+            for (rank, hit) in report.hits.iter().enumerate() {
+                println!(
+                    "recall_rank={} neuron_id={} region={} distinct_cues={} score={} nearest_hops={} evidence={:?}",
+                    rank + 1,
+                    hit.neuron_id,
+                    hit.region,
+                    hit.distinct_cues,
+                    hit.score,
+                    hit.nearest_hops,
+                    hit.evidence,
+                );
+            }
+        }
+        Some("explore-circuits") => {
+            let graph = Connectome::load(Path::new(require(&args, "--graph")?))?;
+            let fanout = optional(&args, "--fanout")
+                .unwrap_or("8")
+                .parse::<usize>()?;
+            let policy = Routing::parse(optional(&args, "--policy").unwrap_or("directed"), fanout)?;
+            let threshold = optional(&args, "--threshold")
+                .unwrap_or("1")
+                .parse::<u128>()?;
+            let steps = optional(&args, "--steps").unwrap_or("3").parse::<u32>()?;
+            if steps > 100 {
+                return Err("exploration limited to 100 synchronous steps".into());
+            }
+            let regions = match optional(&args, "--regions") {
+                Some(path) => Some(RegionLabels::from_reader(
+                    &graph,
+                    BufReader::new(File::open(path)?),
+                )?),
+                None => None,
+            };
+            let mut explorer = CircuitExplorer::new(&graph, policy, threshold)?;
+            for id in require(&args, "--seed")?.split(',') {
+                explorer.stimulate(id.parse::<u64>()?)?;
+            }
+            println!(
+                "routing={policy:?} experimental_dynamics=true region_labels={} source_topology_unchanged=true",
+                if regions.is_some() { "provided" } else { "UNMAPPED" }
+            );
+            print_circuit_report(0, &explorer.snapshot(regions.as_ref())?);
+            for step in 1..=steps {
+                print_circuit_report(step, &explorer.step(regions.as_ref())?);
+            }
         }
         Some("run") => {
             let graph = Connectome::load(Path::new(require(&args, "--graph")?))?;
@@ -340,6 +474,118 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("plastic_weight_bytes={}", r.learned_weight_bytes);
             println!("train_elapsed_us={} eval_frozen_zero_us={} eval_frozen_topology_us={} eval_learned_us={}", r.train_elapsed.as_micros(), r.frozen_zero_eval_elapsed.as_micros(), r.frozen_topology_eval_elapsed.as_micros(), r.learned_eval_elapsed.as_micros());
             println!("evaluation_scope=seen_pattern_retention_not_generalization_or_biology");
+        }
+        Some("bench-consolidation") => {
+            let seed = optional(&args, "--seed").unwrap_or("1").parse::<u64>()?;
+            let rounds_a = optional(&args, "--rounds-a")
+                .unwrap_or("8")
+                .parse::<u32>()?;
+            let rounds_b = optional(&args, "--rounds-b")
+                .unwrap_or("8")
+                .parse::<u32>()?;
+            let periods = optional(&args, "--periods")
+                .unwrap_or("2,4,8,1000")
+                .split(',')
+                .map(str::parse::<u32>)
+                .collect::<Result<Vec<_>, _>>()?;
+            let owned = match optional(&args, "--graph") {
+                Some(path) => Some(Connectome::load(Path::new(path))?),
+                None => None,
+            };
+            let outcomes = consolidation_sweep(owned.as_ref(), seed, rounds_a, rounds_b, &periods)?;
+            println!("v888_consolidation_report_schema=b888-4-consolidation-v1");
+            println!(
+                "graph={} seed={seed} rounds_a={rounds_a} rounds_b={rounds_b}",
+                if owned.is_some() {
+                    "provided"
+                } else {
+                    "synthetic-comparison"
+                }
+            );
+            for r in &outcomes {
+                println!(
+                    "protect_period={} a_after_a={}/{} a_after_b={}/{} b_after_b={}/{} protected_edges={}",
+                    r.config.protect_period, r.a_correct_after_a, r.presentations,
+                    r.a_correct_after_b, r.presentations, r.b_correct_after_b, r.presentations,
+                    r.protected_edges
+                );
+                println!(
+                    "protect_period={} a_visited={} a_changed={} b_visited={} b_changed={} b_blocked={} b_effective_rate={} observed_activations={}",
+                    r.config.protect_period, r.phase_a.edges_visited, r.phase_a.weights_changed,
+                    r.phase_b.edges_visited, r.phase_b.weights_changed, r.phase_b.blocked,
+                    r.recovery_rate_b().map_or("n/a".to_string(), |v| format!("{v:.4}")),
+                    r.observed_activations
+                );
+                println!(
+                    "protect_period={} weight_bytes={} overhead_bytes={} elapsed_us={} topology_unchanged={}",
+                    r.config.protect_period, r.weight_bytes, r.overhead_bytes,
+                    r.elapsed.as_micros(), r.topology_unchanged
+                );
+            }
+            println!(
+                "evaluation_scope=artificial_labels_overlapping_sources_not_biological_memory"
+            );
+        }
+        Some("bench-strategies") => {
+            let seed = optional(&args, "--seed").unwrap_or("1").parse::<u64>()?;
+            let rounds = optional(&args, "--rounds").unwrap_or("8").parse::<u32>()?;
+            let graph_path = optional(&args, "--graph");
+            let owned = match graph_path {
+                Some(path) => Some(Connectome::load(Path::new(path))?),
+                None => None,
+            };
+            let outcomes = compare_strategies(owned.as_ref(), seed, rounds)?;
+            println!("v888_strategy_report_schema=b888-4-v1");
+            println!(
+                "graph={} seed={} rounds={} strategies={}",
+                if graph_path.is_some() {
+                    "provided"
+                } else {
+                    "synthetic-comparison"
+                },
+                seed,
+                rounds,
+                outcomes.len()
+            );
+            for r in &outcomes {
+                println!(
+                    "strategy={} train_pos={} train_neg={} holdout_pos={} holdout_neg={} target={}",
+                    r.strategy.as_label(),
+                    r.train_pos_id,
+                    r.train_neg_id,
+                    r.holdout_pos_id,
+                    r.holdout_neg_id,
+                    r.target_id
+                );
+                println!(
+                    "strategy={} seen_before={}/{} seen_after={}/{} unseen_after={}/{} seen_after_reversal={}/{} reversal_task={}/{}",
+                    r.strategy.as_label(),
+                    r.seen_correct_before,
+                    r.seen_total,
+                    r.seen_correct_after,
+                    r.seen_total,
+                    r.unseen_correct_after,
+                    r.unseen_total,
+                    r.seen_correct_after_reversal,
+                    r.seen_total,
+                    r.reversal_task_correct,
+                    r.seen_total
+                );
+                println!(
+                    "strategy={} train_episodes={} reversal_episodes={} edges_visited={} weights_changed={} weight_bytes={} unpacked_weight_bytes={} train_us={} eval_us={} topology_unchanged={}",
+                    r.strategy.as_label(),
+                    r.train_episodes,
+                    r.reversal_episodes,
+                    r.edges_visited,
+                    r.weights_changed,
+                    r.weight_bytes,
+                    r.unpacked_weight_bytes,
+                    r.train_elapsed.as_micros(),
+                    r.eval_elapsed.as_micros(),
+                    r.topology_unchanged
+                );
+            }
+            println!("evaluation_scope=artificial_labels_equal_budget_retention_reversal_and_holdout_not_biology");
         }
         Some("demo") => {
             let graph = Connectome {
