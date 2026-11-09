@@ -1,6 +1,6 @@
 //! Experimental activity-guided circuit selection on BANC V888.
- //! This constructs a *lossy, derived* induced subgraph, never an anatomical
- //! source replacement. Observed activation means simulated, not biological.
+//! This constructs a *lossy, derived* induced subgraph, never an anatomical
+//! source replacement. Observed activation means simulated, not biological.
 use crate::activity_atlas::ActivityAtlas;
 use crate::connectome::Connectome;
 use std::cmp::Reverse;
@@ -271,7 +271,7 @@ mod tests {
         assert_eq!(reduced.counts, vec![3, 0, 2]);
         assert_eq!(r.anchors, 1);
         assert_eq!(r.expanded_neurons, 2);
-        assert_eq!(r.inspected_edges, 7); // 3 expanded + 3 from selected 10 + 1 from 20
+        assert_eq!(r.inspected_edges, 8); // 3 expanded, then 3+1+1 projected
         assert_eq!(graph, before);
     }
 
