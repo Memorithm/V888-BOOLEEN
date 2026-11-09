@@ -7,7 +7,10 @@
 //! update attempts (`protect_period == 1` disables protection = control).
 //! Only original edges are ever touched; anatomy is never modified.
 use crate::connectome::Connectome;
-use crate::learning_strategies::{comparison_graph, shuffle_with_seed};
+use crate::learning_strategies::{
+    apply_labeled_episode_gated, comparison_graph, find_four_sources, shuffle_with_seed,
+    LearningStrategy,
+};
 use crate::plasticity::PlasticCircuit;
 use crate::BooleanState;
 use std::fs::{File, OpenOptions};
@@ -31,6 +34,49 @@ pub struct ConsolidationConfig {
     pub protect_period: u32,
     /// Minimum visits during A for an edge to be protected.
     pub min_visits: u32,
+    /// Update rule used for both A and B (same rule, same budget).
+    pub strategy: LearningStrategy,
+    /// Threshold variant: only edges whose 4-bit weight after A is at least
+    /// this value are protected (0 = every visited edge, the original rule).
+    pub min_weight: u8,
+    pub scenario: Scenario,
+}
+
+/// How task B relates to task A.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Scenario {
+    /// B reuses A's negative source as its positive one (labels conflict).
+    Conflict,
+    /// B uses two other sources of the same target (no label conflict):
+    /// protection should cost nothing here.
+    Disjoint,
+}
+
+impl Scenario {
+    #[must_use]
+    pub fn as_label(self) -> &'static str {
+        match self {
+            Self::Conflict => "conflict",
+            Self::Disjoint => "disjoint",
+        }
+    }
+}
+
+impl ConsolidationConfig {
+    /// Supervised, conflicting-task defaults (the PR #21 behavior).
+    #[must_use]
+    pub fn supervised(seed: u64, rounds_a: u32, rounds_b: u32, protect_period: u32) -> Self {
+        Self {
+            seed,
+            rounds_a,
+            rounds_b,
+            protect_period,
+            min_visits: 1,
+            strategy: LearningStrategy::Supervised,
+            min_weight: 0,
+            scenario: Scenario::Conflict,
+        }
+    }
 }
 
 impl ConsolidationConfig {
@@ -39,6 +85,7 @@ impl ConsolidationConfig {
             || self.rounds_b == 0
             || self.protect_period == 0
             || self.min_visits == 0
+            || self.min_weight > 15
         {
             return Err(bad("consolidation config values must be positive"));
         }
@@ -153,47 +200,59 @@ fn add(total: u64, inc: u64) -> io::Result<u64> {
         .ok_or_else(|| bad("counter overflow"))
 }
 
-/// One supervised episode: (source, target, fire).
+/// One episode: (source, target, fire).
 type Ep = (usize, usize, bool);
 
-/// `gate` = (period, min_visits), applied only during B.
+/// Per-phase gating: `None` during A (record visits), `Some` during B.
+struct Gate<'a> {
+    period: u32,
+    protected: &'a [bool],
+}
+
 fn episode(
     state: &mut ConsolidationState,
     graph: &Connectome,
+    strategy: LearningStrategy,
     ep: Ep,
-    phase_a: bool,
-    gate: (u32, u32),
+    gate: Option<&Gate>,
     stats: &mut PhaseStats,
 ) -> io::Result<()> {
-    let (source, target, fire) = ep;
-    for edge in graph.offsets[source]..graph.offsets[source + 1] {
-        let edge = edge as usize;
-        let reinforce = fire && graph.targets[edge] as usize == target;
-        if phase_a {
-            state.visits[edge] = state.visits[edge].saturating_add(1);
-        } else if gate.0 > 1 && state.visits[edge] >= gate.1 {
-            state.attempts[edge] = state.attempts[edge].saturating_add(1);
-            if state.attempts[edge] % gate.0 != 0 {
-                stats.blocked = add(stats.blocked, 1)?;
-                continue;
+    let ConsolidationState {
+        circuit,
+        visits,
+        attempts,
+    } = state;
+    let mut blocked = 0_u64;
+    let report =
+        apply_labeled_episode_gated(circuit, graph, strategy, ep, &mut |edge| match gate {
+            None => {
+                visits[edge] = visits[edge].saturating_add(1);
+                true
             }
-        }
-        stats.edges_visited = add(stats.edges_visited, 1)?;
-        if state.circuit.apply_edge_step(edge, reinforce)? {
-            stats.weights_changed = add(stats.weights_changed, 1)?;
-        }
-    }
+            Some(g) if g.period > 1 && g.protected[edge] => {
+                attempts[edge] = attempts[edge].saturating_add(1);
+                if attempts[edge] % g.period != 0 {
+                    blocked += 1;
+                    return false;
+                }
+                true
+            }
+            Some(_) => true,
+        })?;
+    stats.edges_visited = add(stats.edges_visited, report.edges_visited)?;
+    stats.weights_changed = add(stats.weights_changed, report.weights_changed)?;
+    stats.blocked = add(stats.blocked, blocked)?;
     Ok(())
 }
 
 fn run_phase(
     state: &mut ConsolidationState,
     graph: &Connectome,
+    strategy: LearningStrategy,
     task: Task,
     rounds: u32,
     seed: u64,
-    phase_a: bool,
-    gate: (u32, u32),
+    gate: Option<&Gate>,
 ) -> io::Result<PhaseStats> {
     let mut order: Vec<bool> = (0..u64::from(rounds) * 2).map(|i| i % 2 == 0).collect();
     shuffle_with_seed(&mut order, seed);
@@ -203,8 +262,8 @@ fn run_phase(
         episode(
             state,
             graph,
+            strategy,
             (source, task.target, positive),
-            phase_a,
             gate,
             &mut stats,
         )?;
@@ -283,21 +342,40 @@ impl ConsolidationOutcome {
     }
 }
 
-fn pick_tasks(graph: &Connectome) -> io::Result<(Task, Task)> {
-    let (a, b, c, target) = find_three_sources(graph)?;
-    // A: a fires target, b does not. B (conflicts on b): b fires, c does not.
-    Ok((
-        Task {
-            pos: a,
-            neg: b,
-            target,
-        },
-        Task {
-            pos: b,
-            neg: c,
-            target,
-        },
-    ))
+fn pick_tasks(graph: &Connectome, scenario: Scenario) -> io::Result<(Task, Task)> {
+    match scenario {
+        Scenario::Conflict => {
+            let (a, b, c, target) = find_three_sources(graph)?;
+            // A: a fires target, b does not. B (conflicts on b): b fires, c does not.
+            Ok((
+                Task {
+                    pos: a,
+                    neg: b,
+                    target,
+                },
+                Task {
+                    pos: b,
+                    neg: c,
+                    target,
+                },
+            ))
+        }
+        Scenario::Disjoint => {
+            let ([a, b, c, d], target) = find_four_sources(graph)?;
+            Ok((
+                Task {
+                    pos: a,
+                    neg: b,
+                    target,
+                },
+                Task {
+                    pos: c,
+                    neg: d,
+                    target,
+                },
+            ))
+        }
+    }
 }
 
 /// Phase A only: learn task A and record importance. Checkpointable.
@@ -307,16 +385,16 @@ pub fn learn_task_a(
 ) -> io::Result<(ConsolidationState, PhaseStats)> {
     cfg.validate()?;
     graph.validate()?;
-    let (task_a, _) = pick_tasks(graph)?;
+    let (task_a, _) = pick_tasks(graph, cfg.scenario)?;
     let mut state = ConsolidationState::new(graph)?;
     let stats = run_phase(
         &mut state,
         graph,
+        cfg.strategy,
         task_a,
         cfg.rounds_a,
         cfg.seed,
-        true,
-        (1, 1),
+        None,
     )?;
     Ok((state, stats))
 }
@@ -329,27 +407,32 @@ pub fn learn_task_b_and_evaluate(
     phase_a: PhaseStats,
 ) -> io::Result<ConsolidationOutcome> {
     cfg.validate()?;
-    let (task_a, task_b) = pick_tasks(graph)?;
+    let (task_a, task_b) = pick_tasks(graph, cfg.scenario)?;
     let start = Instant::now();
     let fingerprint = state.circuit.topology_fingerprint();
     let (a_after_a, presentations, act1) = score(&state.circuit, graph, task_a)?;
-    let protected_edges = if cfg.protect_period > 1 {
+    let protected: Vec<bool> = if cfg.protect_period > 1 {
         state
             .visits
             .iter()
-            .filter(|&&v| v >= cfg.min_visits)
-            .count() as u64
+            .zip(state.circuit.weights())
+            .map(|(&v, &w)| v >= cfg.min_visits && w >= cfg.min_weight)
+            .collect()
     } else {
-        0
+        vec![false; state.visits.len()]
     };
+    let protected_edges = protected.iter().filter(|&&p| p).count() as u64;
     let phase_b = run_phase(
         &mut state,
         graph,
+        cfg.strategy,
         task_b,
         cfg.rounds_b,
         cfg.seed ^ 0xB,
-        false,
-        (cfg.protect_period, cfg.min_visits),
+        Some(&Gate {
+            period: cfg.protect_period,
+            protected: &protected,
+        }),
     )?;
     let (a_after_b, _, act2) = score(&state.circuit, graph, task_a)?;
     let (b_after_b, _, act3) = score(&state.circuit, graph, task_b)?;
@@ -404,16 +487,93 @@ pub fn sweep(
     let mut list = vec![1_u32];
     list.extend(periods.iter().copied().filter(|&p| p != 1));
     for period in list {
-        let cfg = ConsolidationConfig {
-            seed,
-            rounds_a,
-            rounds_b,
-            protect_period: period,
-            min_visits: 1,
-        };
+        let cfg = ConsolidationConfig::supervised(seed, rounds_a, rounds_b, period);
         all.push(run_experiment(graph, &cfg)?);
     }
     Ok(all)
+}
+
+/// One protection variant: `(period, min_weight)`; period 1 = control.
+pub type Variant = (u32, u8);
+
+pub const ALL_STRATEGIES: [LearningStrategy; 3] = [
+    LearningStrategy::Supervised,
+    LearningStrategy::AssociativeCoactivation,
+    LearningStrategy::RewardModulated,
+];
+
+/// Full harness matrix: scenario x strategy x variant x seed, equal budgets
+/// (same rounds_a / rounds_b for every row). Each (scenario, strategy, seed)
+/// starts with the unprotected control so rows are directly comparable.
+pub fn matrix(
+    graph: Option<&Connectome>,
+    seeds: &[u64],
+    rounds_a: u32,
+    rounds_b: u32,
+    variants: &[Variant],
+    strategies: &[LearningStrategy],
+    scenarios: &[Scenario],
+) -> io::Result<Vec<ConsolidationOutcome>> {
+    let synthetic;
+    let graph = match graph {
+        Some(g) => g,
+        None => {
+            synthetic = comparison_graph();
+            &synthetic
+        }
+    };
+    let mut list: Vec<Variant> = vec![(1, 0)];
+    list.extend(variants.iter().copied().filter(|v| v.0 != 1));
+    let mut all = Vec::new();
+    for &scenario in scenarios {
+        for &strategy in strategies {
+            for &seed in seeds {
+                for &(period, min_weight) in &list {
+                    let mut cfg = ConsolidationConfig::supervised(seed, rounds_a, rounds_b, period);
+                    cfg.strategy = strategy;
+                    cfg.scenario = scenario;
+                    cfg.min_weight = min_weight;
+                    all.push(run_experiment(graph, &cfg)?);
+                }
+            }
+        }
+    }
+    Ok(all)
+}
+
+pub const CSV_HEADER: &str = "scenario,strategy,seed,protect_period,min_weight,protected_edges,a_after_a,a_after_b,b_after_b,presentations,a_visited,a_changed,b_visited,b_changed,b_blocked,weight_bytes,overhead_bytes,topology_unchanged,elapsed_us";
+
+/// Stable CSV export; `elapsed_us` is the only non-deterministic column.
+#[must_use]
+pub fn to_csv(rows: &[ConsolidationOutcome]) -> String {
+    let mut out = String::from(CSV_HEADER);
+    out.push('\n');
+    for r in rows {
+        let c = &r.config;
+        out.push_str(&format!(
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            c.scenario.as_label(),
+            c.strategy.as_label(),
+            c.seed,
+            c.protect_period,
+            c.min_weight,
+            r.protected_edges,
+            r.a_correct_after_a,
+            r.a_correct_after_b,
+            r.b_correct_after_b,
+            r.presentations,
+            r.phase_a.edges_visited,
+            r.phase_a.weights_changed,
+            r.phase_b.edges_visited,
+            r.phase_b.weights_changed,
+            r.phase_b.blocked,
+            r.weight_bytes,
+            r.overhead_bytes,
+            r.topology_unchanged,
+            r.elapsed.as_micros()
+        ));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -421,13 +581,7 @@ mod tests {
     use super::*;
 
     fn cfg(period: u32, rounds_b: u32) -> ConsolidationConfig {
-        ConsolidationConfig {
-            seed: 3,
-            rounds_a: 8,
-            rounds_b,
-            protect_period: period,
-            min_visits: 1,
-        }
+        ConsolidationConfig::supervised(3, 8, rounds_b, period)
     }
 
     #[test]
@@ -516,5 +670,94 @@ mod tests {
         assert_eq!(r.len(), 3);
         assert_eq!(r[0].config.protect_period, 1);
         assert_eq!(r[0].protected_edges, 0);
+    }
+
+    fn run_matrix(variants: &[Variant], scenarios: &[Scenario]) -> Vec<ConsolidationOutcome> {
+        matrix(None, &[1, 2, 3], 8, 8, variants, &ALL_STRATEGIES, scenarios).unwrap()
+    }
+
+    #[test]
+    fn matrix_covers_every_strategy_with_equal_budget_and_control_first() {
+        let rows = run_matrix(&[(2, 0), (1000, 0)], &[Scenario::Conflict]);
+        assert_eq!(rows.len(), 3 * 3 * 3);
+        assert!(rows
+            .iter()
+            .all(|r| r.config.rounds_a == 8 && r.config.rounds_b == 8 && r.topology_unchanged));
+        assert_eq!(rows[0].config.protect_period, 1);
+        for strat in ALL_STRATEGIES {
+            assert!(rows.iter().any(|r| r.config.strategy == strat));
+        }
+    }
+
+    #[test]
+    fn every_strategy_forgets_in_control_and_freeze_trades_off_b() {
+        let rows = run_matrix(&[(1000, 0)], &[Scenario::Conflict]);
+        for r in &rows {
+            if r.config.protect_period == 1 {
+                assert_eq!(r.a_correct_after_a, 2, "{:?}", r.config.strategy);
+                assert_eq!(r.a_correct_after_b, 1, "{:?}", r.config.strategy);
+            } else {
+                assert_eq!(r.a_correct_after_b, 2, "{:?}", r.config.strategy);
+                assert_eq!(r.b_correct_after_b, 1, "{:?}", r.config.strategy);
+            }
+        }
+    }
+
+    #[test]
+    fn disjoint_tasks_do_not_interfere_even_with_freeze() {
+        let rows = run_matrix(&[(2, 0), (1000, 0)], &[Scenario::Disjoint]);
+        for r in &rows {
+            assert_eq!(r.a_correct_after_b, 2, "{:?}", r.config);
+            assert_eq!(r.b_correct_after_b, 2, "{:?}", r.config);
+        }
+    }
+
+    #[test]
+    fn threshold_variant_protects_only_strong_edges_and_is_deterministic() {
+        let g = comparison_graph();
+        let mut lo = ConsolidationConfig::supervised(1, 8, 8, 1000);
+        let all = run_experiment(&g, &lo).unwrap();
+        lo.min_weight = 15;
+        let strong = run_experiment(&g, &lo).unwrap();
+        assert!(strong.protected_edges <= all.protected_edges);
+        let again = run_experiment(&g, &lo).unwrap();
+        assert_eq!(strong.final_weights, again.final_weights);
+        lo.min_weight = 16;
+        assert!(run_experiment(&g, &lo).is_err());
+    }
+
+    #[test]
+    fn associative_and_reward_checkpoint_resume_bit_identical() {
+        let g = comparison_graph();
+        for strat in [
+            LearningStrategy::AssociativeCoactivation,
+            LearningStrategy::RewardModulated,
+        ] {
+            let mut c = cfg(2, 8);
+            c.strategy = strat;
+            let direct = run_experiment(&g, &c).unwrap();
+            let (state, stats) = learn_task_a(&g, &c).unwrap();
+            let path = std::env::temp_dir().join(format!(
+                "v888-con-{}-{}.ckpt",
+                strat.as_label(),
+                std::process::id()
+            ));
+            let _ = std::fs::remove_file(&path);
+            state.save(&path).unwrap();
+            let loaded = ConsolidationState::load(&path, &g).unwrap();
+            let resumed = learn_task_b_and_evaluate(&g, &c, loaded, stats).unwrap();
+            assert_eq!(resumed.final_weights, direct.final_weights);
+            std::fs::remove_file(&path).unwrap();
+        }
+    }
+
+    #[test]
+    fn csv_has_header_and_one_line_per_row() {
+        let rows = run_matrix(&[(2, 0)], &[Scenario::Conflict]);
+        let csv = to_csv(&rows);
+        assert_eq!(csv.lines().count(), rows.len() + 1);
+        assert!(csv.starts_with(CSV_HEADER));
+        let cols = CSV_HEADER.split(',').count();
+        assert!(csv.lines().all(|l| l.split(',').count() == cols));
     }
 }
