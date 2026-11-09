@@ -28,7 +28,9 @@ impl Routing {
             "directed" => Ok(Self::Directed),
             "strongest-k" if (1..=1024).contains(&fanout) => Ok(Self::StrongestK(fanout)),
             "symmetric-hypothesis" => Ok(Self::SymmetricHypothesis),
-            _ => Err(invalid("unknown routing policy or invalid strongest-k fanout")),
+            _ => Err(invalid(
+                "unknown routing policy or invalid strongest-k fanout",
+            )),
         }
     }
 }
@@ -46,7 +48,9 @@ impl RegionLabels {
         let mut labels = vec![String::from("UNMAPPED"); graph.ids.len()];
         let mut seen = vec![false; graph.ids.len()];
         let mut rows = source.lines();
-        let header = rows.next().ok_or_else(|| invalid("missing region CSV header"))??;
+        let header = rows
+            .next()
+            .ok_or_else(|| invalid("missing region CSV header"))??;
         if header.trim_end_matches('\r') != "neuron_id,region" {
             return Err(invalid("region CSV requires neuron_id,region header"));
         }
@@ -59,12 +63,18 @@ impl RegionLabels {
             if label.is_empty()
                 || label.len() > 64
                 || label.contains(',')
-                || !label.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+                || !label
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
             {
                 return Err(invalid("invalid region name"));
             }
-            let id = id.parse::<u64>().map_err(|_| invalid("invalid neuron ID"))?;
-            let index = graph.index(id).ok_or_else(|| invalid("unknown neuron ID in regions"))?;
+            let id = id
+                .parse::<u64>()
+                .map_err(|_| invalid("invalid neuron ID"))?;
+            let index = graph
+                .index(id)
+                .ok_or_else(|| invalid("unknown neuron ID in regions"))?;
             if seen[index] {
                 return Err(invalid("duplicate neuron ID in regions"));
             }
@@ -164,7 +174,10 @@ impl<'a> CircuitExplorer<'a> {
     }
 
     pub fn stimulate(&mut self, neuron_id: u64) -> io::Result<()> {
-        let index = self.graph.index(neuron_id).ok_or_else(|| invalid("unknown seed neuron"))?;
+        let index = self
+            .graph
+            .index(neuron_id)
+            .ok_or_else(|| invalid("unknown seed neuron"))?;
         self.active
             .set(index, true)
             .map_err(|_| invalid("invalid neuron index"))
@@ -220,8 +233,8 @@ impl<'a> CircuitExplorer<'a> {
                     transmit(self.graph.targets[edge] as usize, self.graph.counts[edge])?;
                 }
             } else {
-                for edge in self.graph.offsets[source] as usize
-                    ..self.graph.offsets[source + 1] as usize
+                for edge in
+                    self.graph.offsets[source] as usize..self.graph.offsets[source + 1] as usize
                 {
                     transmit(self.graph.targets[edge] as usize, self.graph.counts[edge])?;
                 }
@@ -474,7 +487,10 @@ mod tests {
         let regions = RegionLabels::from_reader(&g, csv).unwrap();
         let mut explorer = CircuitExplorer::new(&g, Routing::Directed, 1).unwrap();
         explorer.stimulate(10).unwrap();
-        assert_eq!(explorer.snapshot(Some(&regions)).unwrap().active_by_region["input"], 1);
+        assert_eq!(
+            explorer.snapshot(Some(&regions)).unwrap().active_by_region["input"],
+            1
+        );
         let first = explorer.step(Some(&regions)).unwrap();
         assert_eq!(first.active_by_region["relay"], 1);
         assert_eq!(first.active_by_region["UNMAPPED"], 1);
@@ -493,13 +509,14 @@ mod tests {
             targets: vec![2, 3, 2, 4, 4],
             counts: vec![2, 8, 5, 1, 3],
         };
-        let regions = RegionLabels::from_reader(
-            &g,
-            Cursor::new(b"neuron_id,region\n30,association\n"),
-        ).unwrap();
+        let regions =
+            RegionLabels::from_reader(&g, Cursor::new(b"neuron_id,region\n30,association\n"))
+                .unwrap();
         let directed = CircuitExplorer::new(&g, Routing::Directed, 1).unwrap();
         let before = directed.active.clone();
-        let one = directed.recall(&[10, 20], 1, 2, 10, 100, Some(&regions)).unwrap();
+        let one = directed
+            .recall(&[10, 20], 1, 2, 10, 100, Some(&regions))
+            .unwrap();
         assert_eq!(one.hits.len(), 1);
         assert_eq!(one.hits[0].neuron_id, 30);
         assert_eq!(one.hits[0].region, "association");
@@ -508,14 +525,21 @@ mod tests {
         assert_eq!(one.hits[0].evidence.len(), 2);
 
         let two = directed.recall(&[10, 20], 2, 2, 10, 100, None).unwrap();
-        assert_eq!(two.hits.iter().map(|h| h.neuron_id).collect::<Vec<_>>(), vec![30, 50]);
+        assert_eq!(
+            two.hits.iter().map(|h| h.neuron_id).collect::<Vec<_>>(),
+            vec![30, 50]
+        );
         assert_eq!(two.hits[1].score, 5);
         assert_eq!(two.hits[1].nearest_hops, 2);
         assert_eq!(before, directed.active);
         assert_eq!(g.ids, vec![10, 20, 30, 40, 50]);
 
         let strongest = CircuitExplorer::new(&g, Routing::StrongestK(1), 1).unwrap();
-        assert!(strongest.recall(&[10, 20], 1, 2, 10, 100, None).unwrap().hits.is_empty());
+        assert!(strongest
+            .recall(&[10, 20], 1, 2, 10, 100, None)
+            .unwrap()
+            .hits
+            .is_empty());
     }
 
     #[test]
@@ -532,14 +556,12 @@ mod tests {
     #[test]
     fn refuses_invalid_region_metadata_and_budget() {
         let g = graph();
-        assert!(RegionLabels::from_reader(
-            &g,
-            Cursor::new(b"neuron_id,region\n10,a\n10,b\n")
-        ).is_err());
-        assert!(RegionLabels::from_reader(
-            &g,
-            Cursor::new(b"neuron_id,region\n99,unknown\n")
-        ).is_err());
+        assert!(
+            RegionLabels::from_reader(&g, Cursor::new(b"neuron_id,region\n10,a\n10,b\n")).is_err()
+        );
+        assert!(
+            RegionLabels::from_reader(&g, Cursor::new(b"neuron_id,region\n99,unknown\n")).is_err()
+        );
         assert!(CircuitExplorer::new(&g, Routing::StrongestK(0), 1).is_err());
         assert!(CircuitExplorer::new(&g, Routing::Directed, 0).is_err());
     }
