@@ -98,6 +98,7 @@ fn help() {
     println!("  export --graph brain.v888b --output rows.csv");
     println!("  run --graph brain.v888b --seed ID[,ID] [--threshold 1] [--steps 3]");
     println!("  demo");
+    println!("  recall-circuits --graph brain.v888b --cues ID[,ID] [--policy directed|strongest-k|symmetric-hypothesis] [--hops 2] [--min-cues 2] [--top 20] [--budget 100000] [--regions labels.csv]");
     println!("  explore-circuits --graph brain.v888b --seed ID[,ID] [--policy directed|strongest-k|symmetric-hypothesis] [--fanout 8] [--regions labels.csv] [--threshold 1] [--steps 3]");
     println!("  recall-circuits --graph brain.v888b --cues ID[,ID] [--policy directed|strongest-k|symmetric-hypothesis] [--fanout 8] [--hops 2] [--min-cues 2] [--top-k 10] [--edge-budget 100000] [--regions labels.csv]");
     println!("  pack-synapses --expected-rows N --output synapses.v888syn < records.bin");
@@ -188,6 +189,62 @@ fn main() -> Result<(), Box<dyn Error>> {
                 println!(
                     "recall_rank={} neuron_id={} region={} distinct_cues={} score={} nearest_hops={} evidence={:?}",
                     rank + 1,
+                    hit.neuron_id,
+                    hit.region,
+                    hit.distinct_cues,
+                    hit.score,
+                    hit.nearest_hops,
+                    hit.evidence,
+                );
+            }
+        }
+        Some("recall-circuits") => {
+            let graph = Connectome::load(Path::new(require(&args, "--graph")?))?;
+            let fanout = optional(&args, "--fanout")
+                .unwrap_or("8")
+                .parse::<usize>()?;
+            let policy = Routing::parse(
+                optional(&args, "--policy").unwrap_or("directed"),
+                fanout,
+            )?;
+            let hops = optional(&args, "--hops").unwrap_or("2").parse::<u8>()?;
+            let top = optional(&args, "--top").unwrap_or("20").parse::<usize>()?;
+            let budget = optional(&args, "--budget")
+                .unwrap_or("100000")
+                .parse::<u64>()?;
+            let cues = require(&args, "--cues")?
+                .split(',')
+                .map(str::parse::<u64>)
+                .collect::<Result<Vec<_>, _>>()?;
+            let min_cues = optional(&args, "--min-cues")
+                .unwrap_or("1")
+                .parse::<usize>()?;
+            let regions = match optional(&args, "--regions") {
+                Some(path) => Some(RegionLabels::from_reader(
+                    &graph,
+                    BufReader::new(File::open(path)?),
+                )?),
+                None => None,
+            };
+            let explorer = CircuitExplorer::new(&graph, policy, 1)?;
+            let report = explorer.recall(
+                &cues,
+                hops,
+                min_cues,
+                top,
+                budget,
+                regions.as_ref(),
+            )?;
+            println!(
+                "recall_policy={policy:?} cues={} hops={hops} min_cues={min_cues} edges_examined={} source_expansions={} returned={} anatomical_edges_preserved=true model=topological_not_learned",
+                cues.len(),
+                report.edges_examined,
+                report.source_expansions,
+                report.hits.len()
+            );
+            for hit in report.hits {
+                println!(
+                    "recall_id={} region={} supporting_cues={} score={} nearest_hops={} evidence={:?}",
                     hit.neuron_id,
                     hit.region,
                     hit.distinct_cues,
