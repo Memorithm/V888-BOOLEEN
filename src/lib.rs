@@ -11,7 +11,9 @@ pub mod learning_strategies;
 pub mod nt_gates;
 pub mod plasticity;
 pub mod recurrent_csr;
+pub mod region_activation;
 pub mod source_holdout;
+pub mod subcircuit_recall;
 pub mod synapse_pairs;
 
 // Brique d'état booléen. Ne constitue pas une simulation du cerveau.
