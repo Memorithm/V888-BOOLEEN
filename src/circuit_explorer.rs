@@ -284,7 +284,7 @@ pub struct RecallReport {
     pub source_expansions: u64,
 }
 
-impl CircuitExplorer<'_> {
+impl<'a> CircuitExplorer<'a> {
     /// Deterministic associative recall on the selected virtual circuit.
     ///
     /// Each cue independently explores at most three hops. At each hop only
@@ -495,7 +495,7 @@ mod tests {
         };
         let regions = RegionLabels::from_reader(
             &g,
-            Cursor::new(b"neuron_id,region\\n30,association\\n"),
+            Cursor::new(b"neuron_id,region\n30,association\n"),
         ).unwrap();
         let directed = CircuitExplorer::new(&g, Routing::Directed, 1).unwrap();
         let before = directed.active.clone();
