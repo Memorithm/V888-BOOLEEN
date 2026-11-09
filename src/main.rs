@@ -8,6 +8,7 @@ use v888_booleen::consolidation::{
     matrix as consolidation_matrix, sweep as consolidation_sweep, to_csv as consolidation_csv,
     Scenario, ALL_STRATEGIES,
 };
+use v888_booleen::consolidation_scale as scale;
 use v888_booleen::engine::BooleanEngine;
 use v888_booleen::full_synapse::{pack_records, FullSynapseReader};
 use v888_booleen::learning_bench::benchmark;
@@ -103,6 +104,7 @@ fn help() {
     println!("  bench-strategies [--graph brain.v888b] [--seed 1] [--rounds 8]  (equal-budget strategy comparison)");
     println!("  bench-consolidation [--graph brain.v888b] [--seed 1] [--rounds-a 8] [--rounds-b 8] [--periods 2,4,8,1000]  (learn A then B, retention of A)");
     println!("  bench-consolidation-matrix [--graph brain.v888b] [--seeds 1,2,3] [--rounds-a 8] [--rounds-b 8] [--variants 2,4,1000:1] [--csv out.csv]  (3 strategies x conflict/disjoint x protection, CSV)");
+    println!("  bench-consolidation-scale [--seeds 1,2,..] [--sources 64] [--targets 24] [--fan-in 6] [--conflict-pcts 0,50,100] [--rounds-a 8] [--rounds-b 8] [--variants 2,8,1000,1000:1,1000:2] [--csv out.csv]  (GENERATED synthetic graph, many overlapping edges)");
     println!("  train-plasticity --graph brain.v888b --episodes labeled.csv --output weights.v888pls [--epochs 1]");
     println!("  score-plasticity --graph brain.v888b --weights weights.v888pls --episodes labeled.csv [--threshold 1]");
     println!("  run-plasticity --graph brain.v888b --weights weights.v888pls --seed ID[,ID] [--threshold 1]");
@@ -397,6 +399,76 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!(
                 "evaluation_scope=artificial_labels_overlapping_sources_not_biological_memory"
             );
+        }
+        Some("bench-consolidation-scale") => {
+            let list = |name: &str, default: &str| -> Result<Vec<u64>, Box<dyn Error>> {
+                Ok(optional(&args, name)
+                    .unwrap_or(default)
+                    .split(',')
+                    .map(str::parse::<u64>)
+                    .collect::<Result<Vec<_>, _>>()?)
+            };
+            let num = |name: &str, default: &str| -> Result<usize, Box<dyn Error>> {
+                Ok(optional(&args, name).unwrap_or(default).parse::<usize>()?)
+            };
+            let seeds = list("--seeds", "1,2,3,4,5,6,7,8,9,10")?;
+            let pcts: Vec<u32> = list("--conflict-pcts", "0,50,100")?
+                .into_iter()
+                .map(|v| v as u32)
+                .collect();
+            let base = scale::ScaleSpec {
+                sources: num("--sources", "64")?,
+                targets: num("--targets", "24")?,
+                fan_in: num("--fan-in", "6")?,
+                conflict_pct: 0,
+                rounds_a: num("--rounds-a", "8")? as u32,
+                rounds_b: num("--rounds-b", "8")? as u32,
+            };
+            let variants = optional(&args, "--variants")
+                .unwrap_or("2,8,1000,1000:1,1000:2")
+                .split(',')
+                .map(|v| {
+                    let (p, w) = v.split_once(':').unwrap_or((v, "0"));
+                    Ok::<_, Box<dyn std::error::Error>>((p.parse::<u32>()?, w.parse::<u8>()?))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let rows = scale::run_grid(&base, &pcts, &seeds, &ALL_STRATEGIES, &variants)?;
+            let csv = scale::to_csv(&rows);
+            if let Some(path) = optional(&args, "--csv") {
+                use std::io::Write;
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)?
+                    .write_all(csv.as_bytes())?;
+            }
+            println!("v888_consolidation_scale_schema=b888-4-consolidation-scale-v1");
+            println!(
+                "graph=GENERATED_SYNTHETIC sources={} targets={} fan_in={} seeds={}",
+                base.sources,
+                base.targets,
+                base.fan_in,
+                seeds.len()
+            );
+            println!("conflict_pct,strategy,period,min_weight,seeds,protected_edges_mean,a_after_a,a_after_b,b_after_b,d_a_after_b,d_b_after_b,useful");
+            for s in scale::summarize(&rows) {
+                println!(
+                    "{},{},{},{},{},{:.1},{:.3},{:.3},{:.3},{:+.3},{:+.3},{}",
+                    s.conflict_pct,
+                    s.strategy.as_label(),
+                    s.period,
+                    s.min_weight,
+                    s.seeds,
+                    s.protected_edges,
+                    s.a_after_a,
+                    s.a_after_b,
+                    s.b_after_b,
+                    s.d_a_after_b,
+                    s.d_b_after_b,
+                    scale::is_useful(&s)
+                );
+            }
+            println!("evaluation_scope=generated_synthetic_graph_artificial_labels_not_BANC_not_biological");
         }
         Some("bench-consolidation") => {
             let seed = optional(&args, "--seed").unwrap_or("1").parse::<u64>()?;

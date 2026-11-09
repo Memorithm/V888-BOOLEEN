@@ -62,3 +62,53 @@ column).
   learns B 2/2, so protection costs nothing without conflict.
 * Strategies differ only in bookkeeping (reward-modulated skips silent-target
   edges: 2 protected edges instead of 3). No strategy advantage is claimed.
+
+## Scale experiment on a GENERATED graph (`bench-consolidation-scale`)
+
+**Real-graph run: BLOCKED.** No BANC V888 graph (`.v888b`) exists in this
+repository or on the box; `docs/SOURCES.md` states that no raw data is shipped
+and acquisition (Harvard Dataverse DOI 10.7910/DVN/7WTH1N, BANC/FlyWire) needs a
+user-side download + `v888 build`. Nothing was downloaded. Once a `.v888b`
+exists the existing `bench-consolidation-matrix --graph` path accepts it. The
+numbers below are therefore **synthetic** (generated graph, artificial labels);
+BANC (Bates et al. 2026; BANC/FlyWire consortium) is credited for the real data
+only and none of it is used here.
+
+Protocol, fixed in `src/consolidation_scale.rs` before looking at results:
+64 sources, 24 targets, fan-in 6 (≈144 edges, contact counts 1..3, many sources
+projecting to several targets so episodes touch overlapping edges); task A per
+target `in[0]` fires / `in[1]` silent; task B conflicts (`in[1]` fires /
+`in[2]` silent) on 0 %, 50 % or 100 % of targets and otherwise uses `in[2]`/`in[3]`;
+8+8 rounds, seeds 1..10 (seed varies graph and episode order), equal budgets,
+three rules, unprotected control (period 1) run first for each seed. Success
+rule: mean A-after-B gain ≥ 0.10 over the same-seed control while mean B-after-B
+drops by < 0.10.
+
+Results (means over 10 seeds; fractions of 2×24 presentations; CSV in
+`results/consolidation-scale-v1.csv`):
+
+| conflict | variant | A after B (control→variant) | B after B | rule met |
+|---|---|---|---|---|
+| 50 % | period 8 | 0.490 → 0.596 (+0.106) | 0.854 (−0.048) | yes (marginal) |
+| 50 % | freeze, weight≥1 | 0.490 → 0.610 (+0.121) | 0.902 (±0) | yes |
+| 50 % | full freeze | 0.490 → 0.806 | 0.633 (−0.269) | no (B lost) |
+| 100 % | period 8 | 0.287 → 0.417 (+0.129) | 0.829 (−0.046) | yes |
+| 100 % | freeze, weight≥1 | 0.287 → 0.431 (+0.144) | 0.875 (±0) | yes |
+| 100 % | full freeze | 0.287 → 0.806 | 0.500 (−0.375) | no (B lost) |
+
+Paired per-seed gains for supervised period-8 / threshold-1 are positive in
+10/10 seeds (sd 0.04–0.07; min +0.02–0.04).
+
+Negatives and caveats:
+* Gains are modest (≈ +0.11…+0.14): A after B stays far below A after A (0.806);
+  only full freezing restores it, at the cost of B (as in the single-edge case).
+* Period 2 and the stronger threshold (weight≥2) do **not** meet the rule.
+* Reward-modulated learns A perfectly (1.0) and no gated variant helps except
+  full freeze (which loses B): the rule never meets the success criterion.
+* Associative-coactivation is numerically identical to supervised here: with
+  single-source episodes the two rules update the same edges. No strategy
+  advantage is claimed.
+* With 0 % conflict protection yields no rule-meeting gain (+0.03…+0.09 on A,
+  nothing useful), and weight-0 freezes cost B.
+* Synthetic, small (≈144 edges), artificial labels, 10 seeds, no confidence
+  interval beyond the per-seed spread above. Not evidence about BANC.

@@ -1,5 +1,6 @@
 pub mod connectome;
 pub mod consolidation;
+pub mod consolidation_scale;
 pub mod engine;
 pub mod full_synapse;
 pub mod gates;
