@@ -107,9 +107,9 @@ pub fn derive_circuit(
         .map(|activity| {
             graph
                 .index(activity.neuron_id)
-                .expect("atlas identifiers were validated against the graph")
+                .ok_or_else(|| invalid("atlas neuron absent from connectome"))
         })
-        .collect();
+        .collect::<io::Result<Vec<usize>>>()?;
     if anchors.is_empty() {
         return Err(invalid("no observed neurons meet the anchor threshold"));
     }
@@ -294,6 +294,26 @@ mod tests {
         assert_eq!(a.ids, vec![10, 20]);
         assert_eq!(b.ids, vec![20, 40]);
         assert_eq!(b.counts, vec![1]);
+    }
+
+    #[test]
+    fn derived_graph_is_reopenable_and_original_file_cannot_be_clobbered() {
+        let original = sample();
+        let atlas = atlas_with_activations(&original);
+        let (derived, _) = derive_circuit(&original, &atlas, config()).unwrap();
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "v888-derived-{}-{unique}.v888b",
+            std::process::id()
+        ));
+        derived.save_new(&path).unwrap();
+        assert_eq!(Connectome::load(&path).unwrap(), derived);
+        assert!(derived.save_new(&path).is_err());
+        assert_eq!(Connectome::load(&path).unwrap(), derived);
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]
