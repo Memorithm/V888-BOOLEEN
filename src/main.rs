@@ -145,6 +145,24 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .export_csv(Path::new(require(&args, "--output")?))?;
         }
         Some("recall-circuits") => {
+            // Explicitly reject unknown flags; they must never silently
+            // increase a recall budget or alter the requested hit count.
+            let allowed = [
+                "--graph", "--cues", "--policy", "--fanout", "--hops",
+                "--min-cues", "--top", "--top-k", "--budget", "--edge-budget",
+                "--regions",
+            ];
+            for flag in args.iter().skip(1).filter(|arg| arg.starts_with("--")) {
+                if !allowed.contains(&flag.as_str()) {
+                    return Err(format!("unknown recall-circuits option: {flag}").into());
+                }
+            }
+            if (optional(&args, "--top").is_some() && optional(&args, "--top-k").is_some())
+                || (optional(&args, "--budget").is_some()
+                    && optional(&args, "--edge-budget").is_some())
+            {
+                return Err("ambiguous recall aliases provided together".into());
+            }
             let graph = Connectome::load(Path::new(require(&args, "--graph")?))?;
             let fanout = optional(&args, "--fanout")
                 .unwrap_or("8")
@@ -155,9 +173,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .unwrap_or("2")
                 .parse::<usize>()?;
             let top_k = optional(&args, "--top-k")
+                .or_else(|| optional(&args, "--top"))
                 .unwrap_or("10")
                 .parse::<usize>()?;
             let edge_budget = optional(&args, "--edge-budget")
+                .or_else(|| optional(&args, "--budget"))
                 .unwrap_or("100000")
                 .parse::<u64>()?;
             let cues: Vec<u64> = require(&args, "--cues")?
