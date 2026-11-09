@@ -99,6 +99,7 @@ fn help() {
     println!("  run --graph brain.v888b --seed ID[,ID] [--threshold 1] [--steps 3]");
     println!("  demo");
     println!("  explore-circuits --graph brain.v888b --seed ID[,ID] [--policy directed|strongest-k|symmetric-hypothesis] [--fanout 8] [--regions labels.csv] [--threshold 1] [--steps 3]");
+    println!("  recall-circuits --graph brain.v888b --cues ID[,ID] [--policy directed|strongest-k|symmetric-hypothesis] [--fanout 8] [--hops 2] [--min-cues 2] [--top-k 10] [--edge-budget 100000] [--regions labels.csv]");
     println!("  pack-synapses --expected-rows N --output synapses.v888syn < records.bin");
     println!("  synapse-info --pairs synapses.v888syn");
     println!("  pack-all --expected-rows N --output all.v888all < all30-fields.bin");
@@ -141,6 +142,60 @@ fn main() -> Result<(), Box<dyn Error>> {
         Some("export") => {
             Connectome::load(Path::new(require(&args, "--graph")?))?
                 .export_csv(Path::new(require(&args, "--output")?))?;
+        }
+        Some("recall-circuits") => {
+            let graph = Connectome::load(Path::new(require(&args, "--graph")?))?;
+            let fanout = optional(&args, "--fanout").unwrap_or("8").parse::<usize>()?;
+            let policy = Routing::parse(
+                optional(&args, "--policy").unwrap_or("directed"),
+                fanout,
+            )?;
+            let hops = optional(&args, "--hops").unwrap_or("2").parse::<u8>()?;
+            let min_cues = optional(&args, "--min-cues").unwrap_or("2").parse::<usize>()?;
+            let top_k = optional(&args, "--top-k").unwrap_or("10").parse::<usize>()?;
+            let edge_budget = optional(&args, "--edge-budget")
+                .unwrap_or("100000")
+                .parse::<u64>()?;
+            let cues: Vec<u64> = require(&args, "--cues")?
+                .split(',')
+                .map(str::parse::<u64>)
+                .collect::<Result<_, _>>()?;
+            let regions = match optional(&args, "--regions") {
+                Some(path) => Some(RegionLabels::from_reader(
+                    &graph,
+                    BufReader::new(File::open(path)?),
+                )?),
+                None => None,
+            };
+            let explorer = CircuitExplorer::new(&graph, policy, 1)?;
+            let report = explorer.recall(
+                &cues,
+                hops,
+                min_cues,
+                top_k,
+                edge_budget,
+                regions.as_ref(),
+            )?;
+            println!(
+                "recall_scope=structural_not_learned routing={policy:?} cues={} hops={} edges_examined={} source_expansions={} hits={}",
+                cues.len(),
+                hops,
+                report.edges_examined,
+                report.source_expansions,
+                report.hits.len(),
+            );
+            for (rank, hit) in report.hits.iter().enumerate() {
+                println!(
+                    "recall_rank={} neuron_id={} region={} distinct_cues={} score={} nearest_hops={} evidence={:?}",
+                    rank + 1,
+                    hit.neuron_id,
+                    hit.region,
+                    hit.distinct_cues,
+                    hit.score,
+                    hit.nearest_hops,
+                    hit.evidence,
+                );
+            }
         }
         Some("explore-circuits") => {
             let graph = Connectome::load(Path::new(require(&args, "--graph")?))?;
