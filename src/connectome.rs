@@ -166,6 +166,7 @@ impl Connectome {
     /// including symlinks to original biological source material.
     pub fn save_new(&self, path: &Path) -> io::Result<()> {
         use std::fs::OpenOptions;
+        self.validate()?;
         self.write_to(BufWriter::new(
             OpenOptions::new().write(true).create_new(true).open(path)?,
         ))
