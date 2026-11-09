@@ -1,3 +1,4 @@
+pub mod activity_atlas;
 pub mod connectome;
 pub mod engine;
 pub mod full_synapse;
