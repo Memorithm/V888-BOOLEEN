@@ -74,6 +74,42 @@ impl OnlineRecall {
         self.observe(&engine.active, minimum_active)
     }
 
+    /// Advance a validated synthetic graph and observe each resulting engine state.
+    /// The initial state is not observed. At most 1000 steps are permitted, matching
+    /// the CLI engine bound. A step failure preserves previously completed steps;
+    /// no rollback of engine dynamics is implied. No anatomical edges are created.
+    pub fn observe_engine_steps(
+        &mut self,
+        engine: &mut crate::engine::BooleanEngine,
+        graph: &crate::connectome::Connectome,
+        minimum_active: usize,
+        steps: usize,
+    ) -> std::io::Result<Vec<bool>> {
+        use std::io::{Error, ErrorKind};
+        if steps == 0 || steps > 1000 || minimum_active == 0 {
+            return Err(Error::new(ErrorKind::InvalidInput, "invalid recall budget"));
+        }
+        graph.validate()?;
+        if engine.active.len() != graph.ids.len()
+            || self.circuit.universe_len() != graph.ids.len()
+        {
+            return Err(Error::new(ErrorKind::InvalidInput, "graph/state size mismatch"));
+        }
+        // Validate the recall threshold before any engine mutation.
+        self.circuit
+            .recall(&engine.active, minimum_active)
+            .map_err(|_| Error::new(ErrorKind::InvalidInput, "invalid recall state"))?;
+        let mut matches = Vec::with_capacity(steps);
+        for _ in 0..steps {
+            engine.step(graph)?;
+            let recalled = self
+                .observe_engine_state(engine, minimum_active)
+                .map_err(|_| Error::new(ErrorKind::InvalidData, "recall counter overflow"))?;
+            matches.push(recalled);
+        }
+        Ok(matches)
+    }
+
     /// Aggregate streaming activation counts by caller-provided region labels.
     /// Only selected and explicitly annotated members contribute; no anatomical
     /// classification is inferred. u128 prevents overflow when summing counters.
@@ -443,6 +479,40 @@ mod tests {
             Ok((false, vec![]))
         );
         assert_eq!(tracker.ticks(), 2);
+    }
+
+    #[test]
+    fn bounded_engine_steps_observe_propagation_and_reject_bad_budgets() {
+        use crate::connectome::Connectome;
+        use crate::engine::BooleanEngine;
+        let graph = Connectome {
+            ids: vec![10, 20, 30],
+            offsets: vec![0, 1, 2, 2],
+            targets: vec![1, 2],
+            counts: vec![1, 1],
+        };
+        let mut engine = BooleanEngine::new(&graph, 1).unwrap();
+        let mut tracker = OnlineRecall::new(Subcircuit::new(3, vec![1, 2]).unwrap());
+        engine.stimulate(&graph, 10).unwrap();
+        assert!(tracker.observe_engine_steps(&mut engine, &graph, 1, 0).is_err());
+        assert!(tracker.observe_engine_steps(&mut engine, &graph, 1, 1001).is_err());
+        assert!(tracker.observe_engine_steps(&mut engine, &graph, 0, 1).is_err());
+        assert_eq!(tracker.ticks(), 0);
+        assert_eq!(
+            tracker.observe_engine_steps(&mut engine, &graph, 1, 3).unwrap(),
+            vec![true, true, false]
+        );
+        assert_eq!(tracker.ticks(), 3);
+        assert_eq!(tracker.longest_streak(), 2);
+        assert_eq!(tracker.latest_streak(), 0);
+        assert_eq!(
+            tracker.member_counts().collect::<Vec<_>>(),
+            vec![(1, 1), (2, 1)]
+        );
+        assert_eq!(
+            tracker.regional_occupancy(&[None, Some(7), Some(7)]),
+            Ok(vec![(7, 2, 6)])
+        );
     }
 
     #[test]
