@@ -217,6 +217,41 @@ impl OnlineRecall {
         Ok((recalled, regions))
     }
 
+    /// Evaluate live recall independently for each explicitly annotated region.
+    /// Only members of this tracker participate; unannotated members are excluded.
+    /// Returns (region ID, active selected members, total selected members),
+    /// ordered by region ID. This read-only query does not consume a tick.
+    pub fn live_regional_recall(
+        &self,
+        state: &BooleanState,
+        annotations: &[Option<u32>],
+        minimum_active: usize,
+    ) -> Result<Vec<(u32, usize, usize)>, RecallError> {
+        if minimum_active == 0 {
+            return Err(RecallError::ZeroBudget);
+        }
+        if annotations.len() != self.circuit.universe_len() {
+            return Err(RecallError::LengthMismatch);
+        }
+        // Validate the state length before accessing individual members.
+        self.circuit.recall(state, minimum_active)?;
+        let mut regions = std::collections::BTreeMap::<u32, (usize, usize)>::new();
+        for &member in self.circuit.members() {
+            if let Some(region) = annotations[member] {
+                let entry = regions.entry(region).or_default();
+                entry.1 += 1;
+                if state.get(member) == Ok(true) {
+                    entry.0 += 1;
+                }
+            }
+        }
+        Ok(regions
+            .into_iter()
+            .filter(|(_, (active, _))| *active >= minimum_active)
+            .map(|(region, (active, total))| (region, active, total))
+            .collect())
+    }
+
     #[must_use]
     pub fn ticks(&self) -> u64 {
         self.ticks
@@ -443,6 +478,27 @@ mod tests {
             Ok((false, vec![]))
         );
         assert_eq!(tracker.ticks(), 2);
+    }
+
+    #[test]
+    fn live_regional_recall_is_read_only_and_annotation_bounded() {
+        let mut tracker = OnlineRecall::new(Subcircuit::new(5, vec![0, 1, 3, 4]).unwrap());
+        let labels = [Some(9), Some(9), None, Some(2), None];
+        let mut state = BooleanState::new(5);
+        state.set(0, true).unwrap();
+        state.set(1, true).unwrap();
+        state.set(3, true).unwrap();
+        state.set(4, true).unwrap();
+        assert_eq!(tracker.live_regional_recall(&state, &labels, 2), Ok(vec![(9, 2, 2)]));
+        assert_eq!(tracker.live_regional_recall(&state, &labels, 1), Ok(vec![(2, 1, 1), (9, 2, 2)]));
+        assert_eq!(tracker.live_regional_recall(&state, &labels, 0), Err(RecallError::ZeroBudget));
+        assert_eq!(tracker.live_regional_recall(&state, &labels[..4], 1), Err(RecallError::LengthMismatch));
+        assert_eq!(tracker.live_regional_recall(&BooleanState::new(4), &labels, 1), Err(RecallError::LengthMismatch));
+        assert_eq!(tracker.ticks(), 0);
+        tracker.observe(&state, 1).unwrap();
+        assert_eq!(tracker.ticks(), 1);
+        assert_eq!(tracker.live_regional_recall(&state, &labels, 2), Ok(vec![(9, 2, 2)]));
+        assert_eq!(tracker.ticks(), 1);
     }
 
     #[test]
