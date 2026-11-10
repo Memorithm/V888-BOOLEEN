@@ -135,6 +135,49 @@ impl Subcircuit {
         Ok(true)
     }
 
+
+    /// Select up to `maximum_members` frequently active indices from observed snapshots.
+    /// Ties are resolved by ascending index. Only caller-supplied activity is used:
+    /// this does not learn or infer anatomical edges.
+    pub fn from_frequent_activity(
+        snapshots: &[BooleanState],
+        minimum_observations: usize,
+        maximum_members: usize,
+    ) -> Result<Self, RecallError> {
+        if snapshots.is_empty() {
+            return Err(RecallError::EmptyHistory);
+        }
+        if minimum_observations == 0 || maximum_members == 0 {
+            return Err(RecallError::ZeroBudget);
+        }
+        let universe_len = snapshots[0].len();
+        if snapshots.iter().any(|state| state.len() != universe_len) {
+            return Err(RecallError::LengthMismatch);
+        }
+        let mut counts = vec![0usize; universe_len];
+        for state in snapshots {
+            for index in state.active_indices() {
+                counts[index] += 1;
+            }
+        }
+        let mut candidates: Vec<(usize, usize)> = counts
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, count)| {
+                (count >= minimum_observations).then_some((index, count))
+            })
+            .collect();
+        candidates.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        candidates.truncate(maximum_members);
+        if candidates.is_empty() {
+            return Err(RecallError::EmptyCircuit);
+        }
+        Self::new(
+            universe_len,
+            candidates.into_iter().map(|(index, _)| index).collect(),
+        )
+    }
+
     /// Materialize recalled members as a packed BooleanState, with no invented edges.
     pub fn select(&self, state: &BooleanState) -> Result<BooleanState, RecallError> {
         if state.len() != self.universe_len {
@@ -234,6 +277,35 @@ mod tests {
         );
         assert_eq!(
             circuit.recall_latest_streak(&[BooleanState::new(2)], 1, 1),
+            Err(RecallError::LengthMismatch)
+        );
+    }
+
+
+    #[test]
+    fn frequent_activity_selects_top_members_with_stable_ties() {
+        let mut first = BooleanState::new(5);
+        first.set(1, true).unwrap();
+        first.set(3, true).unwrap();
+        let mut second = BooleanState::new(5);
+        second.set(1, true).unwrap();
+        second.set(2, true).unwrap();
+        let mut third = BooleanState::new(5);
+        third.set(2, true).unwrap();
+        third.set(3, true).unwrap();
+        let history = [first, second, third];
+        let selected = Subcircuit::from_frequent_activity(&history, 2, 2).unwrap();
+        assert_eq!(selected.members(), &[1, 2]);
+        assert_eq!(
+            Subcircuit::from_frequent_activity(&history, 3, 2),
+            Err(RecallError::EmptyCircuit)
+        );
+        assert_eq!(
+            Subcircuit::from_frequent_activity(&history, 1, 0),
+            Err(RecallError::ZeroBudget)
+        );
+        assert_eq!(
+            Subcircuit::from_frequent_activity(&[BooleanState::new(2), BooleanState::new(3)], 1, 1),
             Err(RecallError::LengthMismatch)
         );
     }
