@@ -220,9 +220,18 @@ mod tests {
         assert_eq!(circuit.recall_latest_streak(&history, 2, 3), Ok(false));
         assert_eq!(circuit.recall_latest_streak(&history, 2, 2), Ok(true));
         assert_eq!(circuit.recall_latest_streak(&history, 2, 5), Ok(false));
-        assert_eq!(circuit.recall_latest_streak(&history, 0, 1), Err(RecallError::ZeroBudget));
-        assert_eq!(circuit.recall_latest_streak(&history, 2, 0), Err(RecallError::ZeroBudget));
-        assert_eq!(circuit.recall_latest_streak(&[], 2, 1), Err(RecallError::EmptyHistory));
+        assert_eq!(
+            circuit.recall_latest_streak(&history, 0, 1),
+            Err(RecallError::ZeroBudget)
+        );
+        assert_eq!(
+            circuit.recall_latest_streak(&history, 2, 0),
+            Err(RecallError::ZeroBudget)
+        );
+        assert_eq!(
+            circuit.recall_latest_streak(&[], 2, 1),
+            Err(RecallError::EmptyHistory)
+        );
         assert_eq!(
             circuit.recall_latest_streak(&[BooleanState::new(2)], 1, 1),
             Err(RecallError::LengthMismatch)
