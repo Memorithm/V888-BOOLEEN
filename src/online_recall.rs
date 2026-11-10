@@ -152,6 +152,22 @@ impl OnlineRecall {
             .collect())
     }
 
+    /// Count inactive selected-member observations by explicitly annotated region.
+    /// This is a complement of measured occupancy, not evidence of biological
+    /// silence. Returns (region_id, inactive_member_ticks, possible_member_ticks).
+    /// Only selected members with caller-supplied annotations contribute.
+    pub fn regional_inactive_member_ticks(
+        &self,
+        annotations: &[Option<u32>],
+    ) -> Result<Vec<(u32, u128, u128)>, RecallError> {
+        self.regional_occupancy(annotations).map(|regions| {
+            regions
+                .into_iter()
+                .map(|(region, active, possible)| (region, possible - active, possible))
+                .collect()
+        })
+    }
+
     /// Build a recallable circuit from the most active explicitly annotated region.
     /// Candidate members must each have at least `minimum_member_ticks` activations.
     /// Region rank uses summed activity, then ascending region ID; members use
@@ -304,6 +320,23 @@ impl OnlineRecall {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn regional_inactive_ticks_count_only_annotated_selected_members() {
+        let mut tracker = OnlineRecall::new(Subcircuit::new(4, vec![0, 1, 3]).unwrap());
+        let labels = [Some(7), Some(7), Some(9), None];
+        assert_eq!(tracker.regional_inactive_member_ticks(&labels), Ok(vec![(7, 0, 0)]));
+        let mut first = BooleanState::new(4);
+        first.set(0, true).unwrap();
+        first.set(2, true).unwrap(); // Not selected; must not contribute.
+        tracker.observe(&first, 1).unwrap();
+        let second = BooleanState::new(4);
+        tracker.observe(&second, 1).unwrap();
+        assert_eq!(tracker.regional_inactive_member_ticks(&labels), Ok(vec![(7, 3, 4)]));
+        assert_eq!(tracker.ticks(), 2);
+        assert_eq!(tracker.regional_inactive_member_ticks(&labels[..3]), Err(RecallError::LengthMismatch));
+    }
+
 
     #[test]
     fn recalls_selected_region_against_live_engine_without_consuming_ticks() {
