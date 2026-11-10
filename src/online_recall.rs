@@ -116,6 +116,53 @@ impl OnlineRecall {
             .collect())
     }
 
+    /// Build a recallable circuit from the most active explicitly annotated region.
+    /// Candidate members must each have at least `minimum_member_ticks` activations.
+    /// Region rank uses summed activity, then ascending region ID; members use
+    /// descending activity, then ascending index. No graph edges are created.
+    pub fn select_region_subcircuit(
+        &self,
+        annotations: &[Option<u32>],
+        minimum_member_ticks: u64,
+        maximum_members: usize,
+    ) -> Result<Subcircuit, RecallError> {
+        if maximum_members == 0 || minimum_member_ticks == 0 {
+            return Err(RecallError::ZeroBudget);
+        }
+        if annotations.len() != self.circuit.universe_len() {
+            return Err(RecallError::LengthMismatch);
+        }
+        let mut regions = std::collections::BTreeMap::<u32, u128>::new();
+        for (&member, &count) in self.circuit.members().iter().zip(&self.counts) {
+            if count >= minimum_member_ticks {
+                if let Some(region) = annotations[member] {
+                    *regions.entry(region).or_default() += u128::from(count);
+                }
+            }
+        }
+        let selected_region = regions
+            .into_iter()
+            .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
+            .map(|(region, _)| region)
+            .ok_or(RecallError::EmptyCircuit)?;
+        let mut members: Vec<(usize, u64)> = self
+            .circuit
+            .members()
+            .iter()
+            .copied()
+            .zip(self.counts.iter().copied())
+            .filter(|&(member, count)| {
+                count >= minimum_member_ticks && annotations[member] == Some(selected_region)
+            })
+            .collect();
+        members.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        members.truncate(maximum_members);
+        Subcircuit::new(
+            self.circuit.universe_len(),
+            members.into_iter().map(|(member, _)| member).collect(),
+        )
+    }
+
     /// Select explicitly annotated regions with sufficient observed activation.
     /// Regions are ordered by descending active-member ticks, then region ID.
     /// No biological classification or anatomical edge is inferred.
@@ -274,6 +321,37 @@ mod tests {
             Err(RecallError::LengthMismatch)
         );
         assert_eq!(tracker.ticks(), 2);
+    }
+
+    #[test]
+    fn selects_recallable_region_from_streamed_activity() {
+        let mut tracker = OnlineRecall::new(Subcircuit::new(5, vec![0, 1, 2, 4]).unwrap());
+        let labels = [Some(7), Some(7), Some(9), None, Some(9)];
+        let mut first = BooleanState::new(5);
+        first.set(0, true).unwrap();
+        first.set(1, true).unwrap();
+        first.set(2, true).unwrap();
+        tracker.observe(&first, 1).unwrap();
+        let mut second = BooleanState::new(5);
+        second.set(0, true).unwrap();
+        second.set(4, true).unwrap();
+        tracker.observe(&second, 1).unwrap();
+        let selected = tracker.select_region_subcircuit(&labels, 1, 2).unwrap();
+        assert_eq!(selected.members(), &[0, 1]);
+        assert_eq!(selected.recall(&first, 2), Ok(true));
+        assert_eq!(selected.recall(&second, 2), Ok(false));
+        assert_eq!(
+            tracker.select_region_subcircuit(&labels, 3, 2),
+            Err(RecallError::EmptyCircuit)
+        );
+        assert_eq!(
+            tracker.select_region_subcircuit(&labels[..4], 1, 2),
+            Err(RecallError::LengthMismatch)
+        );
+        assert_eq!(
+            tracker.select_region_subcircuit(&labels, 1, 0),
+            Err(RecallError::ZeroBudget)
+        );
     }
 
     #[test]
