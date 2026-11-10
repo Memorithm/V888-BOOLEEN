@@ -354,6 +354,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn selects_annotated_regions_by_streamed_activity_with_bounded_budget() {
         let mut tracker = OnlineRecall::new(Subcircuit::new(4, vec![0, 1, 2, 3]).unwrap());
         let labels = [Some(9), Some(9), Some(2), None];
