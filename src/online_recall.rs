@@ -135,7 +135,10 @@ impl OnlineRecall {
         });
         candidates.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         candidates.truncate(maximum_regions);
-        Ok(candidates.into_iter().map(|(region, _, _)| region).collect())
+        Ok(candidates
+            .into_iter()
+            .map(|(region, _, _)| region)
+            .collect())
     }
 
     #[must_use]
@@ -282,12 +285,21 @@ mod tests {
         state.set(2, true).unwrap();
         state.set(3, true).unwrap();
         tracker.observe(&state, 1).unwrap();
-        assert_eq!(tracker.select_active_regions(&labels, 1, 1, 2), Ok(vec![2, 9]));
+        assert_eq!(
+            tracker.select_active_regions(&labels, 1, 1, 2),
+            Ok(vec![2, 9])
+        );
         assert_eq!(tracker.select_active_regions(&labels, 1, 2, 2), Ok(vec![9]));
         assert_eq!(tracker.select_active_regions(&labels, 2, 1, 2), Ok(vec![]));
         assert_eq!(tracker.select_active_regions(&labels, 0, 1, 1), Ok(vec![2]));
-        assert_eq!(tracker.select_active_regions(&labels, 0, 0, 1), Err(RecallError::ZeroBudget));
-        assert_eq!(tracker.select_active_regions(&labels[..3], 0, 1, 1), Err(RecallError::LengthMismatch));
+        assert_eq!(
+            tracker.select_active_regions(&labels, 0, 0, 1),
+            Err(RecallError::ZeroBudget)
+        );
+        assert_eq!(
+            tracker.select_active_regions(&labels[..3], 0, 1, 1),
+            Err(RecallError::LengthMismatch)
+        );
     }
 
     #[test]
