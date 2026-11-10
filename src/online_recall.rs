@@ -141,6 +141,35 @@ impl OnlineRecall {
             .collect())
     }
 
+    /// Atomically observe one simulated state and select the most active annotated regions.
+    /// Invalid annotations or budgets must not consume an observation tick.
+    /// The returned match describes the current circuit recall, while region ranking
+    /// uses cumulative observed activity including this tick.
+    pub fn observe_and_select_regions(
+        &mut self,
+        state: &BooleanState,
+        minimum_active: usize,
+        annotations: &[Option<u32>],
+        minimum_active_ticks: u128,
+        minimum_members: usize,
+        maximum_regions: usize,
+    ) -> Result<(bool, Vec<u32>), RecallError> {
+        if annotations.len() != self.circuit.universe_len() {
+            return Err(RecallError::LengthMismatch);
+        }
+        if minimum_members == 0 || maximum_regions == 0 {
+            return Err(RecallError::ZeroBudget);
+        }
+        let recalled = self.observe(state, minimum_active)?;
+        let regions = self.select_active_regions(
+            annotations,
+            minimum_active_ticks,
+            minimum_members,
+            maximum_regions,
+        )?;
+        Ok((recalled, regions))
+    }
+
     #[must_use]
     pub fn ticks(&self) -> u64 {
         self.ticks
@@ -300,6 +329,42 @@ mod tests {
             tracker.select_active_regions(&labels[..3], 0, 1, 1),
             Err(RecallError::LengthMismatch)
         );
+    }
+
+    #[test]
+    fn observes_and_selects_regions_atomically() {
+        let mut tracker = OnlineRecall::new(Subcircuit::new(4, vec![0, 1, 2]).unwrap());
+        let labels = [Some(8), Some(8), Some(3), None];
+        let mut state = BooleanState::new(4);
+        state.set(0, true).unwrap();
+        state.set(2, true).unwrap();
+        assert_eq!(
+            tracker.observe_and_select_regions(&state, 2, &labels, 1, 1, 2),
+            Ok((true, vec![3, 8]))
+        );
+        assert_eq!(tracker.ticks(), 1);
+        assert_eq!(
+            tracker.observe_and_select_regions(&state, 2, &labels[..3], 1, 1, 2),
+            Err(RecallError::LengthMismatch)
+        );
+        assert_eq!(
+            tracker.observe_and_select_regions(&state, 2, &labels, 1, 0, 2),
+            Err(RecallError::ZeroBudget)
+        );
+        assert_eq!(
+            tracker.observe_and_select_regions(&BooleanState::new(3), 2, &labels, 1, 1, 2),
+            Err(RecallError::LengthMismatch)
+        );
+        assert_eq!(tracker.ticks(), 1);
+        assert_eq!(
+            tracker.member_counts().collect::<Vec<_>>(),
+            vec![(0, 1), (1, 0), (2, 1)]
+        );
+        assert_eq!(
+            tracker.observe_and_select_regions(&BooleanState::new(4), 2, &labels, 2, 1, 2),
+            Ok((false, vec![]))
+        );
+        assert_eq!(tracker.ticks(), 2);
     }
 
     #[test]
