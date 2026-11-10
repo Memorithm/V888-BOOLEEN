@@ -16,6 +16,7 @@ use v888_booleen::generalization_bench as genbench;
 use v888_booleen::learning_bench::benchmark;
 use v888_booleen::learning_strategies::compare_strategies;
 use v888_booleen::plasticity::PlasticCircuit;
+use v888_booleen::reward_limits as rl;
 use v888_booleen::source_holdout::benchmark_disjoint_sources;
 use v888_booleen::synapse_pairs::{pack, propagate_one_step, SynapsePairsReader};
 fn require<'a>(args: &'a [String], name: &str) -> Result<&'a str, Box<dyn Error>> {
@@ -125,6 +126,7 @@ fn help() {
     println!("  bench-consolidation-matrix [--graph brain.v888b] [--seeds 1,2,3] [--rounds-a 8] [--rounds-b 8] [--variants 2,4,1000:1] [--csv out.csv]  (3 strategies x conflict/disjoint x protection, CSV)");
     println!("  bench-consolidation-scale [--seeds 1,2,..] [--sources 64] [--targets 24] [--fan-in 6] [--conflict-pcts 0,50,100] [--rounds-a 8] [--rounds-b 8] [--variants 2,8,1000,1000:1,1000:2] [--csv out.csv]  (GENERATED synthetic graph, many overlapping edges)");
     println!("  bench-generalization [--graph brain.v888b] [--seeds 1,..,10] [--inits 0,1] [--sources 64] [--targets 24] [--fan-in 6] [--active 4] [--train-patterns 32] [--test-patterns 64] [--rounds-a 8] [--rounds-b 8] [--positive-pct 50] [--flip-pct 50] [--csv out.csv]  (held-out generalisation + A-then-B forgetting vs supervised control; GENERATED synthetic graph by default)");
+    println!("  bench-reward-limits [--graph brain.v888b] [--seeds 1,..,10] [--init 1] [--csv out.csv]  (reward-modulated under reward noise / sparse reward / credit assignment vs matched supervised control; same task and defaults as bench-generalization; GENERATED synthetic graph by default)");
     println!("  train-plasticity --graph brain.v888b --episodes labeled.csv --output weights.v888pls [--epochs 1]");
     println!("  score-plasticity --graph brain.v888b --weights weights.v888pls --episodes labeled.csv [--threshold 1]");
     println!("  run-plasticity --graph brain.v888b --weights weights.v888pls --seed ID[,ID] [--threshold 1]");
@@ -722,6 +724,103 @@ fn main() -> Result<(), Box<dyn Error>> {
                 );
             }
             println!("test_edges_unseen_in_a_mean={unseen:.3} ab_label_agreement_mean={agree:.3} topology_unchanged={}", rows.iter().all(|r| r.topology_unchanged));
+            println!("evaluation_scope=synthetic_or_unverified_graph_artificial_labels_not_BANC_not_biological");
+        }
+        Some("bench-reward-limits") => {
+            let allowed = ["--graph", "--seeds", "--init", "--csv"];
+            for flag in args.iter().skip(1).filter(|arg| arg.starts_with("--")) {
+                if !allowed.contains(&flag.as_str()) {
+                    return Err(format!("unknown bench-reward-limits option: {flag}").into());
+                }
+            }
+            let seeds = optional(&args, "--seeds")
+                .unwrap_or("1,2,3,4,5,6,7,8,9,10")
+                .split(',')
+                .map(str::parse::<u64>)
+                .collect::<Result<Vec<_>, _>>()?;
+            let init = optional(&args, "--init").unwrap_or("1").parse::<u8>()?;
+            let shape = genbench::GraphShape {
+                sources: 64,
+                targets: 24,
+                fan_in: 6,
+            };
+            let spec = genbench::GenSpec {
+                active: 4,
+                train_patterns: 32,
+                test_patterns: 64,
+                rounds_a: 8,
+                rounds_b: 8,
+                positive_pct: 50,
+                flip_pct: 50,
+                init_weight: init,
+            };
+            let owned = match optional(&args, "--graph") {
+                Some(path) => Some(Connectome::load(Path::new(path))?),
+                None => None,
+            };
+            let graph_label = if owned.is_some() {
+                "PROVIDED_GRAPH"
+            } else {
+                "GENERATED_SYNTHETIC"
+            };
+            let conditions = rl::default_conditions();
+            let rows = rl::run_limits(owned.as_ref(), &shape, &spec, &seeds, &conditions)?;
+            if let Some(path) = optional(&args, "--csv") {
+                use std::io::Write;
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)?
+                    .write_all(rl::to_csv(&rows, graph_label).as_bytes())?;
+            }
+            println!("v888_reward_limits_schema=b888-4-reward-limits-v1");
+            if owned.is_some() {
+                println!("graph=PROVIDED_GRAPH (task labels artificial)");
+            } else {
+                println!("graph=GENERATED_SYNTHETIC sources=64 targets=24 fan_in=6 (not BANC; real BANC V888 graph DOI 10.7910/DVN/7WTH1N not available here)");
+            }
+            println!(
+                "seeds={} init={init} active=4 train_patterns=32 test_patterns=64 rounds_a=8 rounds_b=8 flip_pct=50 threshold=1 metric=balanced_accuracy",
+                seeds.len()
+            );
+            println!("condition,seeds,reward_a_test,control_a_test,reward_vs_clean_reward,hurts_reward,d_gen_vs_ctl,gen_b/t/w,reward_forgetting,control_forgetting,d_forget_vs_ctl(+=less),forget_b/t/w,reward_b_test,control_b_test,d_b_vs_ctl,gen_verdict,forget_verdict,reward_updates,control_updates");
+            let fmt = |s: genbench::Spread| format!("{:.3}±{:.3}", s.mean, s.sd);
+            for s in rl::summarize(&rows) {
+                println!(
+                    "{},{},{},{},{:+.3}±{:.3},{},{:+.3}±{:.3},{}/{}/{},{},{},{:+.3}±{:.3},{}/{}/{},{},{},{:+.3}±{:.3},{},{},{:.1},{:.1}",
+                    s.condition.label(),
+                    s.seeds,
+                    fmt(s.reward_a_test),
+                    fmt(s.control_a_test),
+                    s.reward_vs_clean.mean,
+                    s.reward_vs_clean.sd,
+                    s.hurts_reward,
+                    s.gen_vs_control.delta.mean,
+                    s.gen_vs_control.delta.sd,
+                    s.gen_vs_control.better,
+                    s.gen_vs_control.ties,
+                    s.gen_vs_control.worse,
+                    fmt(s.reward_forgetting),
+                    fmt(s.control_forgetting),
+                    s.forget_vs_control.delta.mean,
+                    s.forget_vs_control.delta.sd,
+                    s.forget_vs_control.better,
+                    s.forget_vs_control.ties,
+                    s.forget_vs_control.worse,
+                    fmt(s.reward_b_test),
+                    fmt(s.control_b_test),
+                    s.b_vs_control.mean,
+                    s.b_vs_control.sd,
+                    s.gen_verdict.as_label(),
+                    s.forget_verdict.as_label(),
+                    s.reward_update_calls,
+                    s.control_update_calls,
+                );
+            }
+            println!(
+                "topology_unchanged={}",
+                rows.iter().all(|r| r.topology_unchanged)
+            );
             println!("evaluation_scope=synthetic_or_unverified_graph_artificial_labels_not_BANC_not_biological");
         }
         Some("bench-consolidation") => {
