@@ -170,7 +170,7 @@ impl OnlineRecall {
 
     /// Select annotated regions whose observed inactive fraction meets a percentage.
     /// Requires sampled ticks; no inference is made for unobserved regions.
-    /// Returns region IDs in ascending order, bounded by maximum_regions.
+    /// Returns regions by descending measured inactivity fraction, then ascending ID.
     pub fn select_inactive_regions(
         &self,
         annotations: &[Option<u32>],
@@ -185,19 +185,19 @@ impl OnlineRecall {
         {
             return Err(RecallError::ZeroBudget);
         }
-        let mut selected = Vec::new();
-        for (region, inactive, possible) in self.regional_inactive_member_ticks(annotations)? {
+        let mut candidates = self.regional_inactive_member_ticks(annotations)?;
+        candidates.retain(|&(_, inactive, possible)| {
             let members = possible / u128::from(self.ticks);
-            if members >= minimum_members as u128
+            members >= minimum_members as u128
                 && inactive * 100 >= possible * u128::from(minimum_inactive_percent)
-            {
-                selected.push(region);
-                if selected.len() == maximum_regions {
-                    break;
-                }
-            }
-        }
-        Ok(selected)
+        });
+        // Rank by measured inactivity fraction, not by the arbitrary region ID.
+        // Exact cross-products avoid floating-point rounding; region ID breaks ties.
+        candidates.sort_unstable_by(|a, b| {
+            (b.1 * a.2).cmp(&(a.1 * b.2)).then_with(|| a.0.cmp(&b.0))
+        });
+        candidates.truncate(maximum_regions);
+        Ok(candidates.into_iter().map(|(region, _, _)| region).collect())
     }
 
     /// Build a recallable circuit from the most active explicitly annotated region.
@@ -369,6 +369,19 @@ mod tests {
         assert_eq!(tracker.regional_inactive_member_ticks(&labels[..3]), Err(RecallError::LengthMismatch));
     }
 
+
+    #[test]
+    fn inactive_region_selection_ranks_by_fraction_before_region_id() {
+        let mut tracker = OnlineRecall::new(Subcircuit::new(4, vec![0, 1, 2, 3]).unwrap());
+        let labels = [Some(2), Some(2), Some(9), Some(9)];
+        let mut state = BooleanState::new(4);
+        state.set(0, true).unwrap();
+        tracker.observe(&state, 1).unwrap();
+        // Region 2: 1/2 inactive; region 9: 2/2 inactive.
+        assert_eq!(tracker.select_inactive_regions(&labels, 50, 2, 1), Ok(vec![9]));
+        assert_eq!(tracker.select_inactive_regions(&labels, 50, 2, 2), Ok(vec![9, 2]));
+        assert_eq!(tracker.ticks(), 1);
+    }
 
     #[test]
     fn recalls_selected_region_against_live_engine_without_consuming_ticks() {
