@@ -135,7 +135,6 @@ impl Subcircuit {
         Ok(true)
     }
 
-
     /// Select up to `maximum_members` frequently active indices from observed snapshots.
     /// Ties are resolved by ascending index. Only caller-supplied activity is used:
     /// this does not learn or infer anatomical edges.
@@ -163,9 +162,7 @@ impl Subcircuit {
         let mut candidates: Vec<(usize, usize)> = counts
             .into_iter()
             .enumerate()
-            .filter_map(|(index, count)| {
-                (count >= minimum_observations).then_some((index, count))
-            })
+            .filter_map(|(index, count)| (count >= minimum_observations).then_some((index, count)))
             .collect();
         candidates.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         candidates.truncate(maximum_members);
@@ -176,6 +173,33 @@ impl Subcircuit {
             universe_len,
             candidates.into_iter().map(|(index, _)| index).collect(),
         )
+    }
+
+    /// Count observed activations for each explicitly selected member, in sorted index order.
+    /// Counts are empirical snapshot frequencies, not learned weights or anatomy.
+    /// Memory is bounded by circuit membership, independently of history length.
+    pub fn member_activation_counts(
+        &self,
+        snapshots: &[BooleanState],
+    ) -> Result<Vec<(usize, usize)>, RecallError> {
+        if snapshots.is_empty() {
+            return Err(RecallError::EmptyHistory);
+        }
+        if snapshots
+            .iter()
+            .any(|state| state.len() != self.universe_len)
+        {
+            return Err(RecallError::LengthMismatch);
+        }
+        let mut counts = Vec::with_capacity(self.members.len());
+        for &member in &self.members {
+            let count = snapshots
+                .iter()
+                .filter(|snapshot| snapshot.get(member) == Ok(true))
+                .count();
+            counts.push((member, count));
+        }
+        Ok(counts)
     }
 
     /// Materialize recalled members as a packed BooleanState, with no invented edges.
@@ -281,7 +305,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn frequent_activity_selects_top_members_with_stable_ties() {
         let mut first = BooleanState::new(5);
@@ -306,6 +329,29 @@ mod tests {
         );
         assert_eq!(
             Subcircuit::from_frequent_activity(&[BooleanState::new(2), BooleanState::new(3)], 1, 1),
+            Err(RecallError::LengthMismatch)
+        );
+    }
+
+    #[test]
+    fn member_activation_counts_preserve_explicit_membership_and_zeroes() {
+        let circuit = Subcircuit::new(5, vec![4, 1, 3]).unwrap();
+        let mut first = BooleanState::new(5);
+        first.set(1, true).unwrap();
+        first.set(2, true).unwrap();
+        let mut second = BooleanState::new(5);
+        second.set(1, true).unwrap();
+        second.set(4, true).unwrap();
+        assert_eq!(
+            circuit.member_activation_counts(&[first, second]),
+            Ok(vec![(1, 2), (3, 0), (4, 1)])
+        );
+        assert_eq!(
+            circuit.member_activation_counts(&[]),
+            Err(RecallError::EmptyHistory)
+        );
+        assert_eq!(
+            circuit.member_activation_counts(&[BooleanState::new(4)]),
             Err(RecallError::LengthMismatch)
         );
     }
