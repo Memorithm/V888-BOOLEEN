@@ -58,6 +58,78 @@ Module: `src/reward_limits.rs`. CLI: `bench-reward-limits`.
 cargo +1.89 run --release -- bench-reward-limits --csv results/reward-limits-v1.csv
 ```
 
-## Results
+## Results (pre-registered grid; CSV `results/reward-limits-v1.csv`)
 
-(filled in from the run below; numbers copied as printed)
+CSV: 240 rows (12 conditions × 10 seeds × 2 arms), sha256
+`b61e2b06b59e40863594f9a9f4abe8c5a02f3dd1ba7cb2933bc4475a2f041f48`; a second
+run gave a byte-identical CSV and identical stdout. Run time ≈ 5 s (release,
+CPU). `topology_unchanged=true` for every row. Mean ± sample sd over 10 seeds;
+paired deltas vs the same-seed matched control (b/t/w = better/tie/worse
+seeds). "vs clean" = reward arm A test minus the clean reward arm, same seed.
+
+| condition | reward A test | control A test | reward vs clean | hurts? | Δgen vs ctl (b/t/w) | reward forg. | control forg. | Δforg (+ = reward less) | reward B | control B | ΔB | verdicts gen / forg |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| clean | 0.870±0.039 | 0.870±0.039 | +0.000 | no | +0.000 (0/10/0) | 0.142±0.050 | 0.253±0.070 | +0.111 (10/0/0) | 0.716 | 0.803 | −0.087 | none / none |
+| noise 10 % | 0.834±0.050 | 0.830±0.042 | −0.036±0.021 | no | +0.005 (6/0/4) | 0.095 | 0.208 | +0.113 (10/0/0) | 0.677 | 0.760 | −0.082 | none / none |
+| noise 20 % | 0.792±0.054 | 0.764±0.039 | −0.078±0.024 | **yes** | +0.028 (8/0/2) | 0.061 | 0.155 | +0.094 (9/0/1) | 0.640 | 0.714 | −0.074 | none / none |
+| noise 30 % | 0.725±0.053 | 0.705±0.029 | −0.145±0.029 | **yes** | +0.020 (7/0/3) | 0.029 | 0.129 | +0.100 (10/0/0) | 0.592 | 0.653 | −0.061 | none / none |
+| noise 40 % | 0.635±0.060 | 0.622±0.034 | −0.235±0.037 | **yes** | +0.013 (7/0/3) | 0.011 | 0.084 | +0.073 (9/0/1) | 0.542 | 0.591 | −0.049 | none / *beats_control* (see below) |
+| deliver 50 % | 0.872±0.044 | 0.872±0.044 | +0.002±0.013 | no | +0.000 (0/10/0) | 0.105 | 0.218 | +0.113 (10/0/0) | 0.671 | 0.762 | −0.091 | none / none |
+| deliver 25 % | 0.845±0.041 | 0.845±0.041 | −0.025±0.017 | no | +0.000 (0/10/0) | 0.081 | 0.190 | +0.109 (10/0/0) | 0.666 | 0.750 | −0.084 | none / none |
+| deliver 10 % | 0.787±0.043 | 0.787±0.043 | −0.083±0.035 | **yes** | +0.000 (0/10/0) | 0.053 | 0.140 | +0.087 (10/0/0) | 0.654 | 0.719 | −0.065 | none / none |
+| global credit | 0.559±0.030 | 0.870±0.039 | −0.311±0.035 | **yes** | −0.311 (0/0/10) | 0.030 | 0.253 | +0.223 (10/0/0) | 0.531 | 0.803 | −0.273 | **worse** / none |
+| delayed trace 4 | 0.865±0.039 | 0.870±0.039 | −0.005±0.005 | no | −0.005 (0/4/6) | 0.139 | 0.253 | +0.115 (10/0/0) | 0.715 | 0.803 | −0.088 | none / none |
+| delayed trace 32 | 0.858±0.041 | 0.870±0.039 | −0.012±0.006 | no | −0.012 (0/1/9) | 0.138 | 0.253 | +0.116 (10/0/0) | 0.709 | 0.803 | −0.094 | none / none |
+| global, delay 1, no trace | 0.502±0.032 | 0.870±0.039 | −0.368±0.048 | **yes** | −0.368 (0/0/10) | 0.000 | 0.253 | +0.253 (10/0/0) | 0.508 | 0.803 | −0.296 | **worse** / none |
+
+Instrumentation (mean per seed, A+B phases, from the CSV): update calls
+reward / control — clean 2724.0 / 512.0, global 476.3 / 512.0, global no-trace
+244.3 / 512.0; weights changed reward / control — clean 1978.9 / 2198.1,
+noise 40 % 1986.8 / 4631.8, global 467.8 / 2198.1, global no-trace 280.6 /
+2198.1, delayed-trace-32 1972.9 / 2198.1. Misattributed reward events in the
+reward arm: global 103.1 of 476.3 updates, global no-trace 124.3 of 244.3.
+A-train balanced accuracy: clean 0.945 (both arms), global 0.547, global
+no-trace 0.501.
+
+## Findings, including negative ones
+
+* **Credit assignment is the hard limit.** Replacing per-target reward by
+  one scalar per episode drops A-test generalisation from 0.870 to 0.559
+  (−0.311, worse than the control in 10/10 seeds; A train only 0.547). One
+  episode of misaligned credit without an eligibility trace drops it to
+  0.502 — chance level. Observed mechanism (from the update counters, not a
+  separate experiment): a negative global scalar decrements correct spikes
+  too; once a target is silent it has no eligibility and can never be raised
+  again, so learning stalls after ≈ 250–480 updates instead of ≈ 2700.
+* **Delay with a correct eligibility trace is almost harmless here**: −0.005
+  (d = 4) and −0.012 (d = 32), below the 0.05 threshold, but consistently
+  slightly worse than the control (6/10 and 9/10 seeds worse).
+* **Sparse reward degrades gracefully** (−0.025 at 25 % delivery) and only
+  crosses the threshold at 10 % delivery (−0.083). The matched supervised
+  control receiving labels on the same episodes scores **exactly** the same
+  A test (10/10 ties at every sparsity): under the OR rule from init 1 the
+  two rules coincide on task A (as in #27), so sparsity tells nothing that
+  separates them.
+* **Reward noise hurts from 20 %** (−0.078, −0.145, −0.235 at 20/30/40 %).
+  The supervised control with matched label noise degrades about as much
+  (0.830 / 0.764 / 0.705 / 0.622). The reward arm is slightly ahead
+  (+0.005 to +0.028, better in 6–8 of 10 seeds) but never by the 0.05
+  margin: **no robustness advantage is claimed**.
+* **No condition makes the reward arm generalise better than the control.**
+  Its lower forgetting persists in every condition but always with a lower B
+  score (ΔB −0.049 to −0.296): the stability/plasticity trade of #27, not a
+  gain. The single `beats_control` forgetting verdict (noise 40 %, +0.073,
+  9/10, ΔB −0.049 just inside the 0.05 guard) is a **degenerate** pass: the
+  reward arm learned little (A test 0.635, forgetting 0.011), so it had
+  little to forget. It is reported as produced and not claimed as an
+  advantage.
+
+## Caveats
+
+Synthetic, small (144 edges), bipartite generated graph (no recurrence, so
+credit through intermediate neurons is not tested), artificial OR-rule
+labels, threshold 1, init weight 1 only, 10 seeds, one axis at a time (no
+interactions), per-seed spread only (no confidence intervals). "Equal budget"
+means equal episodes and identical episode order; the reward arm makes more
+update *calls* (one per fired target) but changes fewer weights. Not evidence
+about BANC or biology.
