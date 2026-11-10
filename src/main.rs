@@ -12,6 +12,7 @@ use v888_booleen::consolidation::{
 use v888_booleen::consolidation_scale as scale;
 use v888_booleen::engine::BooleanEngine;
 use v888_booleen::full_synapse::{pack_records, FullSynapseReader};
+use v888_booleen::generalization_bench as genbench;
 use v888_booleen::learning_bench::benchmark;
 use v888_booleen::learning_strategies::compare_strategies;
 use v888_booleen::plasticity::PlasticCircuit;
@@ -123,6 +124,7 @@ fn help() {
     println!("  bench-consolidation [--graph brain.v888b] [--seed 1] [--rounds-a 8] [--rounds-b 8] [--periods 2,4,8,1000]  (learn A then B, retention of A)");
     println!("  bench-consolidation-matrix [--graph brain.v888b] [--seeds 1,2,3] [--rounds-a 8] [--rounds-b 8] [--variants 2,4,1000:1] [--csv out.csv]  (3 strategies x conflict/disjoint x protection, CSV)");
     println!("  bench-consolidation-scale [--seeds 1,2,..] [--sources 64] [--targets 24] [--fan-in 6] [--conflict-pcts 0,50,100] [--rounds-a 8] [--rounds-b 8] [--variants 2,8,1000,1000:1,1000:2] [--csv out.csv]  (GENERATED synthetic graph, many overlapping edges)");
+    println!("  bench-generalization [--graph brain.v888b] [--seeds 1,..,10] [--inits 0,1] [--sources 64] [--targets 24] [--fan-in 6] [--active 4] [--train-patterns 32] [--test-patterns 64] [--rounds-a 8] [--rounds-b 8] [--positive-pct 50] [--flip-pct 50] [--csv out.csv]  (held-out generalisation + A-then-B forgetting vs supervised control; GENERATED synthetic graph by default)");
     println!("  train-plasticity --graph brain.v888b --episodes labeled.csv --output weights.v888pls [--epochs 1]");
     println!("  score-plasticity --graph brain.v888b --weights weights.v888pls --episodes labeled.csv [--threshold 1]");
     println!("  run-plasticity --graph brain.v888b --weights weights.v888pls --seed ID[,ID] [--threshold 1]");
@@ -599,6 +601,128 @@ fn main() -> Result<(), Box<dyn Error>> {
                 );
             }
             println!("evaluation_scope=generated_synthetic_graph_artificial_labels_not_BANC_not_biological");
+        }
+        Some("bench-generalization") => {
+            let allowed = [
+                "--graph",
+                "--seeds",
+                "--inits",
+                "--sources",
+                "--targets",
+                "--fan-in",
+                "--active",
+                "--train-patterns",
+                "--test-patterns",
+                "--rounds-a",
+                "--rounds-b",
+                "--positive-pct",
+                "--flip-pct",
+                "--csv",
+            ];
+            for flag in args.iter().skip(1).filter(|arg| arg.starts_with("--")) {
+                if !allowed.contains(&flag.as_str()) {
+                    return Err(format!("unknown bench-generalization option: {flag}").into());
+                }
+            }
+            let list = |name: &str, default: &str| -> Result<Vec<u64>, Box<dyn Error>> {
+                Ok(optional(&args, name)
+                    .unwrap_or(default)
+                    .split(',')
+                    .map(str::parse::<u64>)
+                    .collect::<Result<Vec<_>, _>>()?)
+            };
+            let num = |name: &str, default: &str| -> Result<usize, Box<dyn Error>> {
+                Ok(optional(&args, name).unwrap_or(default).parse::<usize>()?)
+            };
+            let seeds = list("--seeds", "1,2,3,4,5,6,7,8,9,10")?;
+            let inits = list("--inits", "0,1")?
+                .into_iter()
+                .map(u8::try_from)
+                .collect::<Result<Vec<_>, _>>()?;
+            let shape = genbench::GraphShape {
+                sources: num("--sources", "64")?,
+                targets: num("--targets", "24")?,
+                fan_in: num("--fan-in", "6")?,
+            };
+            let spec = genbench::GenSpec {
+                active: num("--active", "4")?,
+                train_patterns: num("--train-patterns", "32")?,
+                test_patterns: num("--test-patterns", "64")?,
+                rounds_a: u32::try_from(num("--rounds-a", "8")?)?,
+                rounds_b: u32::try_from(num("--rounds-b", "8")?)?,
+                positive_pct: u32::try_from(num("--positive-pct", "50")?)?,
+                flip_pct: u32::try_from(num("--flip-pct", "50")?)?,
+                init_weight: 0,
+            };
+            let owned = match optional(&args, "--graph") {
+                Some(path) => Some(Connectome::load(Path::new(path))?),
+                None => None,
+            };
+            let graph_label = if owned.is_some() {
+                "PROVIDED_GRAPH"
+            } else {
+                "GENERATED_SYNTHETIC"
+            };
+            let rows = genbench::run_grid(owned.as_ref(), &shape, &spec, &seeds, &inits)?;
+            if let Some(path) = optional(&args, "--csv") {
+                use std::io::Write;
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)?
+                    .write_all(genbench::to_csv(&rows, graph_label).as_bytes())?;
+            }
+            println!("v888_generalization_schema=b888-4-generalization-v1");
+            if owned.is_some() {
+                println!("graph=PROVIDED_GRAPH (task labels artificial)");
+            } else {
+                println!(
+                    "graph=GENERATED_SYNTHETIC sources={} targets={} fan_in={} (not BANC; real BANC V888 graph DOI 10.7910/DVN/7WTH1N not available here)",
+                    shape.sources, shape.targets, shape.fan_in
+                );
+            }
+            println!(
+                "seeds={} inits={:?} active={} train_patterns={} test_patterns={} rounds_a={} rounds_b={} positive_pct={} flip_pct={} threshold=1 metric=balanced_accuracy",
+                seeds.len(), inits, spec.active, spec.train_patterns, spec.test_patterns,
+                spec.rounds_a, spec.rounds_b, spec.positive_pct, spec.flip_pct
+            );
+            println!("init,arm,seeds,a_train_after_a,a_test_after_a(gen),a_test_after_b,b_test_after_b,forgetting,d_gen_vs_ctl,gen_better/tie/worse,d_forget_vs_ctl(+=less),forget_better/tie/worse,d_b_vs_ctl,gen_verdict,forget_verdict");
+            let fmt = |s: genbench::Spread| {
+                format!("{:.3}±{:.3}[{:.3};{:.3}]", s.mean, s.sd, s.min, s.max)
+            };
+            let mut unseen = 0.0;
+            let mut agree = 0.0;
+            for s in genbench::summarize(&rows) {
+                unseen = s.test_edges_unseen_in_a;
+                agree = s.ab_label_agreement;
+                println!(
+                    "{},{},{},{},{},{},{},{},{:+.3}±{:.3},{}/{}/{},{:+.3}±{:.3},{}/{}/{},{:+.3}±{:.3},{},{}",
+                    s.init_weight,
+                    s.arm.as_label(),
+                    s.seeds,
+                    fmt(s.a_train_after_a),
+                    fmt(s.a_test_after_a),
+                    fmt(s.a_test_after_b),
+                    fmt(s.b_test_after_b),
+                    fmt(s.forgetting),
+                    s.generalisation_vs_control.delta.mean,
+                    s.generalisation_vs_control.delta.sd,
+                    s.generalisation_vs_control.better,
+                    s.generalisation_vs_control.ties,
+                    s.generalisation_vs_control.worse,
+                    s.forgetting_vs_control.delta.mean,
+                    s.forgetting_vs_control.delta.sd,
+                    s.forgetting_vs_control.better,
+                    s.forgetting_vs_control.ties,
+                    s.forgetting_vs_control.worse,
+                    s.b_vs_control.mean,
+                    s.b_vs_control.sd,
+                    s.generalisation_verdict.as_label(),
+                    s.forgetting_verdict.as_label()
+                );
+            }
+            println!("test_edges_unseen_in_a_mean={unseen:.3} ab_label_agreement_mean={agree:.3} topology_unchanged={}", rows.iter().all(|r| r.topology_unchanged));
+            println!("evaluation_scope=synthetic_or_unverified_graph_artificial_labels_not_BANC_not_biological");
         }
         Some("bench-consolidation") => {
             let seed = optional(&args, "--seed").unwrap_or("1").parse::<u64>()?;
