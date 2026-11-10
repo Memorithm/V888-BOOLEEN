@@ -217,6 +217,30 @@ impl OnlineRecall {
         Ok((recalled, regions))
     }
 
+    /// Recall the most active explicitly annotated region against the live engine state.
+    /// Selection uses previously observed ticks; the current state is not consumed.
+    /// Returns the selected member indices and whether their recall threshold is met.
+    /// All graph connectivity remains unchanged and no anatomical label is inferred.
+    pub fn recall_selected_region(
+        &self,
+        engine: &crate::engine::BooleanEngine,
+        annotations: &[Option<u32>],
+        minimum_member_ticks: u64,
+        maximum_members: usize,
+        minimum_active: usize,
+    ) -> Result<(Vec<usize>, bool), RecallError> {
+        if minimum_active == 0 {
+            return Err(RecallError::ZeroBudget);
+        }
+        let selected = self.select_region_subcircuit(
+            annotations,
+            minimum_member_ticks,
+            maximum_members,
+        )?;
+        let recalled = selected.recall(&engine.active, minimum_active)?;
+        Ok((selected.members().to_vec(), recalled))
+    }
+
     #[must_use]
     pub fn ticks(&self) -> u64 {
         self.ticks
@@ -244,6 +268,47 @@ impl OnlineRecall {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recalls_selected_region_against_live_engine_without_consuming_ticks() {
+        use crate::connectome::Connectome;
+        use crate::engine::BooleanEngine;
+
+        // Synthetic chain; region IDs are explicit experimental labels.
+        let graph = Connectome {
+            ids: vec![10, 20, 30],
+            offsets: vec![0, 1, 2, 2],
+            targets: vec![1, 2],
+            counts: vec![1, 1],
+        };
+        let mut engine = BooleanEngine::new(&graph, 1).unwrap();
+        let mut tracker = OnlineRecall::new(Subcircuit::new(3, vec![0, 1, 2]).unwrap());
+        let regions = [Some(7), Some(7), Some(9)];
+        engine.stimulate(&graph, 10).unwrap();
+        tracker.observe_engine_state(&engine, 1).unwrap();
+        engine.step(&graph).unwrap();
+        tracker.observe_engine_state(&engine, 1).unwrap();
+        assert_eq!(
+            tracker.recall_selected_region(&engine, &regions, 1, 2, 1),
+            Ok((vec![0, 1], true))
+        );
+        engine.step(&graph).unwrap();
+        assert_eq!(
+            tracker.recall_selected_region(&engine, &regions, 1, 2, 1),
+            Ok((vec![0, 1], false))
+        );
+        assert_eq!(tracker.ticks(), 2);
+        assert_eq!(
+            tracker.recall_selected_region(&engine, &regions[..2], 1, 2, 1),
+            Err(RecallError::LengthMismatch)
+        );
+        assert_eq!(
+            tracker.recall_selected_region(&engine, &regions, 1, 2, 0),
+            Err(RecallError::ZeroBudget)
+        );
+    }
+
+
 
     #[test]
     fn streams_without_retaining_history_and_preserves_member_order() {
