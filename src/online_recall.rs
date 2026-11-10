@@ -116,6 +116,28 @@ impl OnlineRecall {
             .collect())
     }
 
+    /// Select explicitly annotated regions with sufficient observed activation.
+    /// Regions are ordered by descending active-member ticks, then region ID.
+    /// No biological classification or anatomical edge is inferred.
+    pub fn select_active_regions(
+        &self,
+        annotations: &[Option<u32>],
+        minimum_active_ticks: u128,
+        minimum_members: usize,
+        maximum_regions: usize,
+    ) -> Result<Vec<u32>, RecallError> {
+        if minimum_members == 0 || maximum_regions == 0 {
+            return Err(RecallError::ZeroBudget);
+        }
+        let mut candidates = self.regional_activity_totals(annotations)?;
+        candidates.retain(|(_, active, members)| {
+            *active >= minimum_active_ticks && *members >= minimum_members
+        });
+        candidates.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        candidates.truncate(maximum_regions);
+        Ok(candidates.into_iter().map(|(region, _, _)| region).collect())
+    }
+
     #[must_use]
     pub fn ticks(&self) -> u64 {
         self.ticks
@@ -249,6 +271,23 @@ mod tests {
             Err(RecallError::LengthMismatch)
         );
         assert_eq!(tracker.ticks(), 2);
+    }
+
+    #[test]
+    fn selects_annotated_regions_by_streamed_activity_with_bounded_budget() {
+        let mut tracker = OnlineRecall::new(Subcircuit::new(4, vec![0, 1, 2, 3]).unwrap());
+        let labels = [Some(9), Some(9), Some(2), None];
+        let mut state = BooleanState::new(4);
+        state.set(0, true).unwrap();
+        state.set(2, true).unwrap();
+        state.set(3, true).unwrap();
+        tracker.observe(&state, 1).unwrap();
+        assert_eq!(tracker.select_active_regions(&labels, 1, 1, 2), Ok(vec![2, 9]));
+        assert_eq!(tracker.select_active_regions(&labels, 1, 2, 2), Ok(vec![9]));
+        assert_eq!(tracker.select_active_regions(&labels, 2, 1, 2), Ok(vec![]));
+        assert_eq!(tracker.select_active_regions(&labels, 0, 1, 1), Ok(vec![2]));
+        assert_eq!(tracker.select_active_regions(&labels, 0, 0, 1), Err(RecallError::ZeroBudget));
+        assert_eq!(tracker.select_active_regions(&labels[..3], 0, 1, 1), Err(RecallError::LengthMismatch));
     }
 
     #[test]
