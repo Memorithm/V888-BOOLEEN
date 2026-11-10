@@ -252,6 +252,43 @@ impl OnlineRecall {
             .collect())
     }
 
+    /// Step the experimental engine and collect live per-region recall at each tick.
+    /// The initial state is not included. Region labels are caller supplied, never
+    /// inferred from anatomy. Previous completed steps remain committed on failure.
+    /// Each entry contains only qualifying regions in ascending region ID order.
+    pub fn observe_engine_regional_steps(
+        &mut self,
+        engine: &mut crate::engine::BooleanEngine,
+        graph: &crate::connectome::Connectome,
+        annotations: &[Option<u32>],
+        minimum_active: usize,
+        steps: usize,
+    ) -> std::io::Result<Vec<Vec<(u32, usize, usize)>>> {
+        use std::io::{Error, ErrorKind};
+        if steps == 0 || steps > 1000 || minimum_active == 0 {
+            return Err(Error::new(ErrorKind::InvalidInput, "invalid regional recall budget"));
+        }
+        graph.validate()?;
+        if engine.active.len() != graph.ids.len()
+            || self.circuit.universe_len() != graph.ids.len()
+            || annotations.len() != graph.ids.len()
+        {
+            return Err(Error::new(ErrorKind::InvalidInput, "regional graph size mismatch"));
+        }
+        self.live_regional_recall(&engine.active, annotations, minimum_active)
+            .map_err(|_| Error::new(ErrorKind::InvalidInput, "invalid regional recall state"))?;
+        let mut output = Vec::with_capacity(steps);
+        for _ in 0..steps {
+            engine.step(graph)?;
+            self.observe_engine_state(engine, minimum_active)
+                .map_err(|_| Error::new(ErrorKind::InvalidData, "recall counter overflow"))?;
+            let regions = self.live_regional_recall(&engine.active, annotations, minimum_active)
+                .map_err(|_| Error::new(ErrorKind::InvalidData, "regional recall failed"))?;
+            output.push(regions);
+        }
+        Ok(output)
+    }
+
     #[must_use]
     pub fn ticks(&self) -> u64 {
         self.ticks
@@ -499,6 +536,31 @@ mod tests {
         assert_eq!(tracker.ticks(), 1);
         assert_eq!(tracker.live_regional_recall(&state, &labels, 2), Ok(vec![(9, 2, 2)]));
         assert_eq!(tracker.ticks(), 1);
+    }
+
+    #[test]
+    fn regional_engine_steps_track_live_activation_without_inferred_edges() {
+        use crate::connectome::Connectome;
+        use crate::engine::BooleanEngine;
+        let graph = Connectome {
+            ids: vec![10, 20, 30],
+            offsets: vec![0, 1, 2, 2],
+            targets: vec![1, 2],
+            counts: vec![1, 1],
+        };
+        let mut engine = BooleanEngine::new(&graph, 1).unwrap();
+        let mut tracker = OnlineRecall::new(Subcircuit::new(3, vec![0, 1, 2]).unwrap());
+        let labels = [Some(7), Some(7), Some(9)];
+        engine.stimulate(&graph, 10).unwrap();
+        assert!(tracker.observe_engine_regional_steps(&mut engine, &graph, &labels[..2], 1, 3).is_err());
+        assert!(tracker.observe_engine_regional_steps(&mut engine, &graph, &labels, 1, 0).is_err());
+        assert_eq!(tracker.ticks(), 0);
+        assert_eq!(
+            tracker.observe_engine_regional_steps(&mut engine, &graph, &labels, 1, 3).unwrap(),
+            vec![vec![(7, 1, 2)], vec![(9, 1, 1)], vec![]]
+        );
+        assert_eq!(tracker.ticks(), 3);
+        assert_eq!(tracker.regional_activity_totals(&labels), Ok(vec![(7, 1, 2), (9, 1, 1)]));
     }
 
     #[test]
