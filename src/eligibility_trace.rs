@@ -98,8 +98,10 @@ pub struct TraceCost {
     /// Update calls (control / #34 reward arm) or weight steps attempted.
     pub update_calls: u64,
     pub weights_changed: u64,
+    /// Trace-driven weight changes (reactivations excluded).
     pub steps_up: u64,
     pub steps_down: u64,
+    /// Silent-target reactivations (each changed one weight 0 -> 1).
     pub reactivations: u64,
 }
 
@@ -249,7 +251,6 @@ pub fn train_trace_phase(
                     if circuit.apply_edge_step(edge, true)? {
                         cost.reactivations += 1;
                         cost.weights_changed += 1;
-                        cost.steps_up += 1;
                     }
                 }
             }
@@ -568,5 +569,244 @@ pub fn verdict_label(v: Verdict) -> &'static str {
         Verdict::Worse => "x_worse_than_y",
         Verdict::NoClearDifference => "no_clear_difference",
         Verdict::Control => "control",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::reward_limits::{run_limit_arm, LimitArm};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn shape() -> GraphShape {
+        GraphShape {
+            sources: 40,
+            targets: 12,
+            fan_in: 6,
+        }
+    }
+
+    fn spec() -> GenSpec {
+        GenSpec {
+            active: 3,
+            train_patterns: 16,
+            test_patterns: 16,
+            rounds_a: 4,
+            rounds_b: 4,
+            positive_pct: 50,
+            flip_pct: 50,
+            init_weight: 1,
+        }
+    }
+
+    fn setup(seed: u64) -> (Connectome, Task) {
+        let g = rl::graph_for(None, &shape(), seed).unwrap();
+        let t = build_task(&g, &spec(), seed).unwrap();
+        (g, t)
+    }
+
+    #[test]
+    fn consume_follows_preregistered_fixed_point_arithmetic() -> io::Result<()> {
+        let (g, _) = setup(1);
+        let mut c = PlasticCircuit::new(&g, 1)?;
+        let mut st = TraceState::new(g.edges(), g.ids.len());
+        st.trace[0] = TAG;
+        // rpe 512 -> c 512; b 544
+        assert_eq!(st.consume(&mut c, true)?, (0, 0, 0));
+        assert_eq!((st.credit[0], st.baseline), (512, 544));
+        // rpe 480 -> c 992; b 574
+        assert_eq!(st.consume(&mut c, true)?, (0, 0, 0));
+        assert_eq!((st.credit[0], st.baseline), (992, 574));
+        // rpe 450 -> c 1442 -> one step up, c 418
+        assert_eq!(st.consume(&mut c, true)?, (1, 1, 0));
+        assert_eq!(st.credit[0], 418);
+        assert_eq!(c.weights()[0], 2);
+        // untagged edges never move
+        assert!(st.credit[1..].iter().all(|&v| v == 0));
+        assert!(c.weights()[1..].iter().all(|&w| w == 1));
+        // a half-strength tag halves the credit; clamp is respected
+        let mut st = TraceState::new(g.edges(), g.ids.len());
+        st.trace[0] = TAG / 2;
+        st.baseline = BASELINE_ONE;
+        st.consume(&mut c, false)?;
+        assert_eq!(st.credit[0], -512);
+        for _ in 0..50 {
+            st.trace[0] = TRACE_MAX;
+            st.consume(&mut c, false)?;
+            assert!(st.credit[0].abs() <= CREDIT_CLAMP);
+        }
+        assert_eq!(c.weights()[0], 0);
+        Ok(())
+    }
+
+    #[test]
+    fn baseline_arms_are_bit_identical_to_reward_limits() {
+        let (g, task) = setup(3);
+        for (d, credit) in [
+            (0, Credit::Global),
+            (1, Credit::GlobalDelayedNoTrace(1)),
+            (4, Credit::GlobalDelayedNoTrace(4)),
+        ] {
+            let cond = RewardCondition {
+                credit,
+                ..RewardCondition::CLEAN
+            };
+            let ours = run_trace_arm(&g, &task, &spec(), d, TraceArm::Reward, 3).unwrap();
+            let theirs = run_limit_arm(&g, &task, &spec(), &cond, LimitArm::Reward, 3).unwrap();
+            assert_eq!(ours.a_test_after_a, theirs.a_test_after_a);
+            assert_eq!(ours.a_test_after_b, theirs.a_test_after_b);
+            assert_eq!(ours.b_test_after_b, theirs.b_test_after_b);
+            assert_eq!(ours.cost_a.update_calls, theirs.cost_a.phase.update_calls);
+            assert_eq!(
+                ours.cost_b.weights_changed,
+                theirs.cost_b.phase.weights_changed
+            );
+        }
+        let ctl = run_trace_arm(&g, &task, &spec(), 4, TraceArm::Control, 3).unwrap();
+        let ctl0 = run_limit_arm(
+            &g,
+            &task,
+            &spec(),
+            &RewardCondition::CLEAN,
+            LimitArm::Control,
+            3,
+        )
+        .unwrap();
+        assert_eq!(ctl.a_test_after_b, ctl0.a_test_after_b);
+        let refr = run_trace_arm(&g, &task, &spec(), 0, TraceArm::RewardCleanReference, 3).unwrap();
+        let refr0 = run_limit_arm(
+            &g,
+            &task,
+            &spec(),
+            &RewardCondition::CLEAN,
+            LimitArm::Reward,
+            3,
+        )
+        .unwrap();
+        assert_eq!(refr.a_test_after_a, refr0.a_test_after_a);
+        assert_eq!(refr.cost_a.update_calls, refr0.cost_a.phase.update_calls);
+    }
+
+    #[test]
+    fn trace_arms_touch_only_existing_weights_and_count_consistently() {
+        let (g, task) = setup(4);
+        for d in DEFAULT_DELAYS {
+            let t = run_trace_arm(&g, &task, &spec(), d, TraceArm::Trace, 4).unwrap();
+            assert!(t.topology_unchanged);
+            assert_eq!(t.cost_a.reactivations + t.cost_b.reactivations, 0);
+            assert_eq!(
+                t.cost_a.weights_changed,
+                t.cost_a.steps_up + t.cost_a.steps_down
+            );
+            assert!(t.cost_a.weights_changed <= t.cost_a.update_calls);
+            // scalars in flight at phase end are dropped (<= d per phase)
+            assert!(t.cost_a.scalars_emitted - t.cost_a.scalars_consumed <= u64::from(d));
+            let r = run_trace_arm(&g, &task, &spec(), d, TraceArm::TraceReact, 4).unwrap();
+            assert!(r.topology_unchanged);
+            assert_eq!(
+                r.cost_a.weights_changed,
+                r.cost_a.steps_up + r.cost_a.steps_down + r.cost_a.reactivations
+            );
+        }
+        // a delay longer than a phase: nothing is ever consumed, no weight moves
+        let (input_g, task2) = setup(5);
+        let mut c = PlasticCircuit::new(&input_g, 1).unwrap();
+        let cost = train_trace_phase(
+            &mut c,
+            &input_g,
+            &task2.a_train,
+            &task2.valence_a,
+            (4, 5),
+            1000,
+            false,
+        )
+        .unwrap();
+        assert_eq!(cost.scalars_consumed, 0);
+        assert_eq!(cost.weights_changed, 0);
+        assert!(c.weights().iter().all(|&w| w == 1));
+        assert!(train_trace_phase(
+            &mut c,
+            &input_g,
+            &task2.a_train,
+            &task2.valence_a,
+            (4, 5),
+            1025,
+            false
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn reactivation_raises_a_silent_target_from_zero() {
+        let (g, task) = setup(6);
+        // all weights at 0: nothing fires, no scalar, only reactivation acts
+        let mut c = PlasticCircuit::new(&g, 0).unwrap();
+        let cost =
+            train_trace_phase(&mut c, &g, &task.a_train, &task.valence_a, (4, 6), 0, true).unwrap();
+        assert!(cost.reactivations > 0);
+        assert!(c.weights().iter().any(|&w| w > 0));
+        let mut c0 = PlasticCircuit::new(&g, 0).unwrap();
+        let cost0 = train_trace_phase(
+            &mut c0,
+            &g,
+            &task.a_train,
+            &task.valence_a,
+            (4, 6),
+            0,
+            false,
+        )
+        .unwrap();
+        assert_eq!(cost0.weights_changed + cost0.scalars_emitted, 0);
+    }
+
+    #[test]
+    fn grid_is_deterministic_and_csv_complete() {
+        let a = run_traces(None, &shape(), &spec(), &[1, 2], &DEFAULT_DELAYS).unwrap();
+        let b = run_traces(None, &shape(), &spec(), &[1, 2], &DEFAULT_DELAYS).unwrap();
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 2 * (1 + 3 * 4));
+        let csv = to_csv(&a, "GENERATED_SYNTHETIC");
+        assert_eq!(csv, to_csv(&b, "GENERATED_SYNTHETIC"));
+        assert_eq!(csv.lines().count(), 1 + a.len());
+        assert!(csv.contains(",global-delay-1,1,trace-react,"));
+        assert!(csv.contains(",per-target-clean,0,reward-clean-per-target-ref,"));
+        let cmp = preregistered_comparisons(&a, &DEFAULT_DELAYS);
+        assert_eq!(cmp.len(), 3 * 6);
+        assert!(cmp.iter().all(|c| c.n == 2));
+        let self_cmp = compare(&a, 0, TraceArm::Control, TraceArm::Control);
+        assert!(self_cmp.gen.delta.mean.abs() < 1e-12);
+        assert!(reaches_control(&self_cmp));
+        assert!(run_traces(None, &shape(), &spec(), &[], &DEFAULT_DELAYS).is_err());
+        assert_eq!(verdict_label(Verdict::Beats), "x_beats_y");
+    }
+
+    #[test]
+    fn checkpoint_between_a_and_b_resumes_bit_exactly() -> io::Result<()> {
+        let (g, task) = setup(7);
+        let mut cont = PlasticCircuit::new(&g, 1)?;
+        train_trace_phase(
+            &mut cont,
+            &g,
+            &task.a_train,
+            &task.valence_a,
+            (4, 7),
+            1,
+            true,
+        )?;
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| bad("clock"))?
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("v888-et-{}-{nonce}.v888pls", std::process::id()));
+        cont.save(&path)?;
+        let mut resumed = PlasticCircuit::load(&path, &g)?;
+        std::fs::remove_file(&path)?;
+        let b = (4, 7 ^ 0xB0B0_B0B0);
+        let c1 = train_trace_phase(&mut cont, &g, &task.b_train, &task.valence_b, b, 1, true)?;
+        let c2 = train_trace_phase(&mut resumed, &g, &task.b_train, &task.valence_b, b, 1, true)?;
+        assert_eq!(c1, c2);
+        assert_eq!(cont.weights(), resumed.weights());
+        Ok(())
     }
 }

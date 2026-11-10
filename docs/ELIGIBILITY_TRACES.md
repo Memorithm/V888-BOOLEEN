@@ -98,6 +98,102 @@ the results.
 cargo +1.89 run --release -- bench-eligibility-traces --csv results/eligibility-traces-v1.csv
 ```
 
-## Results
+## Results (pre-registered grid; CSV `results/eligibility-traces-v1.csv`)
 
-_Not run yet at the time this protocol was committed._
+CSV: 130 rows (10 seeds × (1 clean reference + 3 conditions × 4 arms)),
+sha256 `58d1eb83cffb6c771e1f10e3ca08d81eb6283f2c4898ceb65f717da0f27edb89`; a
+second run gave a byte-identical CSV and identical stdout. Run time ≈ 1.5 s
+(release, CPU). `topology_unchanged=true` for every row. The clean per-target
+reference reproduces #34 (A test 0.870±0.039, forgetting 0.142, B 0.716) and
+the `reward-modulated` rows of `global` / `global-delay-1` reproduce the #34
+`global` / `global-delayed-no-trace-1` rows (0.559, 0.502; bit-identity of
+the code path is also tested). Mean ± sample sd over 10 seeds.
+
+| condition | arm | A train | A test | forgetting | B test | updates (A+B) | weights changed (A+B) | reactivations |
+|---|---|---|---|---|---|---|---|---|
+| per-target clean | #34 reward (reference) | 0.945 | 0.870±0.039 | 0.142 | 0.716 | 2724.0 | 1978.9 | 0 |
+| any | supervised control | 0.945 | 0.870±0.039 | 0.253 | 0.803 | 512.0 | 2198.1 | 0 |
+| global (d = 0) | #34 reward | 0.547 | 0.559±0.030 | 0.030 | 0.531 | 476.3 | 467.8 | 0 |
+| global (d = 0) | trace | 0.582 | 0.588±0.031 | 0.026 | 0.548 | 425.8 | 390.6 | 0 |
+| global (d = 0) | trace-react | 0.628 | 0.603±0.039 | 0.038 | 0.569 | 819.8 | 862.1 | 121.4 |
+| previous episode (d = 1) | #34 reward | 0.501 | 0.502±0.032 | 0.000 | 0.508 | 244.3 | 280.6 | 0 |
+| previous episode (d = 1) | trace | 0.564 | 0.570±0.036 | 0.011 | 0.540 | 369.2 | 338.2 | 0 |
+| previous episode (d = 1) | trace-react | 0.595 | 0.580±0.048 | 0.031 | 0.576 | 804.7 | 851.9 | 134.8 |
+| delayed (d = 4) | #34 reward | 0.517 | 0.523±0.041 | 0.020 | 0.503 | 230.7 | 262.4 | 0 |
+| delayed (d = 4) | trace | 0.536 | 0.548±0.032 | 0.007 | 0.534 | 363.6 | 327.3 | 0 |
+| delayed (d = 4) | trace-react | 0.556 | 0.554±0.041 | 0.009 | 0.587 | 782.2 | 821.6 | 125.3 |
+
+Pre-registered paired comparisons on A-test balanced accuracy (b/t/w =
+better/tie/worse seeds; verdict = #27 rule, margin 0.05, ≥ 8/10 seeds):
+
+| condition | x vs y | Δ A test | b/t/w | verdict | reaches control? |
+|---|---|---|---|---|---|
+| global | trace vs #34 reward | +0.030±0.020 | 10/0/0 | no clear difference | — |
+| global | trace-react vs #34 reward | +0.045±0.045 | 9/0/1 | no clear difference | — |
+| global | trace-react vs trace | +0.015±0.043 | 8/0/2 | no clear difference | — |
+| global | trace vs control | −0.282±0.040 | 0/0/10 | worse | no |
+| global | trace-react vs control | −0.267±0.047 | 0/0/10 | worse | no |
+| d = 1 | trace vs #34 reward | +0.068±0.042 | 9/0/1 | **x beats y (rescue)** | — |
+| d = 1 | trace-react vs #34 reward | +0.078±0.071 | 9/0/1 | **x beats y (rescue)** | — |
+| d = 1 | trace-react vs trace | +0.009±0.048 | 7/0/3 | no clear difference | — |
+| d = 1 | trace vs control | −0.300±0.036 | 0/0/10 | worse | no |
+| d = 1 | trace-react vs control | −0.290±0.051 | 0/0/10 | worse | no |
+| d = 4 | trace vs #34 reward | +0.025±0.027 | 8/0/2 | no clear difference | — |
+| d = 4 | trace-react vs #34 reward | +0.030±0.043 | 7/0/3 | no clear difference | — |
+| d = 4 | trace-react vs trace | +0.005±0.035 | 7/0/3 | no clear difference | — |
+| d = 4 | trace vs control | −0.322±0.036 | 0/0/10 | worse | no |
+| d = 4 | trace-react vs control | −0.316±0.021 | 0/0/10 | worse | no |
+
+No forgetting verdict passes: every trace arm forgets much less than the
+control (+0.215 to +0.246, 10/10) but with B test 0.216–0.269 lower (B guard
+fails), i.e. it learned little; versus the #34 reward arm forgetting
+differences are −0.031 to +0.013 (no clear difference).
+
+Instrumentation (mean per seed, A+B, from the CSV): scalars emitted /
+consumed — trace: global 338.2 / 338.2, d = 1 314.1 / 312.8, d = 4 295.0 /
+290.9; trace-react: 465.7 / 465.7, 467.1 / 465.1, 459.7 / 452.6 (out of 512
+episodes: in the rest no reached target fired, so no scalar exists). Trace
+steps up / down — trace: 171.7 / 218.9 (global), 136.9 / 201.3 (d = 1),
+129.7 / 197.6 (d = 4); trace-react: 300.7 / 440.0, 283.2 / 433.9, 272.6 /
+423.7.
+
+## Findings, including negative ones
+
+* **The remedy does not fix scalar credit assignment.** Under the
+  pre-registered constants, eligibility traces + reward-prediction error
+  stay 0.28–0.32 below the supervised control in every condition (10/10
+  seeds worse). Best A test is 0.603 (trace-react, global) vs 0.870.
+* **Partial rescue only for the previous-episode scalar** (d = 1): +0.068
+  (trace) and +0.078 (trace-react) over the #34 arm, 9/10 seeds — the #34
+  arm is at chance (0.502) there because it applies credit to the wrong
+  episode's eligibility; the trace keeps the right episode tagged. Lifting
+  it from chance to 0.570–0.580 passes the rescue rule but is still far from
+  useful.
+* **Scalar per episode (d = 0) and delay 4: no rescue by the pre-stated
+  rule.** Gains of +0.025 to +0.045 are consistent in sign (7–10/10 seeds)
+  but below the 0.05 margin. At d = 4 the target episode's tag (4) is weaker
+  than the tags of the 4 later episodes (5–8), so most credit lands on the
+  wrong episodes; only RPE averaging separates them.
+* **Silence is still the bottleneck.** Even with reactivation, trace steps
+  are mostly downward (1.3–1.6 down per up) and 9–42 % of episodes yield no
+  scalar at all. Reactivation (≈ 121–135 per seed) raises A train
+  (0.582 → 0.628 at d = 0) but its A-test effect over plain trace
+  (+0.005 to +0.015) is below the margin: **reactivation does not help by
+  the pre-stated rule.**
+* The binary "all predicted spikes right" scalar carries very little
+  information when several targets fire per episode; the remedy cannot
+  create information the signal does not carry. This is the main negative
+  result: on this task, a per-target signal (or a teacher) is required for
+  useful learning; the remedy recovers only a small part of the gap.
+* Constants were not tuned; a tuned variant might do better, but any such
+  run would be a new pre-registered cycle, not a reading of this one.
+
+## Caveats
+
+Synthetic, small (144 edges), bipartite generated graph (no recurrence),
+artificial OR-rule labels, threshold 1, init weight 1, 10 seeds, one set of
+a-priori constants, trace state phase-local (reset between A and B), ≤ d
+in-flight scalars dropped per phase (as for the #34 arm). After the first
+run, the `steps_up` counter was redefined to exclude reactivations (which
+have their own column); this changed no metric and the CSV above is from the
+final code. Not evidence about BANC or biology.
