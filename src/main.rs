@@ -10,6 +10,7 @@ use v888_booleen::consolidation::{
     Scenario, ALL_STRATEGIES,
 };
 use v888_booleen::consolidation_scale as scale;
+use v888_booleen::eligibility_trace as et;
 use v888_booleen::engine::BooleanEngine;
 use v888_booleen::full_synapse::{pack_records, FullSynapseReader};
 use v888_booleen::generalization_bench as genbench;
@@ -127,6 +128,7 @@ fn help() {
     println!("  bench-consolidation-scale [--seeds 1,2,..] [--sources 64] [--targets 24] [--fan-in 6] [--conflict-pcts 0,50,100] [--rounds-a 8] [--rounds-b 8] [--variants 2,8,1000,1000:1,1000:2] [--csv out.csv]  (GENERATED synthetic graph, many overlapping edges)");
     println!("  bench-generalization [--graph brain.v888b] [--seeds 1,..,10] [--inits 0,1] [--sources 64] [--targets 24] [--fan-in 6] [--active 4] [--train-patterns 32] [--test-patterns 64] [--rounds-a 8] [--rounds-b 8] [--positive-pct 50] [--flip-pct 50] [--csv out.csv]  (held-out generalisation + A-then-B forgetting vs supervised control; GENERATED synthetic graph by default)");
     println!("  bench-reward-limits [--graph brain.v888b] [--seeds 1,..,10] [--init 1] [--csv out.csv]  (reward-modulated under reward noise / sparse reward / credit assignment vs matched supervised control; same task and defaults as bench-generalization; GENERATED synthetic graph by default)");
+    println!("  bench-eligibility-traces [--graph brain.v888b] [--seeds 1,..,10] [--init 1] [--csv out.csv]  (eligibility trace + reward-prediction error remedy for scalar / delayed credit vs #34 reward arm and supervised control; GENERATED synthetic graph by default)");
     println!("  train-plasticity --graph brain.v888b --episodes labeled.csv --output weights.v888pls [--epochs 1]");
     println!("  score-plasticity --graph brain.v888b --weights weights.v888pls --episodes labeled.csv [--threshold 1]");
     println!("  run-plasticity --graph brain.v888b --weights weights.v888pls --seed ID[,ID] [--threshold 1]");
@@ -724,6 +726,154 @@ fn main() -> Result<(), Box<dyn Error>> {
                 );
             }
             println!("test_edges_unseen_in_a_mean={unseen:.3} ab_label_agreement_mean={agree:.3} topology_unchanged={}", rows.iter().all(|r| r.topology_unchanged));
+            println!("evaluation_scope=synthetic_or_unverified_graph_artificial_labels_not_BANC_not_biological");
+        }
+        Some("bench-eligibility-traces") => {
+            let allowed = ["--graph", "--seeds", "--init", "--csv"];
+            for flag in args.iter().skip(1).filter(|arg| arg.starts_with("--")) {
+                if !allowed.contains(&flag.as_str()) {
+                    return Err(format!("unknown bench-eligibility-traces option: {flag}").into());
+                }
+            }
+            let seeds = optional(&args, "--seeds")
+                .unwrap_or("1,2,3,4,5,6,7,8,9,10")
+                .split(',')
+                .map(str::parse::<u64>)
+                .collect::<Result<Vec<_>, _>>()?;
+            let init = optional(&args, "--init").unwrap_or("1").parse::<u8>()?;
+            let shape = genbench::GraphShape {
+                sources: 64,
+                targets: 24,
+                fan_in: 6,
+            };
+            let spec = genbench::GenSpec {
+                active: 4,
+                train_patterns: 32,
+                test_patterns: 64,
+                rounds_a: 8,
+                rounds_b: 8,
+                positive_pct: 50,
+                flip_pct: 50,
+                init_weight: init,
+            };
+            let owned = match optional(&args, "--graph") {
+                Some(path) => Some(Connectome::load(Path::new(path))?),
+                None => None,
+            };
+            let graph_label = if owned.is_some() {
+                "PROVIDED_GRAPH"
+            } else {
+                "GENERATED_SYNTHETIC"
+            };
+            let delays = et::DEFAULT_DELAYS;
+            let rows = et::run_traces(owned.as_ref(), &shape, &spec, &seeds, &delays)?;
+            if let Some(path) = optional(&args, "--csv") {
+                use std::io::Write;
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)?
+                    .write_all(et::to_csv(&rows, graph_label).as_bytes())?;
+            }
+            println!("v888_eligibility_traces_schema=b888-4-eligibility-traces-v1");
+            if owned.is_some() {
+                println!("graph=PROVIDED_GRAPH (task labels artificial)");
+            } else {
+                println!("graph=GENERATED_SYNTHETIC sources=64 targets=24 fan_in=6 (not BANC; real BANC V888 graph DOI 10.7910/DVN/7WTH1N not available here)");
+            }
+            println!(
+                "seeds={} init={init} active=4 train_patterns=32 test_patterns=64 rounds_a=8 rounds_b=8 flip_pct=50 threshold=1 metric=balanced_accuracy tag={} baseline_init={} baseline_rate=1/{} step_threshold={} clamp={} reactivate_after={}",
+                seeds.len(),
+                et::TAG,
+                et::BASELINE_INIT,
+                et::BASELINE_RATE,
+                et::STEP_THRESHOLD,
+                et::CREDIT_CLAMP,
+                et::REACTIVATE_AFTER
+            );
+            let fmt = |s: genbench::Spread| format!("{:.3}±{:.3}", s.mean, s.sd);
+            let mean = |arm: et::TraceArm, d: u32, f: &dyn Fn(&et::TraceRow) -> f64| {
+                let v: Vec<f64> = rows
+                    .iter()
+                    .filter(|r| {
+                        r.arm == arm && (arm == et::TraceArm::RewardCleanReference || r.delay == d)
+                    })
+                    .map(f)
+                    .collect();
+                genbench::spread(&v)
+            };
+            println!("arm_summary: condition,arm,a_train,a_test,forgetting,b_test,updates(A+B),weights_changed(A+B),reactivations(A+B)");
+            let mut groups = vec![(
+                "per-target-clean".to_string(),
+                0,
+                et::TraceArm::RewardCleanReference,
+            )];
+            for &d in &delays {
+                for arm in [
+                    et::TraceArm::Control,
+                    et::TraceArm::Reward,
+                    et::TraceArm::Trace,
+                    et::TraceArm::TraceReact,
+                ] {
+                    groups.push((et::delay_label(d), d, arm));
+                }
+            }
+            for (label, d, arm) in groups {
+                println!(
+                    "{label},{},{},{},{},{},{:.1},{:.1},{:.1}",
+                    arm.as_label(),
+                    fmt(mean(arm, d, &|r| r.a_train_after_a.balanced())),
+                    fmt(mean(arm, d, &|r| r.a_test_after_a.balanced())),
+                    fmt(mean(arm, d, &|r| r.forgetting())),
+                    fmt(mean(arm, d, &|r| r.b_test_after_b.balanced())),
+                    mean(arm, d, &|r| (r.cost_a.update_calls + r.cost_b.update_calls)
+                        as f64)
+                    .mean,
+                    mean(
+                        arm,
+                        d,
+                        &|r| (r.cost_a.weights_changed + r.cost_b.weights_changed) as f64
+                    )
+                    .mean,
+                    mean(
+                        arm,
+                        d,
+                        &|r| (r.cost_a.reactivations + r.cost_b.reactivations) as f64
+                    )
+                    .mean,
+                );
+            }
+            println!("comparison: condition,x,y,n,x_a_test,y_a_test,d_gen,gen_b/t/w,gen_verdict,d_forget(+=x_less),forget_b/t/w,d_b,forget_verdict,x_reaches_control");
+            for c in et::preregistered_comparisons(&rows, &delays) {
+                println!(
+                    "{},{},{},{},{},{},{:+.3}±{:.3},{}/{}/{},{},{:+.3}±{:.3},{}/{}/{},{:+.3}±{:.3},{},{}",
+                    et::delay_label(c.delay),
+                    c.x.as_label(),
+                    c.y.as_label(),
+                    c.n,
+                    fmt(c.x_a_test),
+                    fmt(c.y_a_test),
+                    c.gen.delta.mean,
+                    c.gen.delta.sd,
+                    c.gen.better,
+                    c.gen.ties,
+                    c.gen.worse,
+                    et::verdict_label(c.gen_verdict),
+                    c.forget.delta.mean,
+                    c.forget.delta.sd,
+                    c.forget.better,
+                    c.forget.ties,
+                    c.forget.worse,
+                    c.b.mean,
+                    c.b.sd,
+                    et::verdict_label(c.forget_verdict),
+                    if c.y == et::TraceArm::Control { et::reaches_control(&c).to_string() } else { "n/a".to_string() },
+                );
+            }
+            println!(
+                "topology_unchanged={}",
+                rows.iter().all(|r| r.topology_unchanged)
+            );
             println!("evaluation_scope=synthetic_or_unverified_graph_artificial_labels_not_BANC_not_biological");
         }
         Some("bench-reward-limits") => {

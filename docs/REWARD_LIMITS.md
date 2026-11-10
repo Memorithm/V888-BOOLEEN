@@ -133,3 +133,8 @@ interactions), per-seed spread only (no confidence intervals). "Equal budget"
 means equal episodes and identical episode order; the reward arm makes more
 update *calls* (one per fired target) but changes fewer weights. Not evidence
 about BANC or biology.
+
+Follow-up: a pre-registered eligibility-trace + reward-prediction-error
+remedy for the credit-assignment failure is tested in
+[ELIGIBILITY_TRACES.md](ELIGIBILITY_TRACES.md) (partial rescue at d = 1 only;
+still far below the supervised control).
