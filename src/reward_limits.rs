@@ -453,7 +453,11 @@ pub fn run_limit_arm(
     })
 }
 
-fn graph_for(graph: Option<&Connectome>, shape: &GraphShape, seed: u64) -> io::Result<Connectome> {
+pub(crate) fn graph_for(
+    graph: Option<&Connectome>,
+    shape: &GraphShape,
+    seed: u64,
+) -> io::Result<Connectome> {
     match graph {
         Some(g) => Ok(g.clone()),
         None => Ok(generate_graph(
