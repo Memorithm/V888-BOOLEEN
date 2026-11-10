@@ -135,6 +135,33 @@ impl Subcircuit {
         Ok(true)
     }
 
+    /// Count observed activations for each explicitly selected member, in sorted index order.
+    /// Counts are empirical snapshot frequencies, not learned weights or anatomy.
+    /// Memory is bounded by circuit membership, independently of history length.
+    pub fn member_activation_counts(
+        &self,
+        snapshots: &[BooleanState],
+    ) -> Result<Vec<(usize, usize)>, RecallError> {
+        if snapshots.is_empty() {
+            return Err(RecallError::EmptyHistory);
+        }
+        if snapshots
+            .iter()
+            .any(|state| state.len() != self.universe_len)
+        {
+            return Err(RecallError::LengthMismatch);
+        }
+        let mut counts = Vec::with_capacity(self.members.len());
+        for &member in &self.members {
+            let count = snapshots
+                .iter()
+                .filter(|snapshot| snapshot.get(member) == Some(true))
+                .count();
+            counts.push((member, count));
+        }
+        Ok(counts)
+    }
+
     /// Materialize recalled members as a packed BooleanState, with no invented edges.
     pub fn select(&self, state: &BooleanState) -> Result<BooleanState, RecallError> {
         if state.len() != self.universe_len {
@@ -234,6 +261,29 @@ mod tests {
         );
         assert_eq!(
             circuit.recall_latest_streak(&[BooleanState::new(2)], 1, 1),
+            Err(RecallError::LengthMismatch)
+        );
+    }
+
+    #[test]
+    fn member_activation_counts_preserve_explicit_membership_and_zeroes() {
+        let circuit = Subcircuit::new(5, vec![4, 1, 3]).unwrap();
+        let mut first = BooleanState::new(5);
+        first.set(1, true).unwrap();
+        first.set(2, true).unwrap();
+        let mut second = BooleanState::new(5);
+        second.set(1, true).unwrap();
+        second.set(4, true).unwrap();
+        assert_eq!(
+            circuit.member_activation_counts(&[first, second]),
+            Ok(vec![(1, 2), (3, 0), (4, 1)])
+        );
+        assert_eq!(
+            circuit.member_activation_counts(&[]),
+            Err(RecallError::EmptyHistory)
+        );
+        assert_eq!(
+            circuit.member_activation_counts(&[BooleanState::new(4)]),
             Err(RecallError::LengthMismatch)
         );
     }
