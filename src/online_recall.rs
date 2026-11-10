@@ -200,6 +200,42 @@ impl OnlineRecall {
         Ok(candidates.into_iter().map(|(region, _, _)| region).collect())
     }
 
+    /// Construct a bounded recall circuit from the most inactive annotated region.
+    /// This is an experimental recovery candidate, not an anatomical subgraph:
+    /// members are selected by observed inactivity and no edges are inferred.
+    /// Ties between regions and members are resolved by ascending identifiers.
+    pub fn select_inactive_region_subcircuit(
+        &self,
+        annotations: &[Option<u32>],
+        minimum_inactive_percent: u8,
+        minimum_members: usize,
+        maximum_members: usize,
+    ) -> Result<Subcircuit, RecallError> {
+        if maximum_members == 0 {
+            return Err(RecallError::ZeroBudget);
+        }
+        let region = self
+            .select_inactive_regions(annotations, minimum_inactive_percent, minimum_members, 1)?
+            .into_iter()
+            .next()
+            .ok_or(RecallError::EmptyCircuit)?;
+        let mut members: Vec<(usize, u64)> = self
+            .circuit
+            .members()
+            .iter()
+            .copied()
+            .zip(self.counts.iter().copied())
+            .filter(|(member, _)| annotations[*member] == Some(region))
+            .collect();
+        // Fewest observed activations first; deterministic index tie-break.
+        members.sort_unstable_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+        members.truncate(maximum_members);
+        Subcircuit::new(
+            self.circuit.universe_len(),
+            members.into_iter().map(|(member, _)| member).collect(),
+        )
+    }
+
     /// Build a recallable circuit from the most active explicitly annotated region.
     /// Candidate members must each have at least `minimum_member_ticks` activations.
     /// Region rank uses summed activity, then ascending region ID; members use
@@ -678,6 +714,27 @@ mod tests {
             Err(RecallError::LengthMismatch)
         );
         assert_eq!(tracker.ticks(), 1);
+    }
+
+    #[test]
+    fn inactive_region_subcircuit_prefers_quiet_members_without_edges() {
+        let mut tracker = OnlineRecall::new(Subcircuit::new(5, vec![0, 1, 2, 3]).unwrap());
+        let labels = [Some(8), Some(8), Some(8), Some(3), None];
+        let mut state = BooleanState::new(5);
+        state.set(0, true).unwrap();
+        state.set(3, true).unwrap();
+        tracker.observe(&state, 1).unwrap();
+        let selected = tracker.select_inactive_region_subcircuit(&labels, 50, 2, 2).unwrap();
+        assert_eq!(selected.members(), &[1, 2]);
+        assert_eq!(tracker.ticks(), 1);
+        assert_eq!(
+            tracker.select_inactive_region_subcircuit(&labels, 100, 2, 2),
+            Err(RecallError::EmptyCircuit)
+        );
+        assert_eq!(
+            tracker.select_inactive_region_subcircuit(&labels[..4], 50, 2, 2),
+            Err(RecallError::LengthMismatch)
+        );
     }
 
     #[test]
