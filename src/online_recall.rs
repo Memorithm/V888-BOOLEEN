@@ -63,6 +63,31 @@ impl OnlineRecall {
         Ok(matches)
     }
 
+    /// Aggregate streaming activation counts by caller-provided region labels.
+    /// Only selected and explicitly annotated members contribute; no anatomical
+    /// classification is inferred. u128 prevents overflow when summing counters.
+    /// Returns (region_id, observed_activations, selected_members), sorted by ID.
+    pub fn regional_activity_totals(
+        &self,
+        annotations: &[Option<u32>],
+    ) -> Result<Vec<(u32, u128, usize)>, RecallError> {
+        if annotations.len() != self.circuit.universe_len() {
+            return Err(RecallError::LengthMismatch);
+        }
+        let mut totals = std::collections::BTreeMap::<u32, (u128, usize)>::new();
+        for (&member, &count) in self.circuit.members().iter().zip(&self.counts) {
+            if let Some(region) = annotations[member] {
+                let entry = totals.entry(region).or_default();
+                entry.0 += u128::from(count);
+                entry.1 += 1;
+            }
+        }
+        Ok(totals
+            .into_iter()
+            .map(|(region, (activations, members))| (region, activations, members))
+            .collect())
+    }
+
     #[must_use]
     pub fn ticks(&self) -> u64 {
         self.ticks
@@ -110,6 +135,35 @@ mod tests {
             tracker.member_counts().collect::<Vec<_>>(),
             vec![(1, 3), (3, 0), (4, 3)]
         );
+    }
+
+    #[test]
+    fn region_totals_stream_without_anatomical_inference() {
+        let circuit = Subcircuit::new(5, vec![0, 1, 3, 4]).unwrap();
+        let mut tracker = OnlineRecall::new(circuit);
+        let labels = [Some(9), Some(2), Some(2), Some(9), None];
+        assert_eq!(
+            tracker.regional_activity_totals(&labels),
+            Ok(vec![(2, 0, 1), (9, 0, 2)])
+        );
+        let mut first = BooleanState::new(5);
+        first.set(0, true).unwrap();
+        first.set(1, true).unwrap();
+        first.set(2, true).unwrap();
+        tracker.observe(&first, 1).unwrap();
+        let mut second = BooleanState::new(5);
+        second.set(3, true).unwrap();
+        second.set(4, true).unwrap();
+        tracker.observe(&second, 1).unwrap();
+        assert_eq!(
+            tracker.regional_activity_totals(&labels),
+            Ok(vec![(2, 1, 1), (9, 2, 2)])
+        );
+        assert_eq!(
+            tracker.regional_activity_totals(&labels[..4]),
+            Err(RecallError::LengthMismatch)
+        );
+        assert_eq!(tracker.ticks(), 2);
     }
 
     #[test]

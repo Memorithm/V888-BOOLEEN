@@ -38,6 +38,11 @@ impl Subcircuit {
     }
 
     #[must_use]
+    pub fn universe_len(&self) -> usize {
+        self.universe_len
+    }
+
+    #[must_use]
     pub fn members(&self) -> &[usize] {
         &self.members
     }
