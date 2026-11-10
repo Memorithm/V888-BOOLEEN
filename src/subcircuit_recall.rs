@@ -155,7 +155,7 @@ impl Subcircuit {
         for &member in &self.members {
             let count = snapshots
                 .iter()
-                .filter(|snapshot| snapshot.get(member) == Some(true))
+                .filter(|snapshot| snapshot.get(member) == Ok(true))
                 .count();
             counts.push((member, count));
         }
