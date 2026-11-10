@@ -25,6 +25,10 @@ cargo run -- bench-strategies --seed 1 --rounds 8
 cargo run -- bench-strategies --graph brain.v888b --seed 1 --rounds 8
 ```
 
+## Généralisation et oubli à budget égal (multi-graines)
+
+Voir [GENERALIZATION_FORGETTING.md](GENERALIZATION_FORGETTING.md) : `bench-generalization` compare les trois règles au témoin supervisé sur des motifs multi-sources tenus à l'écart et un protocole A puis B, sur 10 graines, avec moyenne, écart-type et verdict préenregistré. **Graphe synthétique généré uniquement** (le graphe BANC réel n'est pas disponible). Résultat principal négatif : aucune règle ne généralise mieux que le témoin ; la règle modulée par récompense oublie moins mais apprend moins bien B.
+
 ## Attributions
 
 Les données anatomiques BANC V888 restent attribuées selon [SOURCES.md](SOURCES.md) : Bates, A. S., Phelps, J. S., Kim, M. et collaborateurs (2026), *Distributed control circuits across a brain-and-cord connectome*, Nature, https://doi.org/10.1038/s41586-026-10735-w ; consortium BANC/FlyWire, jeu BANC v888, https://doi.org/10.7910/DVN/7WTH1N ; documentation https://github.com/htem/BANC-project. Ce dépôt n'inclut pas les fichiers sources.
