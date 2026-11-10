@@ -2,6 +2,7 @@ pub mod activity_atlas;
 pub mod activity_guided;
 pub mod circuit_explorer;
 pub mod connectome;
+pub mod consolidated_graded;
 pub mod consolidation;
 pub mod consolidation_scale;
 pub mod eligibility_trace;

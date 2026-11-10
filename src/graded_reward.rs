@@ -153,6 +153,7 @@ impl GradedState {
         circuit: &mut PlasticCircuit,
         sigs: &[(usize, i32)],
         elig: &dyn Fn(usize, &[u8]) -> i32,
+        allow: &mut dyn FnMut(usize) -> bool,
     ) -> io::Result<(u64, u64, u64)> {
         let mut rpe: Vec<Option<i32>> = vec![None; self.baseline.len()];
         for &(g, v) in sigs {
@@ -175,6 +176,9 @@ impl GradedState {
                 let reinforce = c > 0;
                 self.credit[edge] = c - c.signum() * STEP_THRESHOLD;
                 attempted += 1;
+                if !allow(edge) {
+                    continue;
+                }
                 if circuit.apply_edge_step(edge, reinforce)? {
                     if reinforce {
                         up += 1;
@@ -203,6 +207,28 @@ pub fn train_graded_phase(
     delay: u32,
     stamped: bool,
 ) -> io::Result<GradedCost> {
+    let (rounds, order_seed) = budget;
+    let items: Vec<(&[usize], &[bool])> = episode_order(patterns.len(), rounds, order_seed)
+        .into_iter()
+        .map(|idx| (patterns[idx].as_slice(), valence))
+        .collect();
+    train_graded_stream(circuit, graph, &items, grain, delay, stamped, &mut |_| true)
+}
+
+/// Like [`train_graded_phase`] but over an explicit episode stream of
+/// (pattern, valence) items, with `allow(edge)` asked before each attempted
+/// step (threshold crossing). A refused step consumes its credit and does
+/// not change the weight. With `allow = |_| true` and the phase's own order
+/// this is exactly [`train_graded_phase`].
+pub(crate) fn train_graded_stream(
+    circuit: &mut PlasticCircuit,
+    graph: &Connectome,
+    items: &[(&[usize], &[bool])],
+    grain: Grain,
+    delay: u32,
+    stamped: bool,
+    allow: &mut dyn FnMut(usize) -> bool,
+) -> io::Result<GradedCost> {
     if delay > 1024 || circuit.weights().len() != graph.edges() {
         return Err(bad("invalid graded phase"));
     }
@@ -229,15 +255,14 @@ pub fn train_graded_phase(
         baseline: vec![BASELINE_INIT; groups],
         edge_group,
     };
-    let (rounds, order_seed) = budget;
     let mut cost = GradedCost::default();
     let mut past: VecDeque<(Signals, Vec<usize>)> = VecDeque::new();
-    for idx in episode_order(patterns.len(), rounds, order_seed) {
+    for &(pattern, valence) in items {
         cost.trace.episodes += 1;
         for e in &mut st.trace {
             *e = e.saturating_sub(1);
         }
-        let (input, reached, teacher) = encode(graph, &patterns[idx], valence)?;
+        let (input, reached, teacher) = encode(graph, pattern, valence)?;
         let prediction = circuit.predict(graph, &input, 1)?;
         let mut firing = Vec::new();
         for &t in &reached {
@@ -280,15 +305,20 @@ pub fn train_graded_phase(
                 for &e in &tagged {
                     mark[e] = true;
                 }
-                st.consume(circuit, &sigs, &|edge, _| {
-                    if mark[edge] {
-                        i32::from(TAG)
-                    } else {
-                        0
-                    }
-                })?
+                st.consume(
+                    circuit,
+                    &sigs,
+                    &|edge, _| {
+                        if mark[edge] {
+                            i32::from(TAG)
+                        } else {
+                            0
+                        }
+                    },
+                    allow,
+                )?
             } else {
-                st.consume(circuit, &sigs, &|edge, tr| i32::from(tr[edge]))?
+                st.consume(circuit, &sigs, &|edge, tr| i32::from(tr[edge]), allow)?
             };
             cost.trace.update_calls += a;
             cost.trace.steps_up += u;
@@ -767,7 +797,9 @@ mod tests {
         };
         let mut c = PlasticCircuit::new(&g, 1).unwrap();
         let (a, _, _) = st
-            .consume(&mut c, &[(0, 1024)], &|e, tr| i32::from(tr[e]))
+            .consume(&mut c, &[(0, 1024)], &|e, tr| i32::from(tr[e]), &mut |_| {
+                true
+            })
             .unwrap();
         assert_eq!(a, 0);
         for (e, &grp) in edge_group.iter().enumerate() {

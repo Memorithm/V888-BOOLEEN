@@ -5,6 +5,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 use v888_booleen::circuit_explorer::{ActivityReport, CircuitExplorer, RegionLabels, Routing};
 use v888_booleen::connectome::Connectome;
+use v888_booleen::consolidated_graded as cg;
 use v888_booleen::consolidation::{
     matrix as consolidation_matrix, sweep as consolidation_sweep, to_csv as consolidation_csv,
     Scenario, ALL_STRATEGIES,
@@ -130,6 +131,7 @@ fn help() {
     println!("  bench-generalization [--graph brain.v888b] [--seeds 1,..,10] [--inits 0,1] [--sources 64] [--targets 24] [--fan-in 6] [--active 4] [--train-patterns 32] [--test-patterns 64] [--rounds-a 8] [--rounds-b 8] [--positive-pct 50] [--flip-pct 50] [--csv out.csv]  (held-out generalisation + A-then-B forgetting vs supervised control; GENERATED synthetic graph by default)");
     println!("  bench-reward-limits [--graph brain.v888b] [--seeds 1,..,10] [--init 1] [--csv out.csv]  (reward-modulated under reward noise / sparse reward / credit assignment vs matched supervised control; same task and defaults as bench-generalization; GENERATED synthetic graph by default)");
     println!("  bench-eligibility-traces [--graph brain.v888b] [--seeds 1,..,10] [--init 1] [--csv out.csv]  (eligibility trace + reward-prediction error remedy for scalar / delayed credit vs #34 reward arm and supervised control; GENERATED synthetic graph by default)");
+    println!("  bench-consolidated-graded [--graph brain.v888b] [--seeds 1,..,10] [--init 1] [--csv out.csv]  (consolidation 1-of-4 + bounded 1-in-8 A rehearsal on supervised control, trace-group-8, trace-per-target; equal budget; GENERATED synthetic graph by default)");
     println!("  bench-graded-reward [--graph brain.v888b] [--seeds 1,..,10] [--init 1] [--csv out.csv]  (graded reward ladder bit/fraction/group-k/per-target through the #36 trace + episode-stamped tags for delayed scalars; GENERATED synthetic graph by default)");
     println!("  train-plasticity --graph brain.v888b --episodes labeled.csv --output weights.v888pls [--epochs 1]");
     println!("  score-plasticity --graph brain.v888b --weights weights.v888pls --episodes labeled.csv [--threshold 1]");
@@ -872,6 +874,132 @@ fn main() -> Result<(), Box<dyn Error>> {
                     if c.y == et::TraceArm::Control { et::reaches_control(&c).to_string() } else { "n/a".to_string() },
                 );
             }
+            println!(
+                "topology_unchanged={}",
+                rows.iter().all(|r| r.topology_unchanged)
+            );
+            println!("evaluation_scope=synthetic_or_unverified_graph_artificial_labels_not_BANC_not_biological");
+        }
+        Some("bench-consolidated-graded") => {
+            let allowed = ["--graph", "--seeds", "--init", "--csv"];
+            for flag in args.iter().skip(1).filter(|arg| arg.starts_with("--")) {
+                if !allowed.contains(&flag.as_str()) {
+                    return Err(format!("unknown bench-consolidated-graded option: {flag}").into());
+                }
+            }
+            let seeds = optional(&args, "--seeds")
+                .unwrap_or("1,2,3,4,5,6,7,8,9,10")
+                .split(',')
+                .map(str::parse::<u64>)
+                .collect::<Result<Vec<_>, _>>()?;
+            let init = optional(&args, "--init").unwrap_or("1").parse::<u8>()?;
+            let shape = genbench::GraphShape {
+                sources: 64,
+                targets: 24,
+                fan_in: 6,
+            };
+            let spec = genbench::GenSpec {
+                active: 4,
+                train_patterns: 32,
+                test_patterns: 64,
+                rounds_a: 8,
+                rounds_b: 8,
+                positive_pct: 50,
+                flip_pct: 50,
+                init_weight: init,
+            };
+            let owned = match optional(&args, "--graph") {
+                Some(path) => Some(Connectome::load(Path::new(path))?),
+                None => None,
+            };
+            let graph_label = if owned.is_some() {
+                "PROVIDED_GRAPH"
+            } else {
+                "GENERATED_SYNTHETIC"
+            };
+            let rows = cg::run_grid(owned.as_ref(), &shape, &spec, &seeds)?;
+            if let Some(path) = optional(&args, "--csv") {
+                use std::io::Write;
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)?
+                    .write_all(cg::to_csv(&rows, graph_label).as_bytes())?;
+            }
+            println!("v888_consolidated_graded_schema=b888-4-consolidated-graded-v1");
+            if owned.is_some() {
+                println!("graph=PROVIDED_GRAPH (task labels artificial)");
+            } else {
+                println!("graph=GENERATED_SYNTHETIC sources=64 targets=24 fan_in=6 (not BANC; real BANC V888 graph DOI 10.7910/DVN/7WTH1N not available here)");
+            }
+            println!(
+                "seeds={} init={init} active=4 train_patterns=32 test_patterns=64 rounds_a=8 rounds_b=8 flip_pct=50 threshold=1 metric=balanced_accuracy protect_period={} rehearsal_period={}",
+                seeds.len(),
+                cg::PROTECT_PERIOD,
+                cg::REHEARSAL_PERIOD,
+            );
+            let fmt = |s: genbench::Spread| format!("{:.3}±{:.3}", s.mean, s.sd);
+            let stat = |l: cg::Learner, m: cg::Mechanism, f: &dyn Fn(&cg::Row) -> f64| {
+                let v: Vec<f64> = rows
+                    .iter()
+                    .filter(|r| r.learner == l && r.mechanism == m)
+                    .map(f)
+                    .collect();
+                genbench::spread(&v)
+            };
+            println!("arm_summary: learner,mechanism,a_train,a_test_after_a,a_test_after_b,forgetting,b_test,protected_edges,b_rehearsal_episodes,weights_changed(A+B),b_protected_attempts,b_blocked");
+            for l in cg::LEARNERS {
+                for m in cg::MECHANISMS {
+                    println!(
+                        "{},{},{},{},{},{},{},{:.1},{:.1},{:.1},{:.1},{:.1}",
+                        l.label(),
+                        m.label(),
+                        fmt(stat(l, m, &|r| r.a_train_after_a.balanced())),
+                        fmt(stat(l, m, &|r| r.a_test_after_a.balanced())),
+                        fmt(stat(l, m, &|r| r.a_test_after_b.balanced())),
+                        fmt(stat(l, m, &cg::Row::forgetting)),
+                        fmt(stat(l, m, &|r| r.b_test_after_b.balanced())),
+                        stat(l, m, &|r| r.protected_edges as f64).mean,
+                        stat(l, m, &|r| r.cost_b.rehearsal_episodes as f64).mean,
+                        stat(
+                            l,
+                            m,
+                            &|r| (r.cost_a.weights_changed + r.cost_b.weights_changed) as f64
+                        )
+                        .mean,
+                        stat(l, m, &|r| r.cost_b.protected_attempts as f64).mean,
+                        stat(l, m, &|r| r.cost_b.blocked as f64).mean,
+                    );
+                }
+            }
+            println!("comparison: x_learner,x_mech,y_learner,y_mech,n,d_a_test,d_forget(+=x_less),forget_b/t/w,d_retained_a,d_b,passes_rule,tradeoff_vs_control");
+            for c in cg::preregistered_comparisons(&rows) {
+                println!(
+                    "{},{},{},{},{},{:+.3}±{:.3},{:+.3}±{:.3},{}/{}/{},{:+.3}±{:.3},{:+.3}±{:.3},{},{}",
+                    c.x.0.label(),
+                    c.x.1.label(),
+                    c.y.0.label(),
+                    c.y.1.label(),
+                    c.n,
+                    c.a_test.mean,
+                    c.a_test.sd,
+                    c.forget.delta.mean,
+                    c.forget.delta.sd,
+                    c.forget.better,
+                    c.forget.ties,
+                    c.forget.worse,
+                    c.retained.mean,
+                    c.retained.sd,
+                    c.b.mean,
+                    c.b.sd,
+                    if c.y.0 == c.x.0 { c.passes().to_string() } else { "n/a".to_string() },
+                    if c.y == (cg::Learner::Control, cg::Mechanism::None) && c.x.0 != cg::Learner::Control { cg::beats_control_tradeoff(&c).to_string() } else { "n/a".to_string() },
+                );
+            }
+            let (h1, h2, h3) = cg::readings(&rows);
+            println!("H1_consolidation_passes_both_graded={h1}");
+            println!("H2_rehearsal_passes_both_graded={h2}");
+            println!("H3_tradeoff_broken_vs_control={h3}");
             println!(
                 "topology_unchanged={}",
                 rows.iter().all(|r| r.topology_unchanged)
