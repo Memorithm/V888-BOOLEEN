@@ -14,6 +14,7 @@ use v888_booleen::eligibility_trace as et;
 use v888_booleen::engine::BooleanEngine;
 use v888_booleen::full_synapse::{pack_records, FullSynapseReader};
 use v888_booleen::generalization_bench as genbench;
+use v888_booleen::graded_reward as gr;
 use v888_booleen::learning_bench::benchmark;
 use v888_booleen::learning_strategies::compare_strategies;
 use v888_booleen::plasticity::PlasticCircuit;
@@ -129,6 +130,7 @@ fn help() {
     println!("  bench-generalization [--graph brain.v888b] [--seeds 1,..,10] [--inits 0,1] [--sources 64] [--targets 24] [--fan-in 6] [--active 4] [--train-patterns 32] [--test-patterns 64] [--rounds-a 8] [--rounds-b 8] [--positive-pct 50] [--flip-pct 50] [--csv out.csv]  (held-out generalisation + A-then-B forgetting vs supervised control; GENERATED synthetic graph by default)");
     println!("  bench-reward-limits [--graph brain.v888b] [--seeds 1,..,10] [--init 1] [--csv out.csv]  (reward-modulated under reward noise / sparse reward / credit assignment vs matched supervised control; same task and defaults as bench-generalization; GENERATED synthetic graph by default)");
     println!("  bench-eligibility-traces [--graph brain.v888b] [--seeds 1,..,10] [--init 1] [--csv out.csv]  (eligibility trace + reward-prediction error remedy for scalar / delayed credit vs #34 reward arm and supervised control; GENERATED synthetic graph by default)");
+    println!("  bench-graded-reward [--graph brain.v888b] [--seeds 1,..,10] [--init 1] [--csv out.csv]  (graded reward ladder bit/fraction/group-k/per-target through the #36 trace + episode-stamped tags for delayed scalars; GENERATED synthetic graph by default)");
     println!("  train-plasticity --graph brain.v888b --episodes labeled.csv --output weights.v888pls [--epochs 1]");
     println!("  score-plasticity --graph brain.v888b --weights weights.v888pls --episodes labeled.csv [--threshold 1]");
     println!("  run-plasticity --graph brain.v888b --weights weights.v888pls --seed ID[,ID] [--threshold 1]");
@@ -870,6 +872,155 @@ fn main() -> Result<(), Box<dyn Error>> {
                     if c.y == et::TraceArm::Control { et::reaches_control(&c).to_string() } else { "n/a".to_string() },
                 );
             }
+            println!(
+                "topology_unchanged={}",
+                rows.iter().all(|r| r.topology_unchanged)
+            );
+            println!("evaluation_scope=synthetic_or_unverified_graph_artificial_labels_not_BANC_not_biological");
+        }
+        Some("bench-graded-reward") => {
+            let allowed = ["--graph", "--seeds", "--init", "--csv"];
+            for flag in args.iter().skip(1).filter(|arg| arg.starts_with("--")) {
+                if !allowed.contains(&flag.as_str()) {
+                    return Err(format!("unknown bench-graded-reward option: {flag}").into());
+                }
+            }
+            let seeds = optional(&args, "--seeds")
+                .unwrap_or("1,2,3,4,5,6,7,8,9,10")
+                .split(',')
+                .map(str::parse::<u64>)
+                .collect::<Result<Vec<_>, _>>()?;
+            let init = optional(&args, "--init").unwrap_or("1").parse::<u8>()?;
+            let shape = genbench::GraphShape {
+                sources: 64,
+                targets: 24,
+                fan_in: 6,
+            };
+            let spec = genbench::GenSpec {
+                active: 4,
+                train_patterns: 32,
+                test_patterns: 64,
+                rounds_a: 8,
+                rounds_b: 8,
+                positive_pct: 50,
+                flip_pct: 50,
+                init_weight: init,
+            };
+            let owned = match optional(&args, "--graph") {
+                Some(path) => Some(Connectome::load(Path::new(path))?),
+                None => None,
+            };
+            let graph_label = if owned.is_some() {
+                "PROVIDED_GRAPH"
+            } else {
+                "GENERATED_SYNTHETIC"
+            };
+            let rows = gr::run_graded(owned.as_ref(), &shape, &spec, &seeds)?;
+            if let Some(path) = optional(&args, "--csv") {
+                use std::io::Write;
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)?
+                    .write_all(gr::to_csv(&rows, graph_label).as_bytes())?;
+            }
+            println!("v888_graded_reward_schema=b888-4-graded-reward-v1");
+            if owned.is_some() {
+                println!("graph=PROVIDED_GRAPH (task labels artificial)");
+            } else {
+                println!("graph=GENERATED_SYNTHETIC sources=64 targets=24 fan_in=6 (not BANC; real BANC V888 graph DOI 10.7910/DVN/7WTH1N not available here)");
+            }
+            println!(
+                "seeds={} init={init} active=4 train_patterns=32 test_patterns=64 rounds_a=8 rounds_b=8 flip_pct=50 threshold=1 metric=balanced_accuracy tag={} baseline_init={} baseline_rate=1/{} step_threshold={} clamp={}",
+                seeds.len(),
+                et::TAG,
+                et::BASELINE_INIT,
+                et::BASELINE_RATE,
+                et::STEP_THRESHOLD,
+                et::CREDIT_CLAMP,
+            );
+            let fmt = |s: genbench::Spread| format!("{:.3}±{:.3}", s.mean, s.sd);
+            let stat = |arm: gr::GradedArm, d: u32, f: &dyn Fn(&gr::GradedRow) -> f64| {
+                let v: Vec<f64> = rows
+                    .iter()
+                    .filter(|r| r.arm == arm && r.delay == d)
+                    .map(f)
+                    .collect();
+                genbench::spread(&v)
+            };
+            println!("arm_summary: arm,delay,a_train,a_test,forgetting,b_test,signals_per_episode,bits_per_episode,episodes_with_signal(A+B),weights_changed(A+B),steps_up(A+B),steps_down(A+B)");
+            for (arm, d) in gr::preregistered_arms() {
+                println!(
+                    "{},{d},{},{},{},{},{:.3},{:.3},{:.1},{:.1},{:.1},{:.1}",
+                    arm.label(),
+                    fmt(stat(arm, d, &|r| r.a_train_after_a.balanced())),
+                    fmt(stat(arm, d, &|r| r.a_test_after_a.balanced())),
+                    fmt(stat(arm, d, &|r| r.forgetting())),
+                    fmt(stat(arm, d, &|r| r.b_test_after_b.balanced())),
+                    stat(arm, d, &gr::GradedRow::signals_per_episode).mean,
+                    stat(arm, d, &gr::GradedRow::bits_per_episode).mean,
+                    stat(arm, d, &|r| (r.cost_a.episodes_with_signal
+                        + r.cost_b.episodes_with_signal)
+                        as f64)
+                    .mean,
+                    stat(arm, d, &|r| (r.cost_a.trace.weights_changed
+                        + r.cost_b.trace.weights_changed)
+                        as f64)
+                    .mean,
+                    stat(
+                        arm,
+                        d,
+                        &|r| (r.cost_a.trace.steps_up + r.cost_b.trace.steps_up) as f64
+                    )
+                    .mean,
+                    stat(
+                        arm,
+                        d,
+                        &|r| (r.cost_a.trace.steps_down + r.cost_b.trace.steps_down) as f64
+                    )
+                    .mean,
+                );
+            }
+            println!("comparison: x,dx,y,dy,n,x_a_test,y_a_test,d_gen,gen_b/t/w,gen_verdict,d_forget(+=x_less),forget_b/t/w,d_b,forget_verdict,x_reaches_control");
+            for c in gr::preregistered_comparisons(&rows) {
+                println!(
+                    "{},{},{},{},{},{},{},{:+.3}±{:.3},{}/{}/{},{},{:+.3}±{:.3},{}/{}/{},{:+.3}±{:.3},{},{}",
+                    c.x.0.label(),
+                    c.x.1,
+                    c.y.0.label(),
+                    c.y.1,
+                    c.n,
+                    fmt(c.x_a_test),
+                    fmt(c.y_a_test),
+                    c.gen.delta.mean,
+                    c.gen.delta.sd,
+                    c.gen.better,
+                    c.gen.ties,
+                    c.gen.worse,
+                    et::verdict_label(c.gen_verdict),
+                    c.forget.delta.mean,
+                    c.forget.delta.sd,
+                    c.forget.better,
+                    c.forget.ties,
+                    c.forget.worse,
+                    c.b.mean,
+                    c.b.sd,
+                    et::verdict_label(c.forget_verdict),
+                    if c.y == (gr::GradedArm::Reference(et::TraceArm::Control), 0) { gr::reaches_control(&c).to_string() } else { "n/a".to_string() },
+                );
+            }
+            let chain: Vec<String> = gr::CHAIN
+                .iter()
+                .map(|&g| {
+                    format!(
+                        "{}={:.3}",
+                        g.label(),
+                        gr::mean_a_test(&rows, gr::GradedArm::Ladder(g), 0)
+                    )
+                })
+                .collect();
+            println!("h1_chain_a_test: {}", chain.join(" "));
+            println!("h1_reading={:?}", gr::read_h1(&rows));
             println!(
                 "topology_unchanged={}",
                 rows.iter().all(|r| r.topology_unchanged)

@@ -9,6 +9,7 @@ pub mod engine;
 pub mod full_synapse;
 pub mod gates;
 pub mod generalization_bench;
+pub mod graded_reward;
 pub mod learning_bench;
 pub mod learning_strategies;
 pub mod nt_gates;
