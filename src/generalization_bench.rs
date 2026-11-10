@@ -242,7 +242,7 @@ pub fn build_task(graph: &Connectome, spec: &GenSpec, seed: u64) -> io::Result<T
 }
 
 /// Input bitmap, the list of reached targets and the teacher bitmap.
-fn encode(
+pub(crate) fn encode(
     graph: &Connectome,
     pattern: &[usize],
     valence: &[bool],
@@ -280,7 +280,7 @@ pub struct PhaseCost {
     pub weights_changed: u64,
 }
 
-fn episode_order(patterns: usize, rounds: u32, seed: u64) -> Vec<usize> {
+pub(crate) fn episode_order(patterns: usize, rounds: u32, seed: u64) -> Vec<usize> {
     let mut order: Vec<usize> = (0..rounds).flat_map(|_| 0..patterns).collect();
     crate::learning_strategies::shuffle_with_seed(&mut order, seed);
     order
@@ -671,10 +671,10 @@ pub struct ArmSummary {
     pub forgetting_verdict: Verdict,
 }
 
-const MARGIN: f64 = 0.05;
+pub(crate) const MARGIN: f64 = 0.05;
 const EPS: f64 = 1e-12;
 
-fn paired(deltas: &[f64]) -> Paired {
+pub(crate) fn paired(deltas: &[f64]) -> Paired {
     Paired {
         delta: spread(deltas),
         better: deltas.iter().filter(|&&d| d > EPS).count(),
@@ -683,7 +683,7 @@ fn paired(deltas: &[f64]) -> Paired {
     }
 }
 
-fn verdict(p: &Paired, n: usize, extra_ok: bool) -> Verdict {
+pub(crate) fn verdict(p: &Paired, n: usize, extra_ok: bool) -> Verdict {
     if p.delta.mean >= MARGIN && (p.better as f64) >= 0.8 * n as f64 && extra_ok {
         Verdict::Beats
     } else if p.delta.mean <= -MARGIN {
