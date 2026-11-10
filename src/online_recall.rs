@@ -99,6 +99,23 @@ impl OnlineRecall {
             .collect())
     }
 
+    /// Exact regional activation occupancy: (region, active_member_ticks, possible_member_ticks).
+    /// The denominator includes all observed ticks for every explicitly annotated
+    /// selected member, including inactive observations. No floating-point rounding
+    /// or anatomical inference is performed.
+    pub fn regional_occupancy(
+        &self,
+        annotations: &[Option<u32>],
+    ) -> Result<Vec<(u32, u128, u128)>, RecallError> {
+        let totals = self.regional_activity_totals(annotations)?;
+        Ok(totals
+            .into_iter()
+            .map(|(region, active, members)| {
+                (region, active, (self.ticks as u128) * (members as u128))
+            })
+            .collect())
+    }
+
     #[must_use]
     pub fn ticks(&self) -> u64 {
         self.ticks
@@ -214,6 +231,24 @@ mod tests {
             tracker.regional_activity_totals(&[Some(4), Some(4), Some(8)]),
             Ok(vec![(4, 2, 2), (8, 1, 1)])
         );
+    }
+
+    #[test]
+    fn regional_occupancy_counts_inactive_ticks_and_unannotated_members() {
+        let mut tracker = OnlineRecall::new(Subcircuit::new(4, vec![0, 1, 3]).unwrap());
+        let labels = [Some(7), Some(7), Some(9), None];
+        assert_eq!(tracker.regional_occupancy(&labels), Ok(vec![(7, 0, 0)]));
+        let mut first = BooleanState::new(4);
+        first.set(0, true).unwrap();
+        first.set(3, true).unwrap();
+        tracker.observe(&first, 1).unwrap();
+        tracker.observe(&BooleanState::new(4), 1).unwrap();
+        assert_eq!(tracker.regional_occupancy(&labels), Ok(vec![(7, 1, 4)]));
+        assert_eq!(
+            tracker.regional_occupancy(&labels[..3]),
+            Err(RecallError::LengthMismatch)
+        );
+        assert_eq!(tracker.ticks(), 2);
     }
 
     #[test]
