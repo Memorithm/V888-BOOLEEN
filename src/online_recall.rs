@@ -168,6 +168,38 @@ impl OnlineRecall {
         })
     }
 
+    /// Select annotated regions whose observed inactive fraction meets a percentage.
+    /// Requires sampled ticks; no inference is made for unobserved regions.
+    /// Returns region IDs in ascending order, bounded by maximum_regions.
+    pub fn select_inactive_regions(
+        &self,
+        annotations: &[Option<u32>],
+        minimum_inactive_percent: u8,
+        minimum_members: usize,
+        maximum_regions: usize,
+    ) -> Result<Vec<u32>, RecallError> {
+        if self.ticks == 0
+            || minimum_inactive_percent > 100
+            || minimum_members == 0
+            || maximum_regions == 0
+        {
+            return Err(RecallError::ZeroBudget);
+        }
+        let mut selected = Vec::new();
+        for (region, inactive, possible) in self.regional_inactive_member_ticks(annotations)? {
+            let members = possible / u128::from(self.ticks);
+            if members >= minimum_members as u128
+                && inactive * 100 >= possible * u128::from(minimum_inactive_percent)
+            {
+                selected.push(region);
+                if selected.len() == maximum_regions {
+                    break;
+                }
+            }
+        }
+        Ok(selected)
+    }
+
     /// Build a recallable circuit from the most active explicitly annotated region.
     /// Candidate members must each have at least `minimum_member_ticks` activations.
     /// Region rank uses summed activity, then ascending region ID; members use
@@ -611,6 +643,28 @@ mod tests {
             tracker.regional_occupancy(&[None, Some(7), Some(7)]),
             Ok(vec![(7, 2, 6)])
         );
+    }
+
+    #[test]
+    fn inactive_region_selection_uses_only_observed_annotated_members() {
+        let mut tracker = OnlineRecall::new(Subcircuit::new(4, vec![0, 1, 2, 3]).unwrap());
+        let annotations = [Some(7), Some(7), Some(3), None];
+        assert_eq!(
+            tracker.select_inactive_regions(&annotations, 50, 1, 2),
+            Err(RecallError::ZeroBudget)
+        );
+        let mut state = BooleanState::new(4);
+        state.set(0, true).unwrap();
+        tracker.observe(&state, 1).unwrap();
+        assert_eq!(tracker.select_inactive_regions(&annotations, 50, 1, 2), Ok(vec![3, 7]));
+        assert_eq!(tracker.select_inactive_regions(&annotations, 100, 1, 2), Ok(vec![3]));
+        assert_eq!(tracker.select_inactive_regions(&annotations, 50, 2, 2), Ok(vec![7]));
+        assert_eq!(tracker.select_inactive_regions(&annotations, 50, 1, 1), Ok(vec![3]));
+        assert_eq!(
+            tracker.select_inactive_regions(&annotations[..3], 50, 1, 2),
+            Err(RecallError::LengthMismatch)
+        );
+        assert_eq!(tracker.ticks(), 1);
     }
 
     #[test]
