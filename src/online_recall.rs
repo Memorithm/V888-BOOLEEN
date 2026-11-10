@@ -63,6 +63,17 @@ impl OnlineRecall {
         Ok(matches)
     }
 
+    /// Observe the current state of the actual BooleanEngine, without copying a snapshot.
+    /// The caller controls when the engine is stimulated or stepped. This is
+    /// experimental activation tracking, not a biological firing measurement.
+    pub fn observe_engine_state(
+        &mut self,
+        engine: &crate::engine::BooleanEngine,
+        minimum_active: usize,
+    ) -> Result<bool, RecallError> {
+        self.observe(&engine.active, minimum_active)
+    }
+
     /// Aggregate streaming activation counts by caller-provided region labels.
     /// Only selected and explicitly annotated members contribute; no anatomical
     /// classification is inferred. u128 prevents overflow when summing counters.
@@ -164,6 +175,45 @@ mod tests {
             Err(RecallError::LengthMismatch)
         );
         assert_eq!(tracker.ticks(), 2);
+    }
+
+    #[test]
+    fn observes_actual_engine_steps_without_retaining_snapshots() {
+        use crate::connectome::Connectome;
+        use crate::engine::BooleanEngine;
+
+        // Synthetic directed chain 10 -> 20 -> 30. No biological claims.
+        let graph = Connectome {
+            ids: vec![10, 20, 30],
+            offsets: vec![0, 1, 2, 2],
+            targets: vec![1, 2],
+            counts: vec![1, 1],
+        };
+        let mut engine = BooleanEngine::new(&graph, 1).unwrap();
+        let mut tracker = OnlineRecall::new(Subcircuit::new(3, vec![0, 1, 2]).unwrap());
+        engine.stimulate(&graph, 10).unwrap();
+        assert_eq!(tracker.observe_engine_state(&engine, 1), Ok(true));
+        assert_eq!(
+            tracker.member_counts().collect::<Vec<_>>(),
+            vec![(0, 1), (1, 0), (2, 0)]
+        );
+        engine.step(&graph).unwrap();
+        assert_eq!(tracker.observe_engine_state(&engine, 1), Ok(true));
+        engine.step(&graph).unwrap();
+        assert_eq!(tracker.observe_engine_state(&engine, 1), Ok(true));
+        engine.step(&graph).unwrap();
+        assert_eq!(tracker.observe_engine_state(&engine, 1), Ok(false));
+        assert_eq!(tracker.ticks(), 4);
+        assert_eq!(tracker.latest_streak(), 0);
+        assert_eq!(tracker.longest_streak(), 3);
+        assert_eq!(
+            tracker.member_counts().collect::<Vec<_>>(),
+            vec![(0, 1), (1, 1), (2, 1)]
+        );
+        assert_eq!(
+            tracker.regional_activity_totals(&[Some(4), Some(4), Some(8)]),
+            Ok(vec![(4, 2, 2), (8, 1, 1)])
+        );
     }
 
     #[test]
