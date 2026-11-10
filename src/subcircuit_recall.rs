@@ -202,6 +202,33 @@ impl Subcircuit {
         Ok(counts)
     }
 
+    /// Count active circuit members per explicitly annotated region.
+    /// Unannotated members are omitted; no anatomical region is inferred.
+    /// Returns sorted (region_id, active_members, total_members) records.
+    pub fn activation_by_annotated_region(
+        &self,
+        state: &BooleanState,
+        annotations: &[Option<u32>],
+    ) -> Result<Vec<(u32, usize, usize)>, RecallError> {
+        if state.len() != self.universe_len || annotations.len() != self.universe_len {
+            return Err(RecallError::LengthMismatch);
+        }
+        let mut counts = std::collections::BTreeMap::<u32, (usize, usize)>::new();
+        for &member in &self.members {
+            if let Some(region) = annotations[member] {
+                let entry = counts.entry(region).or_default();
+                entry.1 += 1;
+                if state.get(member) == Ok(true) {
+                    entry.0 += 1;
+                }
+            }
+        }
+        Ok(counts
+            .into_iter()
+            .map(|(region, (active, total))| (region, active, total))
+            .collect())
+    }
+
     /// Materialize recalled members as a packed BooleanState, with no invented edges.
     pub fn select(&self, state: &BooleanState) -> Result<BooleanState, RecallError> {
         if state.len() != self.universe_len {
@@ -353,6 +380,32 @@ mod tests {
         assert_eq!(
             circuit.member_activation_counts(&[BooleanState::new(4)]),
             Err(RecallError::LengthMismatch)
+        );
+    }
+
+    #[test]
+    fn regional_recall_counts_only_explicitly_annotated_members() {
+        let circuit = Subcircuit::new(6, vec![5, 0, 2, 3]).unwrap();
+        let mut state = BooleanState::new(6);
+        state.set(0, true).unwrap();
+        state.set(3, true).unwrap();
+        state.set(4, true).unwrap();
+        let labels = [Some(8), None, Some(8), Some(2), Some(2), None];
+        assert_eq!(
+            circuit.activation_by_annotated_region(&state, &labels),
+            Ok(vec![(2, 1, 1), (8, 1, 2)])
+        );
+        assert_eq!(
+            circuit.activation_by_annotated_region(&state, &labels[..5]),
+            Err(RecallError::LengthMismatch)
+        );
+        assert_eq!(
+            circuit.activation_by_annotated_region(&BooleanState::new(5), &labels),
+            Err(RecallError::LengthMismatch)
+        );
+        assert_eq!(
+            circuit.activation_by_annotated_region(&state, &[None; 6]),
+            Ok(vec![])
         );
     }
 
