@@ -188,6 +188,38 @@ impl OnlineRecall {
             .collect())
     }
 
+    /// Rank explicitly annotated regions with low historical occupancy for targeted
+    /// experimental reactivation. A region is eligible when its exact activity
+    /// fraction is at most max_active_percent/100 (inclusive). Zero observations
+    /// are rejected: no silence can be inferred without a sampled tick.
+    /// Returns region IDs ordered by lowest occupancy, then ascending region ID.
+    pub fn select_quiet_regions(
+        &self,
+        annotations: &[Option<u32>],
+        max_active_percent: u8,
+        minimum_members: usize,
+        maximum_regions: usize,
+    ) -> Result<Vec<u32>, RecallError> {
+        if minimum_members == 0 || maximum_regions == 0 || max_active_percent > 100 {
+            return Err(RecallError::ZeroBudget);
+        }
+        if self.ticks == 0 {
+            return Err(RecallError::ZeroBudget);
+        }
+        let mut candidates = self.regional_occupancy(annotations)?;
+        candidates.retain(|(_, active, possible)| {
+            *possible >= (self.ticks as u128) * (minimum_members as u128)
+                && *active * 100 <= *possible * u128::from(max_active_percent)
+        });
+        // Compare rational occupancies without floating point. Each region's
+        // denominator is ticks * member_count, so compare per-member activity.
+        candidates.sort_unstable_by(|a, b| {
+            (a.1 * b.2).cmp(&(b.1 * a.2)).then_with(|| a.0.cmp(&b.0))
+        });
+        candidates.truncate(maximum_regions);
+        Ok(candidates.into_iter().map(|(region, _, _)| region).collect())
+    }
+
     /// Atomically observe one simulated state and select the most active annotated regions.
     /// Invalid annotations or budgets must not consume an observation tick.
     /// The returned match describes the current circuit recall, while region ranking
@@ -442,6 +474,27 @@ mod tests {
             tracker.observe_and_select_regions(&BooleanState::new(4), 2, &labels, 2, 1, 2),
             Ok((false, vec![]))
         );
+        assert_eq!(tracker.ticks(), 2);
+    }
+
+    #[test]
+    fn quiet_region_selection_is_bounded_and_annotation_only() {
+        let mut tracker = OnlineRecall::new(Subcircuit::new(5, vec![0, 1, 2, 3, 4]).unwrap());
+        let labels = [Some(8), Some(8), Some(3), Some(3), None];
+        assert_eq!(tracker.select_quiet_regions(&labels, 50, 1, 2), Err(RecallError::ZeroBudget));
+        let mut state = BooleanState::new(5);
+        state.set(0, true).unwrap();
+        state.set(1, true).unwrap();
+        state.set(2, true).unwrap();
+        tracker.observe(&state, 1).unwrap();
+        tracker.observe(&BooleanState::new(5), 1).unwrap();
+        // Region 3: 1/4; region 8: 2/4; unannotated index 4 excluded.
+        assert_eq!(tracker.select_quiet_regions(&labels, 50, 2, 2), Ok(vec![3, 8]));
+        assert_eq!(tracker.select_quiet_regions(&labels, 25, 2, 2), Ok(vec![3]));
+        assert_eq!(tracker.select_quiet_regions(&labels, 0, 2, 2), Ok(vec![]));
+        assert_eq!(tracker.select_quiet_regions(&labels, 100, 2, 1), Ok(vec![3]));
+        assert_eq!(tracker.select_quiet_regions(&labels[..4], 50, 2, 2), Err(RecallError::LengthMismatch));
+        assert_eq!(tracker.select_quiet_regions(&labels, 101, 2, 2), Err(RecallError::ZeroBudget));
         assert_eq!(tracker.ticks(), 2);
     }
 
