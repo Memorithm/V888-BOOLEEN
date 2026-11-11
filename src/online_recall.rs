@@ -297,6 +297,50 @@ impl OnlineRecall {
         Ok(None)
     }
 
+    /// First confirmation of sustained recovery for a historically selected inactive
+    /// region. The candidate is frozen before future states are inspected. A recovery
+    /// requires `consecutive` matching states; the returned zero-based index is the
+    /// confirmation tick, not the beginning of the streak. None means right-censored.
+    /// This read-only measurement makes no anatomical or learning claim.
+    pub fn first_durable_inactive_region_recovery(
+        &self,
+        states: &[BooleanState],
+        annotations: &[Option<u32>],
+        minimum_inactive_percent: u8,
+        minimum_members: usize,
+        maximum_members: usize,
+        minimum_active: usize,
+        consecutive: usize,
+    ) -> Result<Option<usize>, RecallError> {
+        if states.is_empty() || states.len() > 1000 || consecutive == 0
+            || consecutive > states.len() || minimum_active == 0
+        {
+            return Err(RecallError::ZeroBudget);
+        }
+        let selected = self.select_inactive_region_subcircuit(
+            annotations,
+            minimum_inactive_percent,
+            minimum_members,
+            maximum_members,
+        )?;
+        // Validate all dimensions and thresholds, including after an early match.
+        for state in states {
+            selected.recall(state, minimum_active)?;
+        }
+        let mut streak = 0usize;
+        for (index, state) in states.iter().enumerate() {
+            if selected.recall(state, minimum_active)? {
+                streak += 1;
+                if streak == consecutive {
+                    return Ok(Some(index));
+                }
+            } else {
+                streak = 0;
+            }
+        }
+        Ok(None)
+    }
+
     /// Build a recallable circuit from the most active explicitly annotated region.
     /// Candidate members must each have at least `minimum_member_ticks` activations.
     /// Region rank uses summed activity, then ascending region ID; members use
@@ -829,6 +873,27 @@ mod tests {
             tracker.recall_inactive_region(&live, &labels[..3], 100, 2, 2, 1),
             Err(RecallError::LengthMismatch)
         );
+        assert_eq!(tracker.ticks(), 1);
+    }
+
+    #[test]
+    fn durable_inactive_recovery_requires_consecutive_matches() {
+        let mut tracker = OnlineRecall::new(Subcircuit::new(3, vec![0, 1, 2]).unwrap());
+        let labels = [Some(4), Some(4), Some(9)];
+        tracker.observe(&BooleanState::new(3), 1).unwrap();
+        let mut active = BooleanState::new(3);
+        active.set(0, true).unwrap();
+        active.set(1, true).unwrap();
+        let quiet = BooleanState::new(3);
+        let states = [active.clone(), quiet, active.clone(), active.clone()];
+        assert_eq!(tracker.first_durable_inactive_region_recovery(
+            &states, &labels, 100, 2, 2, 2, 2), Ok(Some(3)));
+        assert_eq!(tracker.first_durable_inactive_region_recovery(
+            &states[..3], &labels, 100, 2, 2, 2, 2), Ok(None));
+        assert_eq!(tracker.first_durable_inactive_region_recovery(
+            &states, &labels, 100, 2, 2, 2, 0), Err(RecallError::ZeroBudget));
+        assert_eq!(tracker.first_durable_inactive_region_recovery(
+            &states, &labels[..2], 100, 2, 2, 2, 2), Err(RecallError::LengthMismatch));
         assert_eq!(tracker.ticks(), 1);
     }
 
