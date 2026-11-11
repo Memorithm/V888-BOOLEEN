@@ -536,6 +536,68 @@ impl OnlineRecall {
         Ok(counts)
     }
 
+    /// Per-trial paired durable recovery latency for two historically frozen regional
+    /// candidates. Each pair contains zero-based confirmation ticks; None means
+    /// right-censored at the common horizon. No trial changes selection or counters.
+    /// This preserves pairing information lost in aggregate win/loss counts.
+    pub fn paired_inactive_region_recovery_latencies(
+        &self,
+        trials: &[Vec<BooleanState>],
+        annotations: &[Option<u32>],
+        thresholds: (u8, u8),
+        minimum_members: usize,
+        maximum_members: usize,
+        minimum_active: usize,
+        consecutive: usize,
+    ) -> Result<Vec<(Option<usize>, Option<usize>)>, RecallError> {
+        if trials.is_empty() || trials.len() > 1000 {
+            return Err(RecallError::ZeroBudget);
+        }
+        let horizon = trials[0].len();
+        if horizon == 0 || horizon > 1000 || consecutive == 0 || consecutive > horizon {
+            return Err(RecallError::ZeroBudget);
+        }
+        let a = self.select_inactive_region_subcircuit(
+            annotations, thresholds.0, minimum_members, maximum_members,
+        )?;
+        let b = self.select_inactive_region_subcircuit(
+            annotations, thresholds.1, minimum_members, maximum_members,
+        )?;
+        for trial in trials {
+            if trial.len() != horizon {
+                return Err(RecallError::LengthMismatch);
+            }
+            for state in trial {
+                a.recall(state, minimum_active)?;
+                b.recall(state, minimum_active)?;
+            }
+        }
+        let mut latencies = Vec::with_capacity(trials.len());
+        for trial in trials {
+            let (mut streak_a, mut streak_b) = (0usize, 0usize);
+            let (mut hit_a, mut hit_b) = (None, None);
+            for (tick, state) in trial.iter().enumerate() {
+                if hit_a.is_none() {
+                    streak_a = if a.recall(state, minimum_active)? { streak_a + 1 } else { 0 };
+                    if streak_a == consecutive {
+                        hit_a = Some(tick);
+                    }
+                }
+                if hit_b.is_none() {
+                    streak_b = if b.recall(state, minimum_active)? { streak_b + 1 } else { 0 };
+                    if streak_b == consecutive {
+                        hit_b = Some(tick);
+                    }
+                }
+                if hit_a.is_some() && hit_b.is_some() {
+                    break;
+                }
+            }
+            latencies.push((hit_a, hit_b));
+        }
+        Ok(latencies)
+    }
+
     /// Build a recallable circuit from the most active explicitly annotated region.
     /// Candidate members must each have at least `minimum_member_ticks` activations.
     /// Region rank uses summed activity, then ascending region ID; members use
@@ -1199,6 +1261,43 @@ mod tests {
         );
         assert_eq!(
             tracker.compare_inactive_region_recovery(&trials, &labels[..3], (50, 100), 2, 2, 2, 2),
+            Err(RecallError::LengthMismatch)
+        );
+        assert_eq!(tracker.ticks(), 1);
+    }
+
+    #[test]
+    fn paired_latencies_preserve_trial_order_and_right_censoring() {
+        let mut tracker = OnlineRecall::new(Subcircuit::new(4, vec![0, 1, 2, 3]).unwrap());
+        let labels = [Some(1), Some(1), Some(2), Some(2)];
+        let mut historical = BooleanState::new(4);
+        historical.set(2, true).unwrap();
+        tracker.observe(&historical, 1).unwrap();
+        let mut active = BooleanState::new(4);
+        active.set(0, true).unwrap();
+        active.set(1, true).unwrap();
+        let quiet = BooleanState::new(4);
+        let trials = vec![
+            vec![active.clone(), active.clone(), quiet.clone()],
+            vec![quiet.clone(), quiet.clone(), quiet.clone()],
+            vec![quiet.clone(), active.clone(), active],
+        ];
+        assert_eq!(
+            tracker.paired_inactive_region_recovery_latencies(
+                &trials, &labels, (50, 100), 2, 2, 2, 2,
+            ),
+            Ok(vec![(Some(1), Some(1)), (None, None), (Some(2), Some(2))])
+        );
+        assert_eq!(
+            tracker.paired_inactive_region_recovery_latencies(
+                &trials[..2], &labels, (50, 100), 2, 2, 2, 4,
+            ),
+            Err(RecallError::ZeroBudget)
+        );
+        assert_eq!(
+            tracker.paired_inactive_region_recovery_latencies(
+                &trials, &labels[..3], (50, 100), 2, 2, 2, 2,
+            ),
             Err(RecallError::LengthMismatch)
         );
         assert_eq!(tracker.ticks(), 1);
