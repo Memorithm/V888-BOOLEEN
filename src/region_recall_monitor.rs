@@ -148,6 +148,36 @@ impl RegionRecallMonitor {
         Ok(candidates)
     }
 
+    /// Return actual selected neuron indices for the most overdue annotated regions.
+    /// The candidate set is frozen by caller-supplied annotations and past observations.
+    /// No edges are added and no future observations are consulted.
+    pub fn recall_gap_subcircuit_members(
+        &self,
+        minimum_gap: u64,
+        minimum_members: usize,
+        maximum_regions: usize,
+        maximum_members: usize,
+    ) -> Result<Vec<usize>, RegionMonitorError> {
+        if maximum_members == 0 {
+            return Err(RegionMonitorError::InvalidBudget);
+        }
+        let regions = self.recall_gap_regions(minimum_gap, minimum_members, maximum_regions)?;
+        let mut members = Vec::new();
+        for (region, _) in regions {
+            let mut indices: Vec<usize> = self.members.iter()
+                .filter_map(|&(index, label)| (label == region).then_some(index))
+                .collect();
+            indices.sort_unstable();
+            for index in indices {
+                if members.len() == maximum_members {
+                    return Ok(members);
+                }
+                members.push(index);
+            }
+        }
+        Ok(members)
+    }
+
     pub fn ticks(&self) -> u64 { self.ticks }
 
     pub fn regions(&self) -> impl Iterator<Item = &RegionRecall> {
@@ -216,6 +246,30 @@ mod tests {
         assert_eq!(monitor.recall_gap_regions(2, 2, 1).unwrap(), vec![(9, 3)]);
         assert_eq!(monitor.recall_gap_regions(0, 2, 2), Err(RegionMonitorError::InvalidBudget));
         assert_eq!(monitor.ticks(), 3);
+    }
+
+    #[test]
+    fn gap_subcircuit_members_are_bounded_and_annotated() {
+        let mut monitor = RegionRecallMonitor::new(
+            6, &[5, 3, 1, 4, 0],
+            &[Some(7), Some(9), None, Some(7), Some(9), Some(7)],
+        ).unwrap();
+        let mut state = BooleanState::new(6);
+        for index in [0, 3, 5] { state.set(index, true).unwrap(); }
+        monitor.observe(&state, 2).unwrap();
+        state.set(0, false).unwrap();
+        state.set(3, false).unwrap();
+        state.set(5, false).unwrap();
+        monitor.observe(&state, 2).unwrap();
+        assert_eq!(monitor.recall_gap_subcircuit_members(1, 2, 2, 4).unwrap(),
+            vec![1, 4, 0, 3]);
+        assert_eq!(monitor.recall_gap_subcircuit_members(1, 2, 2, 2).unwrap(),
+            vec![1, 4]);
+        assert_eq!(monitor.recall_gap_subcircuit_members(3, 2, 2, 4).unwrap(),
+            Vec::<usize>::new());
+        assert_eq!(monitor.recall_gap_subcircuit_members(1, 2, 2, 0),
+            Err(RegionMonitorError::InvalidBudget));
+        assert_eq!(monitor.ticks(), 2);
     }
 
     #[test]
