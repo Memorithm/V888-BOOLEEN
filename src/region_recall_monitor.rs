@@ -178,6 +178,51 @@ impl RegionRecallMonitor {
         Ok(members)
     }
 
+    /// Allocate a bounded recovery candidate set fairly across overdue regions.
+    /// One annotated member per region is selected per round, preventing a large
+    /// region from exhausting the entire budget before smaller regions are seen.
+    /// The region priority is fixed by observed recall gaps, never by anatomy.
+    pub fn interleaved_recall_gap_members(
+        &self,
+        minimum_gap: u64,
+        minimum_members: usize,
+        maximum_regions: usize,
+        maximum_members: usize,
+    ) -> Result<Vec<usize>, RegionMonitorError> {
+        if maximum_members == 0 {
+            return Err(RegionMonitorError::InvalidBudget);
+        }
+        let regions = self.recall_gap_regions(minimum_gap, minimum_members, maximum_regions)?;
+        let mut groups: Vec<Vec<usize>> = regions
+            .iter()
+            .map(|&(region, _)| {
+                let mut indices: Vec<usize> = self.members.iter()
+                    .filter_map(|&(index, label)| (label == region).then_some(index))
+                    .collect();
+                indices.sort_unstable();
+                indices
+            })
+            .collect();
+        let mut result = Vec::new();
+        let mut round = 0;
+        loop {
+            let mut advanced = false;
+            for group in &mut groups {
+                if let Some(&index) = group.get(round) {
+                    result.push(index);
+                    advanced = true;
+                    if result.len() == maximum_members {
+                        return Ok(result);
+                    }
+                }
+            }
+            if !advanced {
+                return Ok(result);
+            }
+            round += 1;
+        }
+    }
+
     pub fn ticks(&self) -> u64 { self.ticks }
 
     pub fn regions(&self) -> impl Iterator<Item = &RegionRecall> {
@@ -270,6 +315,26 @@ mod tests {
         assert_eq!(monitor.recall_gap_subcircuit_members(1, 2, 2, 0),
             Err(RegionMonitorError::InvalidBudget));
         assert_eq!(monitor.ticks(), 2);
+    }
+
+    #[test]
+    fn interleaved_recovery_prevents_large_region_starvation() {
+        let mut monitor = RegionRecallMonitor::new(
+            6, &[5, 4, 3, 2, 1, 0],
+            &[Some(7), Some(7), Some(7), Some(7), Some(9), Some(9)],
+        ).unwrap();
+        let state = BooleanState::new(6);
+        monitor.observe(&state, 2).unwrap();
+        assert_eq!(monitor.recall_gap_subcircuit_members(1, 2, 2, 3).unwrap(),
+            vec![0, 1, 2]);
+        assert_eq!(monitor.interleaved_recall_gap_members(1, 2, 2, 3).unwrap(),
+            vec![0, 4, 1]);
+        assert_eq!(monitor.interleaved_recall_gap_members(1, 2, 2, 6).unwrap(),
+            vec![0, 4, 1, 5, 2, 3]);
+        assert_eq!(monitor.interleaved_recall_gap_members(2, 2, 2, 3).unwrap(),
+            Vec::<usize>::new());
+        assert_eq!(monitor.interleaved_recall_gap_members(1, 2, 2, 0),
+            Err(RegionMonitorError::InvalidBudget));
     }
 
     #[test]
