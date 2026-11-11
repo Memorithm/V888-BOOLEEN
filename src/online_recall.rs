@@ -236,6 +236,31 @@ impl OnlineRecall {
         )
     }
 
+    /// Recall the most inactive annotated region against a live simulated state.
+    /// Region and member selection use only previous observations; this read-only
+    /// query does not consume a tick, stimulate the engine, or infer graph edges.
+    pub fn recall_inactive_region(
+        &self,
+        state: &BooleanState,
+        annotations: &[Option<u32>],
+        minimum_inactive_percent: u8,
+        minimum_members: usize,
+        maximum_members: usize,
+        minimum_active: usize,
+    ) -> Result<(Vec<usize>, bool), RecallError> {
+        if minimum_active == 0 || minimum_active > maximum_members {
+            return Err(RecallError::ZeroBudget);
+        }
+        let selected = self.select_inactive_region_subcircuit(
+            annotations,
+            minimum_inactive_percent,
+            minimum_members,
+            maximum_members,
+        )?;
+        let recalled = selected.recall(state, minimum_active)?;
+        Ok((selected.members().to_vec(), recalled))
+    }
+
     /// Build a recallable circuit from the most active explicitly annotated region.
     /// Candidate members must each have at least `minimum_member_ticks` activations.
     /// Region rank uses summed activity, then ascending region ID; members use
@@ -740,6 +765,35 @@ mod tests {
             tracker.select_inactive_region_subcircuit(&labels[..4], 50, 2, 2),
             Err(RecallError::LengthMismatch)
         );
+    }
+
+    #[test]
+    fn inactive_region_recall_is_read_only_and_bounded() {
+        let mut tracker = OnlineRecall::new(Subcircuit::new(4, vec![0, 1, 2]).unwrap());
+        let labels = [Some(7), Some(7), Some(3), None];
+        let mut observed = BooleanState::new(4);
+        observed.set(2, true).unwrap();
+        tracker.observe(&observed, 1).unwrap();
+        let mut live = BooleanState::new(4);
+        live.set(0, true).unwrap();
+        live.set(1, true).unwrap();
+        assert_eq!(
+            tracker.recall_inactive_region(&live, &labels, 100, 2, 2, 2),
+            Ok((vec![0, 1], true))
+        );
+        assert_eq!(
+            tracker.recall_inactive_region(&observed, &labels, 100, 2, 2, 1),
+            Ok((vec![0, 1], false))
+        );
+        assert_eq!(
+            tracker.recall_inactive_region(&live, &labels, 100, 2, 2, 3),
+            Err(RecallError::ZeroBudget)
+        );
+        assert_eq!(
+            tracker.recall_inactive_region(&live, &labels[..3], 100, 2, 2, 1),
+            Err(RecallError::LengthMismatch)
+        );
+        assert_eq!(tracker.ticks(), 1);
     }
 
     #[test]
