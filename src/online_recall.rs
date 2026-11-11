@@ -598,6 +598,47 @@ impl OnlineRecall {
         Ok(latencies)
     }
 
+    /// Choose a regional recall policy on training trials only, never held-out data.
+    /// Confirmed recovery beats censoring; earlier confirmations win.
+    /// Equal outcomes are non-decisive. Returns None on a tie or insufficient
+    /// decisive trials; the returned index is 0 or 1 in the threshold pair.
+    pub fn select_inactive_region_recovery_policy(
+        &self,
+        training_trials: &[Vec<BooleanState>],
+        annotations: &[Option<u32>],
+        thresholds: (u8, u8),
+        minimum_members: usize,
+        maximum_members: usize,
+        minimum_active: usize,
+        consecutive: usize,
+        minimum_decisive: usize,
+    ) -> Result<Option<u8>, RecallError> {
+        if minimum_decisive == 0 || minimum_decisive > training_trials.len() {
+            return Err(RecallError::ZeroBudget);
+        }
+        let paired = self.paired_inactive_region_recovery_latencies(
+            training_trials, annotations, thresholds, minimum_members,
+            maximum_members, minimum_active, consecutive,
+        )?;
+        let (mut wins_a, mut wins_b) = (0usize, 0usize);
+        for (a, b) in paired {
+            match (a, b) {
+                (Some(x), Some(y)) if x < y => wins_a += 1,
+                (Some(x), Some(y)) if y < x => wins_b += 1,
+                (Some(_), None) => wins_a += 1,
+                (None, Some(_)) => wins_b += 1,
+                _ => {}
+            }
+        }
+        if wins_a + wins_b < minimum_decisive || wins_a == wins_b {
+            Ok(None)
+        } else if wins_a > wins_b {
+            Ok(Some(0))
+        } else {
+            Ok(Some(1))
+        }
+    }
+
     /// Build a recallable circuit from the most active explicitly annotated region.
     /// Candidate members must each have at least `minimum_member_ticks` activations.
     /// Region rank uses summed activity, then ascending region ID; members use
@@ -1299,6 +1340,42 @@ mod tests {
                 &trials, &labels[..3], (50, 100), 2, 2, 2, 2,
             ),
             Err(RecallError::LengthMismatch)
+        );
+        assert_eq!(tracker.ticks(), 1);
+    }
+
+    #[test]
+    fn training_policy_rejects_ties_and_insufficient_evidence() {
+        let mut tracker = OnlineRecall::new(Subcircuit::new(4, vec![0, 1, 2, 3]).unwrap());
+        let labels = [Some(1), Some(1), Some(2), Some(2)];
+        let mut historical = BooleanState::new(4);
+        historical.set(2, true).unwrap();
+        tracker.observe(&historical, 1).unwrap();
+        let mut recovered = BooleanState::new(4);
+        recovered.set(0, true).unwrap();
+        recovered.set(1, true).unwrap();
+        let quiet = BooleanState::new(4);
+        let training = vec![
+            vec![recovered.clone(), recovered],
+            vec![quiet.clone(), quiet],
+        ];
+        assert_eq!(
+            tracker.select_inactive_region_recovery_policy(
+                &training, &labels, (50, 100), 2, 2, 2, 2, 1,
+            ),
+            Ok(None)
+        );
+        assert_eq!(
+            tracker.select_inactive_region_recovery_policy(
+                &training, &labels, (50, 100), 2, 2, 2, 2, 0,
+            ),
+            Err(RecallError::ZeroBudget)
+        );
+        assert_eq!(
+            tracker.select_inactive_region_recovery_policy(
+                &training, &labels, (50, 100), 2, 2, 2, 2, 3,
+            ),
+            Err(RecallError::ZeroBudget)
         );
         assert_eq!(tracker.ticks(), 1);
     }
