@@ -244,6 +244,37 @@ impl RegionRecallMonitor {
         Ok(mask)
     }
 
+    /// Apply a bounded, annotation-only recovery proposal to an existing state.
+    /// Already-active bits are preserved; the monitor and graph are unchanged.
+    /// Returns the number of newly activated members, not the number proposed.
+    pub fn stimulate_interleaved_recall_gap(
+        &self,
+        state: &BooleanState,
+        minimum_gap: u64,
+        minimum_members: usize,
+        maximum_regions: usize,
+        maximum_members: usize,
+    ) -> Result<(BooleanState, usize), RegionMonitorError> {
+        if state.len() != self.universe {
+            return Err(RegionMonitorError::InvalidDimensions);
+        }
+        let candidates = self.interleaved_recall_gap_members(
+            minimum_gap, minimum_members, maximum_regions, maximum_members,
+        )?;
+        let mut next = state.clone();
+        let mut activated = 0;
+        for index in candidates {
+            let was_active = next.get(index)
+                .map_err(|_| RegionMonitorError::InvalidDimensions)?;
+            if !was_active {
+                next.set(index, true)
+                    .map_err(|_| RegionMonitorError::InvalidDimensions)?;
+                activated += 1;
+            }
+        }
+        Ok((next, activated))
+    }
+
     pub fn ticks(&self) -> u64 { self.ticks }
 
     pub fn regions(&self) -> impl Iterator<Item = &RegionRecall> {
@@ -380,6 +411,35 @@ mod tests {
             Err(RegionMonitorError::InvalidBudget),
         );
         assert_eq!(monitor, before);
+    }
+
+    #[test]
+    fn stimulation_preserves_existing_bits_and_counts_new_activations() {
+        let mut monitor = RegionRecallMonitor::new(
+            6, &[0, 1, 2, 3, 4, 5],
+            &[Some(7), Some(7), Some(7), Some(7), Some(9), Some(9)],
+        ).unwrap();
+        monitor.observe(&BooleanState::new(6), 2).unwrap();
+        let before = monitor.clone();
+        let mut input = BooleanState::new(6);
+        input.set(0, true).unwrap();
+        input.set(5, true).unwrap();
+        let (output, newly_activated) = monitor
+            .stimulate_interleaved_recall_gap(&input, 1, 2, 2, 3).unwrap();
+        assert_eq!(newly_activated, 2);
+        for index in 0..6 {
+            assert_eq!(output.get(index), Ok([0, 1, 4, 5].contains(&index)));
+        }
+        assert_eq!(input.get(1), Ok(false));
+        assert_eq!(monitor, before);
+        assert_eq!(
+            monitor.stimulate_interleaved_recall_gap(&BooleanState::new(5), 1, 2, 2, 3),
+            Err(RegionMonitorError::InvalidDimensions),
+        );
+        assert_eq!(
+            monitor.stimulate_interleaved_recall_gap(&input, 1, 2, 2, 0),
+            Err(RegionMonitorError::InvalidBudget),
+        );
     }
 
     #[test]
