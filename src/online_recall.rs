@@ -682,6 +682,50 @@ impl OnlineRecall {
         Ok((wins, losses, equal, both_censored))
     }
 
+    /// Cumulative held-out policy advantage at each common observation horizon.
+    /// Returns (wins, losses, ties with recovery, jointly censored) per tick.
+    /// A recovery confirmed after a horizon remains censored at that horizon.
+    /// The selected policy is fixed by the caller; no fitting occurs here.
+    pub fn evaluate_inactive_region_policy_by_horizon(
+        &self,
+        held_out_trials: &[Vec<BooleanState>],
+        annotations: &[Option<u32>],
+        thresholds: (u8, u8),
+        minimum_members: usize,
+        maximum_members: usize,
+        minimum_active: usize,
+        consecutive: usize,
+        chosen_policy: u8,
+    ) -> Result<Vec<(usize, usize, usize, usize)>, RecallError> {
+        if chosen_policy > 1 {
+            return Err(RecallError::ZeroBudget);
+        }
+        let paired = self.paired_inactive_region_recovery_latencies(
+            held_out_trials, annotations, thresholds, minimum_members,
+            maximum_members, minimum_active, consecutive,
+        )?;
+        let horizon = held_out_trials.first().map_or(0, Vec::len);
+        let mut result = Vec::with_capacity(horizon);
+        for tick in 0..horizon {
+            let (mut wins, mut losses, mut equal, mut censored) = (0, 0, 0, 0);
+            for &(a, b) in &paired {
+                let (selected, control) = if chosen_policy == 0 { (a, b) } else { (b, a) };
+                let selected = selected.filter(|&t| t <= tick);
+                let control = control.filter(|&t| t <= tick);
+                match (selected, control) {
+                    (Some(x), Some(y)) if x < y => wins += 1,
+                    (Some(x), Some(y)) if x > y => losses += 1,
+                    (Some(_), None) => wins += 1,
+                    (None, Some(_)) => losses += 1,
+                    (Some(_), Some(_)) => equal += 1,
+                    (None, None) => censored += 1,
+                }
+            }
+            result.push((wins, losses, equal, censored));
+        }
+        Ok(result)
+    }
+
     /// Build a recallable circuit from the most active explicitly annotated region.
     /// Candidate members must each have at least `minimum_member_ticks` activations.
     /// Region rank uses summed activity, then ascending region ID; members use
@@ -834,6 +878,30 @@ impl OnlineRecall {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn held_out_policy_horizon_curve_respects_confirmation_and_censoring() {
+        let mut tracker = OnlineRecall::new(Subcircuit::new(2, vec![0, 1]).unwrap());
+        let labels = [Some(1), Some(1)];
+        let quiet = BooleanState::new(2);
+        tracker.observe(&quiet, 1).unwrap();
+        let mut active = BooleanState::new(2);
+        active.set(0, true).unwrap();
+        let trials = vec![vec![quiet.clone(), active.clone(), active.clone()]];
+        let before = tracker.member_counts().collect::<Vec<_>>();
+        let curve = tracker.evaluate_inactive_region_policy_by_horizon(
+            &trials, &labels, (100, 100), 1, 2, 1, 2, 0,
+        ).unwrap();
+        assert_eq!(curve, vec![(0, 0, 0, 1), (0, 0, 0, 1), (0, 0, 1, 0)]);
+        assert_eq!(tracker.member_counts().collect::<Vec<_>>(), before);
+        assert_eq!(tracker.ticks(), 1);
+        assert_eq!(
+            tracker.evaluate_inactive_region_policy_by_horizon(
+                &trials, &labels, (100, 100), 1, 2, 1, 2, 2,
+            ),
+            Err(RecallError::ZeroBudget)
+        );
+    }
 
     #[test]
     fn regional_inactive_ticks_count_only_annotated_selected_members() {
