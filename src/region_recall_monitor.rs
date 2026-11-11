@@ -10,6 +10,8 @@ pub struct RegionRecall {
     pub recalled_ticks: u64,
     pub current_streak: u64,
     pub longest_streak: u64,
+    /// Last observed tick with confirmed regional recall; None if never recalled.
+    pub last_recalled_tick: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,6 +51,7 @@ impl RegionRecallMonitor {
                 let entry = regions.entry(region).or_insert(RegionRecall {
                     region, members: 0, active_member_ticks: 0,
                     recalled_ticks: 0, current_streak: 0, longest_streak: 0,
+                    last_recalled_tick: None,
                 });
                 entry.members += 1;
             }
@@ -83,6 +86,7 @@ impl RegionRecallMonitor {
             if count >= minimum_active {
                 stats.recalled_ticks = stats.recalled_ticks.checked_add(1)
                     .ok_or(RegionMonitorError::Overflow)?;
+                stats.last_recalled_tick = Some(next);
                 stats.current_streak = stats.current_streak.checked_add(1)
                     .ok_or(RegionMonitorError::Overflow)?;
             } else {
@@ -118,6 +122,30 @@ impl RegionRecallMonitor {
         });
         candidates.truncate(maximum_regions);
         Ok(candidates.into_iter().map(|stats| stats.region).collect())
+    }
+
+    /// Rank explicitly annotated regions by elapsed ticks since confirmed recall.
+    /// Never-recalled regions have age equal to all observed ticks. The query is
+    /// read-only and cannot infer biological silence or modify connectivity.
+    pub fn recall_gap_regions(
+        &self,
+        minimum_gap: u64,
+        minimum_members: usize,
+        maximum_regions: usize,
+    ) -> Result<Vec<(u32, u64)>, RegionMonitorError> {
+        if minimum_gap == 0 || minimum_members == 0 || maximum_regions == 0 {
+            return Err(RegionMonitorError::InvalidBudget);
+        }
+        let mut candidates: Vec<(u32, u64)> = self.regions.values()
+            .filter(|stats| stats.members >= minimum_members)
+            .filter_map(|stats| {
+                let gap = self.ticks - stats.last_recalled_tick.unwrap_or(0);
+                (gap >= minimum_gap).then_some((stats.region, gap))
+            })
+            .collect();
+        candidates.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        candidates.truncate(maximum_regions);
+        Ok(candidates)
     }
 
     pub fn ticks(&self) -> u64 { self.ticks }
@@ -167,6 +195,26 @@ mod tests {
         assert_eq!(monitor.sustained_recall_regions(1, 3, 2).unwrap(), vec![]);
         assert_eq!(monitor.sustained_recall_regions(0, 1, 1),
             Err(RegionMonitorError::InvalidBudget));
+        assert_eq!(monitor.ticks(), 3);
+    }
+
+    #[test]
+    fn recall_gap_tracks_last_confirmation_and_never_recalled_regions() {
+        let mut monitor = RegionRecallMonitor::new(
+            4, &[0, 1, 2, 3], &[Some(7), Some(7), Some(9), Some(9)],
+        ).unwrap();
+        let mut state = BooleanState::new(4);
+        state.set(0, true).unwrap();
+        state.set(1, true).unwrap();
+        monitor.observe(&state, 2).unwrap();
+        assert_eq!(monitor.recall_gap_regions(1, 2, 2).unwrap(), vec![(9, 1)]);
+        state.set(0, false).unwrap();
+        state.set(1, false).unwrap();
+        monitor.observe(&state, 2).unwrap();
+        monitor.observe(&state, 2).unwrap();
+        assert_eq!(monitor.recall_gap_regions(1, 2, 2).unwrap(), vec![(9, 3), (7, 2)]);
+        assert_eq!(monitor.recall_gap_regions(2, 2, 1).unwrap(), vec![(9, 3)]);
+        assert_eq!(monitor.recall_gap_regions(0, 2, 2), Err(RegionMonitorError::InvalidBudget));
         assert_eq!(monitor.ticks(), 3);
     }
 
