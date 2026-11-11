@@ -759,6 +759,48 @@ impl OnlineRecall {
         Ok(costs)
     }
 
+    /// Per-trial paired recovery costs on independent held-out sequences.
+    /// A confirmed recovery costs its one-based confirmation tick; a right-censored
+    /// trial costs horizon + 1. Preserves pairing and trial order for subsequent
+    /// uncertainty analysis without reselecting the historical circuit.
+    /// Returns (chosen-policy cost, control cost) for each trial.
+    pub fn held_out_recovery_trial_costs(
+        &self,
+        held_out_trials: &[Vec<BooleanState>],
+        annotations: &[Option<u32>],
+        thresholds: (u8, u8),
+        minimum_members: usize,
+        maximum_members: usize,
+        minimum_active: usize,
+        consecutive: usize,
+        chosen_policy: u8,
+    ) -> Result<Vec<(u64, u64)>, RecallError> {
+        if chosen_policy > 1 {
+            return Err(RecallError::ZeroBudget);
+        }
+        let paired = self.paired_inactive_region_recovery_latencies(
+            held_out_trials,
+            annotations,
+            thresholds,
+            minimum_members,
+            maximum_members,
+            minimum_active,
+            consecutive,
+        )?;
+        // The paired evaluator validates nonempty trials and equal bounded horizons.
+        let penalty = (held_out_trials[0].len() + 1) as u64;
+        Ok(paired
+            .into_iter()
+            .map(|(a, b)| {
+                let (selected, control) = if chosen_policy == 0 { (a, b) } else { (b, a) };
+                (
+                    selected.map_or(penalty, |tick| (tick + 1) as u64),
+                    control.map_or(penalty, |tick| (tick + 1) as u64),
+                )
+            })
+            .collect())
+    }
+
     /// Build a recallable circuit from the most active explicitly annotated region.
     /// Candidate members must each have at least `minimum_member_ticks` activations.
     /// Region rank uses summed activity, then ascending region ID; members use
@@ -1597,6 +1639,42 @@ mod tests {
         );
         assert_eq!(
             tracker.held_out_recovery_latency_costs(
+                &trials, &labels, (50, 100), 2, 2, 2, 2, 2,
+            ),
+            Err(RecallError::ZeroBudget)
+        );
+        assert_eq!(tracker.ticks(), 1);
+    }
+
+    #[test]
+    fn held_out_trial_costs_preserve_pairing_and_censoring() {
+        let mut tracker = OnlineRecall::new(Subcircuit::new(4, vec![0, 1, 2, 3]).unwrap());
+        let labels = [Some(1), Some(1), Some(2), Some(2)];
+        let mut historical = BooleanState::new(4);
+        historical.set(2, true).unwrap();
+        tracker.observe(&historical, 1).unwrap();
+        let mut active = BooleanState::new(4);
+        active.set(0, true).unwrap();
+        active.set(1, true).unwrap();
+        let quiet = BooleanState::new(4);
+        let trials = vec![
+            vec![active.clone(), active, quiet.clone()],
+            vec![quiet.clone(), quiet.clone(), quiet],
+        ];
+        assert_eq!(
+            tracker.held_out_recovery_trial_costs(
+                &trials, &labels, (50, 100), 2, 2, 2, 2, 0,
+            ),
+            Ok(vec![(2, 2), (4, 4)])
+        );
+        assert_eq!(
+            tracker.held_out_recovery_trial_costs(
+                &trials, &labels, (50, 100), 2, 2, 2, 2, 1,
+            ),
+            Ok(vec![(2, 2), (4, 4)])
+        );
+        assert_eq!(
+            tracker.held_out_recovery_trial_costs(
                 &trials, &labels, (50, 100), 2, 2, 2, 2, 2,
             ),
             Err(RecallError::ZeroBudget)
