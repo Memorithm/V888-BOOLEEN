@@ -403,6 +403,41 @@ impl OnlineRecall {
         Ok((histogram, censored))
     }
 
+    /// Cumulative confirmed durable recoveries at each observation tick, with the
+    /// number of trials still awaiting confirmation (including right-censored).
+    /// Every trial uses the same horizon and the same historically frozen candidate.
+    /// Returns (confirmed_by_tick, not_confirmed_by_tick); no probability estimate
+    /// or biological inference is implied by these integer counts.
+    pub fn inactive_region_recovery_curve(
+        &self,
+        trials: &[Vec<BooleanState>],
+        annotations: &[Option<u32>],
+        minimum_inactive_percent: u8,
+        minimum_members: usize,
+        maximum_members: usize,
+        minimum_active: usize,
+        consecutive: usize,
+    ) -> Result<Vec<(u64, u64)>, RecallError> {
+        let (histogram, censored) = self.inactive_region_recovery_histogram(
+            trials,
+            annotations,
+            minimum_inactive_percent,
+            minimum_members,
+            maximum_members,
+            minimum_active,
+            consecutive,
+        )?;
+        let total = u64::try_from(trials.len()).map_err(|_| RecallError::ZeroBudget)?;
+        let mut confirmed = 0u64;
+        let mut curve = Vec::with_capacity(histogram.len());
+        for hits in histogram {
+            confirmed += hits; // At most 1000 trials; overflow is impossible.
+            curve.push((confirmed, total - confirmed));
+        }
+        debug_assert_eq!(curve.last().map(|pair| pair.1), Some(censored));
+        Ok(curve)
+    }
+
     /// Build a recallable circuit from the most active explicitly annotated region.
     /// Candidate members must each have at least `minimum_member_ticks` activations.
     /// Region rank uses summed activity, then ascending region ID; members use
@@ -584,6 +619,32 @@ mod tests {
         assert_eq!(tracker.select_inactive_regions(&labels, 50, 2, 1), Ok(vec![9]));
         assert_eq!(tracker.select_inactive_regions(&labels, 50, 2, 2), Ok(vec![9, 2]));
         assert_eq!(tracker.ticks(), 1);
+    }
+
+    #[test]
+    fn inactive_region_recovery_curve_preserves_censored_trials() {
+        let mut tracker = OnlineRecall::new(Subcircuit::new(2, vec![0, 1]).unwrap());
+        let annotations = [Some(7), Some(7)];
+        let quiet = BooleanState::new(2);
+        tracker.observe(&quiet, 1).unwrap();
+        let mut active = BooleanState::new(2);
+        active.set(0, true).unwrap();
+        let trials = vec![
+            vec![quiet.clone(), active.clone(), active.clone()],
+            vec![active.clone(), quiet.clone(), active.clone()],
+            vec![quiet.clone(), quiet.clone(), quiet.clone()],
+        ];
+        let before = tracker.member_counts().collect::<Vec<_>>();
+        assert_eq!(
+            tracker.inactive_region_recovery_curve(&trials, &annotations, 100, 1, 2, 1, 2),
+            Ok(vec![(0, 3), (0, 3), (1, 2)])
+        );
+        assert_eq!(tracker.member_counts().collect::<Vec<_>>(), before);
+        assert_eq!(tracker.ticks(), 1);
+        assert_eq!(
+            tracker.inactive_region_recovery_curve(&trials, &annotations[..1], 100, 1, 2, 1, 2),
+            Err(RecallError::LengthMismatch)
+        );
     }
 
     #[test]
