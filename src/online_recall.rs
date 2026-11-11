@@ -801,6 +801,44 @@ impl OnlineRecall {
             .collect())
     }
 
+    /// Summarize paired held-out recovery costs without discarding trial pairing.
+    /// Returns (chosen_better, control_better, equal, chosen_total, control_total).
+    /// Lower cost means earlier durable recovery; censored trials cost horizon + 1.
+    /// This is descriptive experimental accounting, not biological evidence.
+    pub fn held_out_recovery_cost_comparison(
+        &self,
+        held_out_trials: &[Vec<BooleanState>],
+        annotations: &[Option<u32>],
+        thresholds: (u8, u8),
+        minimum_members: usize,
+        maximum_members: usize,
+        minimum_active: usize,
+        consecutive: usize,
+        chosen_policy: u8,
+    ) -> Result<(u64, u64, u64, u64, u64), RecallError> {
+        let paired = self.held_out_recovery_trial_costs(
+            held_out_trials,
+            annotations,
+            thresholds,
+            minimum_members,
+            maximum_members,
+            minimum_active,
+            consecutive,
+            chosen_policy,
+        )?;
+        let mut summary = (0u64, 0u64, 0u64, 0u64, 0u64);
+        for (chosen, control) in paired {
+            match chosen.cmp(&control) {
+                std::cmp::Ordering::Less => summary.0 += 1,
+                std::cmp::Ordering::Greater => summary.1 += 1,
+                std::cmp::Ordering::Equal => summary.2 += 1,
+            }
+            summary.3 += chosen;
+            summary.4 += control;
+        }
+        Ok(summary)
+    }
+
     /// Build a recallable circuit from the most active explicitly annotated region.
     /// Candidate members must each have at least `minimum_member_ticks` activations.
     /// Region rank uses summed activity, then ascending region ID; members use
@@ -1675,6 +1713,36 @@ mod tests {
         );
         assert_eq!(
             tracker.held_out_recovery_trial_costs(
+                &trials, &labels, (50, 100), 2, 2, 2, 2, 2,
+            ),
+            Err(RecallError::ZeroBudget)
+        );
+        assert_eq!(tracker.ticks(), 1);
+    }
+
+    #[test]
+    fn held_out_cost_comparison_preserves_ties_and_censored_trials() {
+        let mut tracker = OnlineRecall::new(Subcircuit::new(4, vec![0, 1, 2, 3]).unwrap());
+        let labels = [Some(1), Some(1), Some(2), Some(2)];
+        let mut history = BooleanState::new(4);
+        history.set(2, true).unwrap();
+        tracker.observe(&history, 1).unwrap();
+        let mut active = BooleanState::new(4);
+        active.set(0, true).unwrap();
+        active.set(1, true).unwrap();
+        let quiet = BooleanState::new(4);
+        let trials = vec![
+            vec![active.clone(), active],
+            vec![quiet.clone(), quiet],
+        ];
+        assert_eq!(
+            tracker.held_out_recovery_cost_comparison(
+                &trials, &labels, (50, 100), 2, 2, 2, 2, 0,
+            ),
+            Ok((0, 0, 2, 5, 5))
+        );
+        assert_eq!(
+            tracker.held_out_recovery_cost_comparison(
                 &trials, &labels, (50, 100), 2, 2, 2, 2, 2,
             ),
             Err(RecallError::ZeroBudget)
