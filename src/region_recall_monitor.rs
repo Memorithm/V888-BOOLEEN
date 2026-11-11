@@ -95,6 +95,31 @@ impl RegionRecallMonitor {
         Ok(())
     }
 
+    /// Select regions with sustained current recall, using only observed ticks.
+    /// Results are ordered by longest current streak, then active occupancy,
+    /// then explicit region ID. This never changes the graph or the monitor.
+    pub fn sustained_recall_regions(
+        &self,
+        minimum_streak: u64,
+        minimum_members: usize,
+        maximum_regions: usize,
+    ) -> Result<Vec<u32>, RegionMonitorError> {
+        if minimum_streak == 0 || minimum_members == 0 || maximum_regions == 0 {
+            return Err(RegionMonitorError::InvalidBudget);
+        }
+        let mut candidates: Vec<&RegionRecall> = self.regions.values()
+            .filter(|stats| stats.members >= minimum_members
+                && stats.current_streak >= minimum_streak)
+            .collect();
+        candidates.sort_unstable_by(|a, b| {
+            b.current_streak.cmp(&a.current_streak)
+                .then_with(|| b.active_member_ticks.cmp(&a.active_member_ticks))
+                .then_with(|| a.region.cmp(&b.region))
+        });
+        candidates.truncate(maximum_regions);
+        Ok(candidates.into_iter().map(|stats| stats.region).collect())
+    }
+
     pub fn ticks(&self) -> u64 { self.ticks }
 
     pub fn regions(&self) -> impl Iterator<Item = &RegionRecall> {
@@ -123,6 +148,25 @@ mod tests {
             stats[0].longest_streak, stats[0].current_streak), (5, 2, 2, 0));
         assert_eq!((stats[1].active_member_ticks, stats[1].recalled_ticks,
             stats[1].longest_streak), (4, 1, 1));
+        assert_eq!(monitor.ticks(), 3);
+    }
+
+    #[test]
+    fn sustained_regions_use_current_streak_and_stable_ties() {
+        let mut monitor = RegionRecallMonitor::new(
+            4, &[0, 1, 2, 3], &[Some(7), Some(7), Some(9), Some(9)],
+        ).unwrap();
+        let mut state = BooleanState::new(4);
+        for i in 0..4 { state.set(i, true).unwrap(); }
+        monitor.observe(&state, 2).unwrap();
+        monitor.observe(&state, 2).unwrap();
+        assert_eq!(monitor.sustained_recall_regions(2, 2, 2).unwrap(), vec![7, 9]);
+        state.set(1, false).unwrap();
+        monitor.observe(&state, 2).unwrap();
+        assert_eq!(monitor.sustained_recall_regions(2, 2, 2).unwrap(), vec![9]);
+        assert_eq!(monitor.sustained_recall_regions(1, 3, 2).unwrap(), vec![]);
+        assert_eq!(monitor.sustained_recall_regions(0, 1, 1),
+            Err(RegionMonitorError::InvalidBudget));
         assert_eq!(monitor.ticks(), 3);
     }
 
