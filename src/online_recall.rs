@@ -211,7 +211,7 @@ impl OnlineRecall {
         minimum_members: usize,
         maximum_members: usize,
     ) -> Result<Subcircuit, RecallError> {
-        if maximum_members == 0 {
+        if maximum_members == 0 || minimum_members > maximum_members {
             return Err(RecallError::ZeroBudget);
         }
         let region = self
@@ -726,6 +726,11 @@ mod tests {
         tracker.observe(&state, 1).unwrap();
         let selected = tracker.select_inactive_region_subcircuit(&labels, 50, 2, 2).unwrap();
         assert_eq!(selected.members(), &[1, 2]);
+        // Never return a circuit smaller than the caller's minimum budget.
+        assert_eq!(
+            tracker.select_inactive_region_subcircuit(&labels, 50, 3, 2),
+            Err(RecallError::ZeroBudget)
+        );
         assert_eq!(tracker.ticks(), 1);
         assert_eq!(
             tracker.select_inactive_region_subcircuit(&labels, 100, 2, 2),
