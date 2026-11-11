@@ -438,6 +438,39 @@ impl OnlineRecall {
         Ok(curve)
     }
 
+    /// Per-tick discrete recovery risk table for independent, equal-horizon trials.
+    /// Each row is (at_risk_at_tick, durable_confirmations_at_tick).
+    /// Nonrecovering trials remain at risk through the final tick and are then
+    /// right-censored. No biological hazard or causal interpretation is implied.
+    pub fn inactive_region_recovery_risk_table(
+        &self,
+        trials: &[Vec<BooleanState>],
+        annotations: &[Option<u32>],
+        minimum_inactive_percent: u8,
+        minimum_members: usize,
+        maximum_members: usize,
+        minimum_active: usize,
+        consecutive: usize,
+    ) -> Result<Vec<(u64, u64)>, RecallError> {
+        let (histogram, censored) = self.inactive_region_recovery_histogram(
+            trials,
+            annotations,
+            minimum_inactive_percent,
+            minimum_members,
+            maximum_members,
+            minimum_active,
+            consecutive,
+        )?;
+        let mut at_risk = u64::try_from(trials.len()).map_err(|_| RecallError::ZeroBudget)?;
+        let mut table = Vec::with_capacity(histogram.len());
+        for confirmations in histogram {
+            table.push((at_risk, confirmations));
+            at_risk -= confirmations;
+        }
+        debug_assert_eq!(at_risk, censored);
+        Ok(table)
+    }
+
     /// Build a recallable circuit from the most active explicitly annotated region.
     /// Candidate members must each have at least `minimum_member_ticks` activations.
     /// Region rank uses summed activity, then ascending region ID; members use
@@ -619,6 +652,31 @@ mod tests {
         assert_eq!(tracker.select_inactive_regions(&labels, 50, 2, 1), Ok(vec![9]));
         assert_eq!(tracker.select_inactive_regions(&labels, 50, 2, 2), Ok(vec![9, 2]));
         assert_eq!(tracker.ticks(), 1);
+    }
+
+    #[test]
+    fn inactive_region_recovery_risk_table_preserves_end_censoring() {
+        let mut tracker = OnlineRecall::new(Subcircuit::new(2, vec![0, 1]).unwrap());
+        let labels = [Some(5), Some(5)];
+        let quiet = BooleanState::new(2);
+        tracker.observe(&quiet, 1).unwrap();
+        let mut active = BooleanState::new(2);
+        active.set(0, true).unwrap();
+        let trials = vec![
+            vec![active.clone(), active.clone(), quiet.clone()],
+            vec![quiet.clone(), active.clone(), active.clone()],
+            vec![quiet.clone(), quiet.clone(), quiet.clone()],
+        ];
+        assert_eq!(
+            tracker.inactive_region_recovery_risk_table(&trials, &labels, 100, 1, 2, 1, 2),
+            Ok(vec![(3, 0), (3, 1), (2, 1)])
+        );
+        assert_eq!(
+            tracker.inactive_region_recovery_risk_table(&trials, &labels, 100, 1, 2, 1, 0),
+            Err(RecallError::ZeroBudget)
+        );
+        assert_eq!(tracker.ticks(), 1);
+        assert_eq!(tracker.member_counts().collect::<Vec<_>>(), vec![(0, 0), (1, 0)]);
     }
 
     #[test]
