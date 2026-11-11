@@ -341,6 +341,68 @@ impl OnlineRecall {
         Ok(None)
     }
 
+    /// Aggregate independently observed future trials for one frozen inactive-region
+    /// candidate. Each trial has the same explicit observation budget; missing durable
+    /// recovery is right-censored, never counted as a zero-latency recovery.
+    /// Returns (confirmation_tick_histogram, censored_trials), with zero-based ticks.
+    /// No future observation influences circuit selection or historical counters.
+    pub fn inactive_region_recovery_histogram(
+        &self,
+        trials: &[Vec<BooleanState>],
+        annotations: &[Option<u32>],
+        minimum_inactive_percent: u8,
+        minimum_members: usize,
+        maximum_members: usize,
+        minimum_active: usize,
+        consecutive: usize,
+    ) -> Result<(Vec<u64>, u64), RecallError> {
+        if trials.is_empty() || trials.len() > 1000 {
+            return Err(RecallError::ZeroBudget);
+        }
+        let budget = trials[0].len();
+        if budget == 0 || budget > 1000 || consecutive == 0 || consecutive > budget {
+            return Err(RecallError::ZeroBudget);
+        }
+        let selected = self.select_inactive_region_subcircuit(
+            annotations,
+            minimum_inactive_percent,
+            minimum_members,
+            maximum_members,
+        )?;
+        // Validate every trial before counting, including states after an early hit.
+        for trial in trials {
+            if trial.len() != budget {
+                return Err(RecallError::LengthMismatch);
+            }
+            for state in trial {
+                selected.recall(state, minimum_active)?;
+            }
+        }
+        let mut histogram = vec![0u64; budget];
+        let mut censored = 0u64;
+        for trial in trials {
+            let mut streak = 0usize;
+            let mut confirmation = None;
+            for (tick, state) in trial.iter().enumerate() {
+                if selected.recall(state, minimum_active)? {
+                    streak += 1;
+                    if streak == consecutive {
+                        confirmation = Some(tick);
+                        break;
+                    }
+                } else {
+                    streak = 0;
+                }
+            }
+            if let Some(tick) = confirmation {
+                histogram[tick] += 1;
+            } else {
+                censored += 1;
+            }
+        }
+        Ok((histogram, censored))
+    }
+
     /// Build a recallable circuit from the most active explicitly annotated region.
     /// Candidate members must each have at least `minimum_member_ticks` activations.
     /// Region rank uses summed activity, then ascending region ID; members use
@@ -522,6 +584,37 @@ mod tests {
         assert_eq!(tracker.select_inactive_regions(&labels, 50, 2, 1), Ok(vec![9]));
         assert_eq!(tracker.select_inactive_regions(&labels, 50, 2, 2), Ok(vec![9, 2]));
         assert_eq!(tracker.ticks(), 1);
+    }
+
+    #[test]
+    fn inactive_region_histogram_counts_confirmations_and_censoring() {
+        let mut tracker = OnlineRecall::new(Subcircuit::new(2, vec![0, 1]).unwrap());
+        let annotations = [Some(7), Some(7)];
+        let quiet = BooleanState::new(2);
+        tracker.observe(&quiet, 1).unwrap();
+        let mut active = BooleanState::new(2);
+        active.set(0, true).unwrap();
+        let trials = vec![
+            vec![quiet.clone(), active.clone(), active.clone()],
+            vec![active.clone(), quiet.clone(), active.clone()],
+            vec![quiet.clone(), quiet.clone(), quiet.clone()],
+        ];
+        let before = tracker.ticks();
+        assert_eq!(
+            tracker.inactive_region_recovery_histogram(
+                &trials, &annotations, 100, 1, 2, 1, 2
+            ),
+            Ok((vec![0, 0, 1], 2))
+        );
+        assert_eq!(tracker.ticks(), before);
+        let mut invalid = trials.clone();
+        invalid[2].pop();
+        assert_eq!(
+            tracker.inactive_region_recovery_histogram(
+                &invalid, &annotations, 100, 1, 2, 1, 2
+            ),
+            Err(RecallError::LengthMismatch)
+        );
     }
 
     #[test]
