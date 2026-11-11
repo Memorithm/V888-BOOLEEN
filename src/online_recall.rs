@@ -726,6 +726,39 @@ impl OnlineRecall {
         Ok(result)
     }
 
+    /// Restricted total recovery latency on independent held-out trials.
+    /// Confirmed recoveries cost their one-based confirmation tick; right-censored
+    /// trials cost horizon + 1. The common bound avoids treating missing recovery
+    /// as an immediate hit. Returns (selected_cost, control_cost) as exact integers.
+    /// This is an experimental comparison, not a biological or causal estimate.
+    pub fn held_out_recovery_latency_costs(
+        &self,
+        held_out_trials: &[Vec<BooleanState>],
+        annotations: &[Option<u32>],
+        thresholds: (u8, u8),
+        minimum_members: usize,
+        maximum_members: usize,
+        minimum_active: usize,
+        consecutive: usize,
+        chosen_policy: u8,
+    ) -> Result<(u64, u64), RecallError> {
+        if chosen_policy > 1 {
+            return Err(RecallError::ZeroBudget);
+        }
+        let paired = self.paired_inactive_region_recovery_latencies(
+            held_out_trials, annotations, thresholds, minimum_members,
+            maximum_members, minimum_active, consecutive,
+        )?;
+        let penalty = (held_out_trials[0].len() + 1) as u64;
+        let mut costs = (0u64, 0u64);
+        for (a, b) in paired {
+            let (selected, control) = if chosen_policy == 0 { (a, b) } else { (b, a) };
+            costs.0 += selected.map_or(penalty, |tick| (tick + 1) as u64);
+            costs.1 += control.map_or(penalty, |tick| (tick + 1) as u64);
+        }
+        Ok(costs)
+    }
+
     /// Build a recallable circuit from the most active explicitly annotated region.
     /// Candidate members must each have at least `minimum_member_ticks` activations.
     /// Region rank uses summed activity, then ascending region ID; members use
@@ -1529,6 +1562,44 @@ mod tests {
                 &held_out, &labels[..3], (50, 100), 2, 2, 2, 2, 0,
             ),
             Err(RecallError::LengthMismatch)
+        );
+        assert_eq!(tracker.ticks(), 1);
+    }
+
+    #[test]
+    fn held_out_latency_costs_penalize_censoring_without_changing_history() {
+        let mut tracker = OnlineRecall::new(Subcircuit::new(4, vec![0, 1, 2, 3]).unwrap());
+        let labels = [Some(1), Some(1), Some(2), Some(2)];
+        let mut historical = BooleanState::new(4);
+        historical.set(2, true).unwrap();
+        tracker.observe(&historical, 1).unwrap();
+        let mut active = BooleanState::new(4);
+        active.set(0, true).unwrap();
+        active.set(1, true).unwrap();
+        let quiet = BooleanState::new(4);
+        let trials = vec![
+            vec![active.clone(), active, quiet.clone()],
+            vec![quiet.clone(), quiet.clone(), quiet],
+        ];
+        // Both thresholds select the same region: first hit at tick 1
+        // costs 2, while a censored three-tick trial costs 4.
+        assert_eq!(
+            tracker.held_out_recovery_latency_costs(
+                &trials, &labels, (50, 100), 2, 2, 2, 2, 0,
+            ),
+            Ok((6, 6))
+        );
+        assert_eq!(
+            tracker.held_out_recovery_latency_costs(
+                &trials, &labels, (50, 100), 2, 2, 2, 2, 1,
+            ),
+            Ok((6, 6))
+        );
+        assert_eq!(
+            tracker.held_out_recovery_latency_costs(
+                &trials, &labels, (50, 100), 2, 2, 2, 2, 2,
+            ),
+            Err(RecallError::ZeroBudget)
         );
         assert_eq!(tracker.ticks(), 1);
     }
