@@ -223,6 +223,27 @@ impl RegionRecallMonitor {
         }
     }
 
+    /// Materialize a bit-packed recovery seed from the interleaved regional policy.
+    /// The returned state is an experimental stimulation proposal, not an
+    /// anatomical observation; it never mutates the monitor or graph.
+    pub fn interleaved_recall_gap_mask(
+        &self,
+        minimum_gap: u64,
+        minimum_members: usize,
+        maximum_regions: usize,
+        maximum_members: usize,
+    ) -> Result<BooleanState, RegionMonitorError> {
+        let indices = self.interleaved_recall_gap_members(
+            minimum_gap, minimum_members, maximum_regions, maximum_members,
+        )?;
+        let mut mask = BooleanState::new(self.universe);
+        for index in indices {
+            mask.set(index, true)
+                .map_err(|_| RegionMonitorError::InvalidDimensions)?;
+        }
+        Ok(mask)
+    }
+
     pub fn ticks(&self) -> u64 { self.ticks }
 
     pub fn regions(&self) -> impl Iterator<Item = &RegionRecall> {
@@ -335,6 +356,30 @@ mod tests {
             Vec::<usize>::new());
         assert_eq!(monitor.interleaved_recall_gap_members(1, 2, 2, 0),
             Err(RegionMonitorError::InvalidBudget));
+    }
+
+    #[test]
+    fn interleaved_recovery_mask_is_bit_packed_and_read_only() {
+        let mut monitor = RegionRecallMonitor::new(
+            6, &[5, 4, 3, 2, 1, 0],
+            &[Some(7), Some(7), Some(7), Some(7), Some(9), Some(9)],
+        ).unwrap();
+        monitor.observe(&BooleanState::new(6), 2).unwrap();
+        let before = monitor.clone();
+        let mask = monitor.interleaved_recall_gap_mask(1, 2, 2, 3).unwrap();
+        assert_eq!(mask.len(), 6);
+        for index in 0..6 {
+            assert_eq!(mask.get(index), Ok([0, 1, 4].contains(&index)));
+        }
+        let empty = monitor.interleaved_recall_gap_mask(2, 2, 2, 3).unwrap();
+        for index in 0..6 {
+            assert_eq!(empty.get(index), Ok(false));
+        }
+        assert_eq!(
+            monitor.interleaved_recall_gap_mask(1, 2, 2, 0),
+            Err(RegionMonitorError::InvalidBudget),
+        );
+        assert_eq!(monitor, before);
     }
 
     #[test]
