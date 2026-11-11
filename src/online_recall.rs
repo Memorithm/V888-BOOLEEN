@@ -471,6 +471,71 @@ impl OnlineRecall {
         Ok(table)
     }
 
+    /// Compare two frozen inactive-region selection thresholds on the same future trials.
+    /// Each trial has the same horizon. A censored result is not a zero-latency hit.
+    /// Returns (A earlier, B earlier, equal confirmed, A only, B only, both censored).
+    /// This is a paired descriptive count, not a significance test.
+    pub fn compare_inactive_region_recovery(
+        &self,
+        trials: &[Vec<BooleanState>],
+        annotations: &[Option<u32>],
+        thresholds: (u8, u8),
+        minimum_members: usize,
+        maximum_members: usize,
+        minimum_active: usize,
+        consecutive: usize,
+    ) -> Result<(u64, u64, u64, u64, u64, u64), RecallError> {
+        if trials.is_empty() || trials.len() > 1000 {
+            return Err(RecallError::ZeroBudget);
+        }
+        let horizon = trials[0].len();
+        if horizon == 0 || horizon > 1000 || consecutive == 0 || consecutive > horizon {
+            return Err(RecallError::ZeroBudget);
+        }
+        let a = self.select_inactive_region_subcircuit(
+            annotations, thresholds.0, minimum_members, maximum_members,
+        )?;
+        let b = self.select_inactive_region_subcircuit(
+            annotations, thresholds.1, minimum_members, maximum_members,
+        )?;
+        // Validate both candidates against every state, even after early recovery.
+        for trial in trials {
+            if trial.len() != horizon {
+                return Err(RecallError::LengthMismatch);
+            }
+            for state in trial {
+                a.recall(state, minimum_active)?;
+                b.recall(state, minimum_active)?;
+            }
+        }
+        let mut counts = (0, 0, 0, 0, 0, 0);
+        for trial in trials {
+            let mut streak_a = 0usize;
+            let mut streak_b = 0usize;
+            let mut hit_a = None;
+            let mut hit_b = None;
+            for (tick, state) in trial.iter().enumerate() {
+                if hit_a.is_none() {
+                    streak_a = if a.recall(state, minimum_active)? { streak_a + 1 } else { 0 };
+                    if streak_a == consecutive { hit_a = Some(tick); }
+                }
+                if hit_b.is_none() {
+                    streak_b = if b.recall(state, minimum_active)? { streak_b + 1 } else { 0 };
+                    if streak_b == consecutive { hit_b = Some(tick); }
+                }
+            }
+            match (hit_a, hit_b) {
+                (Some(x), Some(y)) if x < y => counts.0 += 1,
+                (Some(x), Some(y)) if x > y => counts.1 += 1,
+                (Some(_), Some(_)) => counts.2 += 1,
+                (Some(_), None) => counts.3 += 1,
+                (None, Some(_)) => counts.4 += 1,
+                (None, None) => counts.5 += 1,
+            }
+        }
+        Ok(counts)
+    }
+
     /// Build a recallable circuit from the most active explicitly annotated region.
     /// Candidate members must each have at least `minimum_member_ticks` activations.
     /// Region rank uses summed activity, then ascending region ID; members use
@@ -1106,6 +1171,36 @@ mod tests {
             &states, &labels, 100, 2, 2, 2, 0), Err(RecallError::ZeroBudget));
         assert_eq!(tracker.first_durable_inactive_region_recovery(
             &states, &labels[..2], 100, 2, 2, 2, 2), Err(RecallError::LengthMismatch));
+        assert_eq!(tracker.ticks(), 1);
+    }
+
+    #[test]
+    fn paired_recovery_comparison_preserves_censoring_and_budgets() {
+        let mut tracker = OnlineRecall::new(Subcircuit::new(4, vec![0, 1, 2, 3]).unwrap());
+        let labels = [Some(1), Some(1), Some(2), Some(2)];
+        let mut historical = BooleanState::new(4);
+        historical.set(2, true).unwrap();
+        tracker.observe(&historical, 1).unwrap();
+        let mut recovered = BooleanState::new(4);
+        recovered.set(0, true).unwrap();
+        recovered.set(1, true).unwrap();
+        let trials = vec![
+            vec![recovered.clone(), recovered.clone()],
+            vec![BooleanState::new(4), BooleanState::new(4)],
+        ];
+        // Both thresholds choose the same fully inactive region.
+        assert_eq!(
+            tracker.compare_inactive_region_recovery(&trials, &labels, (50, 100), 2, 2, 2, 2),
+            Ok((0, 0, 1, 0, 0, 1))
+        );
+        assert_eq!(
+            tracker.compare_inactive_region_recovery(&trials[..1], &labels, (50, 100), 2, 2, 2, 3),
+            Err(RecallError::ZeroBudget)
+        );
+        assert_eq!(
+            tracker.compare_inactive_region_recovery(&trials, &labels[..3], (50, 100), 2, 2, 2, 2),
+            Err(RecallError::LengthMismatch)
+        );
         assert_eq!(tracker.ticks(), 1);
     }
 
