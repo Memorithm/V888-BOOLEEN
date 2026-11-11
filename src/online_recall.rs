@@ -261,6 +261,42 @@ impl OnlineRecall {
         Ok((selected.members().to_vec(), recalled))
     }
 
+    /// Evaluate one historically selected inactive regional circuit across bounded
+    /// future simulated states. Selection is frozen before evaluation: the future
+    /// states cannot leak into region choice. Returns the first zero-based recall
+    /// index, or None if no recovery occurred within the supplied observation window.
+    /// This read-only experiment never advances the engine or changes counters.
+    pub fn first_inactive_region_recovery(
+        &self,
+        states: &[BooleanState],
+        annotations: &[Option<u32>],
+        minimum_inactive_percent: u8,
+        minimum_members: usize,
+        maximum_members: usize,
+        minimum_active: usize,
+    ) -> Result<Option<usize>, RecallError> {
+        if states.is_empty() || states.len() > 1000 || minimum_active == 0 {
+            return Err(RecallError::ZeroBudget);
+        }
+        let selected = self.select_inactive_region_subcircuit(
+            annotations,
+            minimum_inactive_percent,
+            minimum_members,
+            maximum_members,
+        )?;
+        // Validate the entire window before producing a result, even when an
+        // earlier state already satisfies recall.
+        for state in states {
+            selected.recall(state, minimum_active)?;
+        }
+        for (index, state) in states.iter().enumerate() {
+            if selected.recall(state, minimum_active)? {
+                return Ok(Some(index));
+            }
+        }
+        Ok(None)
+    }
+
     /// Build a recallable circuit from the most active explicitly annotated region.
     /// Candidate members must each have at least `minimum_member_ticks` activations.
     /// Region rank uses summed activity, then ascending region ID; members use
