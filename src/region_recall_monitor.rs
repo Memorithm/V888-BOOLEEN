@@ -275,6 +275,57 @@ impl RegionRecallMonitor {
         Ok((next, activated))
     }
 
+    /// Stimulate only inactive members of overdue explicitly annotated regions.
+    /// Existing active members never consume the new-activation budget.
+    /// This is a hypothetical recovery policy, not inferred anatomy.
+    pub fn stimulate_inactive_recall_gap(
+        &self,
+        state: &BooleanState,
+        minimum_gap: u64,
+        minimum_members: usize,
+        maximum_regions: usize,
+        maximum_new_activations: usize,
+    ) -> Result<(BooleanState, usize), RegionMonitorError> {
+        if state.len() != self.universe {
+            return Err(RegionMonitorError::InvalidDimensions);
+        }
+        if maximum_new_activations == 0 {
+            return Err(RegionMonitorError::InvalidBudget);
+        }
+        let regions = self.recall_gap_regions(minimum_gap, minimum_members, maximum_regions)?;
+        let groups: Vec<Vec<usize>> = regions.iter().map(|&(region, _)| {
+            let mut indices: Vec<usize> = self.members.iter()
+                .filter_map(|&(index, label)| (label == region).then_some(index))
+                .collect();
+            indices.sort_unstable();
+            indices
+        }).collect();
+        let mut positions = vec![0usize; groups.len()];
+        let mut next = state.clone();
+        let mut activated = 0;
+        loop {
+            let mut advanced = false;
+            for (group, position) in groups.iter().zip(positions.iter_mut()) {
+                while *position < group.len() && next.get(group[*position]) == Ok(true) {
+                    *position += 1;
+                }
+                if let Some(&index) = group.get(*position) {
+                    next.set(index, true)
+                        .map_err(|_| RegionMonitorError::InvalidDimensions)?;
+                    *position += 1;
+                    activated += 1;
+                    advanced = true;
+                    if activated == maximum_new_activations {
+                        return Ok((next, activated));
+                    }
+                }
+            }
+            if !advanced {
+                return Ok((next, activated));
+            }
+        }
+    }
+
     pub fn ticks(&self) -> u64 { self.ticks }
 
     pub fn regions(&self) -> impl Iterator<Item = &RegionRecall> {
@@ -438,6 +489,39 @@ mod tests {
         );
         assert_eq!(
             monitor.stimulate_interleaved_recall_gap(&input, 1, 2, 2, 0),
+            Err(RegionMonitorError::InvalidBudget),
+        );
+    }
+
+    #[test]
+    fn inactive_budget_skips_active_members_and_preserves_history() {
+        let mut monitor = RegionRecallMonitor::new(
+            6, &[0, 1, 2, 3, 4, 5],
+            &[Some(7), Some(7), Some(7), Some(7), Some(9), Some(9)],
+        ).unwrap();
+        monitor.observe(&BooleanState::new(6), 2).unwrap();
+        let before = monitor.clone();
+        let mut state = BooleanState::new(6);
+        state.set(0, true).unwrap();
+        state.set(4, true).unwrap();
+        let (old, old_count) = monitor
+            .stimulate_interleaved_recall_gap(&state, 1, 2, 2, 2).unwrap();
+        assert_eq!(old_count, 0);
+        assert_eq!(old, state);
+        let (new, count) = monitor
+            .stimulate_inactive_recall_gap(&state, 1, 2, 2, 2).unwrap();
+        assert_eq!(count, 2);
+        for index in 0..6 {
+            assert_eq!(new.get(index), Ok([0, 1, 4, 5].contains(&index)));
+        }
+        assert_eq!(monitor, before);
+        assert_eq!(state.get(1), Ok(false));
+        assert_eq!(
+            monitor.stimulate_inactive_recall_gap(&BooleanState::new(5), 1, 2, 2, 2),
+            Err(RegionMonitorError::InvalidDimensions),
+        );
+        assert_eq!(
+            monitor.stimulate_inactive_recall_gap(&state, 1, 2, 2, 0),
             Err(RegionMonitorError::InvalidBudget),
         );
     }
