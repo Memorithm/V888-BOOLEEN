@@ -9,6 +9,7 @@ pub mod eligibility_trace;
 pub mod engine;
 pub mod full_synapse;
 pub mod gates;
+pub mod heldout_regional_recall;
 pub mod generalization_bench;
 pub mod graded_reward;
 pub mod importance_protection;
