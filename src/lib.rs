@@ -19,6 +19,7 @@ pub mod online_recall;
 pub mod plasticity;
 pub mod recurrent_csr;
 pub mod region_activation;
+pub mod regional_candidate;
 pub mod reward_limits;
 pub mod source_holdout;
 pub mod subcircuit_recall;
