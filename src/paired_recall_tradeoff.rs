@@ -55,6 +55,29 @@ impl RegionRecallMonitor {
         frontier
     }
 
+    /// Run the paired experiment and return only accepted Pareto-optimal regions.
+    /// All candidates use the same observation horizon; no trajectory is mutated.
+    /// Right-censored recoveries cannot enter the frontier.
+    pub fn paired_recall_frontier(
+        &self,
+        baseline: &[BooleanState],
+        candidate: &[BooleanState],
+        minimum_active: usize,
+        consecutive: usize,
+        activity_allowance: u128,
+        transition_allowance: u128,
+    ) -> Result<Vec<u32>, RegionMonitorError> {
+        let tradeoffs = self.select_paired_recall_tradeoffs(
+            baseline,
+            candidate,
+            minimum_active,
+            consecutive,
+            activity_allowance,
+            transition_allowance,
+        )?;
+        Ok(Self::nondominated_recall_regions(&tradeoffs))
+    }
+
     /// Evaluate an equal-horizon, paired recall experiment without changing
     /// either trajectory or the underlying connectivity. Missing confirmation
     /// means right-censoring, never a zero-latency recovery.
@@ -109,6 +132,40 @@ impl RegionRecallMonitor {
 mod tests {
     use super::*;
 
+
+    #[test]
+    fn paired_frontier_integrates_durable_recall_and_cost_limits() {
+        let monitor = RegionRecallMonitor::new(
+            4,
+            &[0, 1, 2, 3],
+            &[Some(3), Some(3), Some(8), Some(8)],
+        )
+        .unwrap();
+        let baseline = vec![BooleanState::new(4); 3];
+        let mut candidate = baseline.clone();
+        for tick in [1, 2] {
+            candidate[tick].set(0, true).unwrap();
+            candidate[tick].set(1, true).unwrap();
+        }
+        let original = candidate.clone();
+        assert_eq!(
+            monitor
+                .paired_recall_frontier(&baseline, &candidate, 2, 2, 4, 2)
+                .unwrap(),
+            vec![3],
+        );
+        assert!(
+            monitor
+                .paired_recall_frontier(&baseline, &candidate, 2, 2, 0, 0)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            monitor.paired_recall_frontier(&baseline[..2], &candidate, 2, 2, 4, 2),
+            Err(RegionMonitorError::InvalidDimensions),
+        );
+        assert_eq!(candidate, original);
+    }
 
     #[test]
     fn pareto_frontier_preserves_tradeoffs_and_rejects_censoring() {
