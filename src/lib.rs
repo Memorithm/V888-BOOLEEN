@@ -8,6 +8,7 @@ pub mod consolidation_scale;
 pub mod eligibility_trace;
 pub mod engine;
 pub mod full_synapse;
+pub mod heldout_ablation;
 pub mod gates;
 pub mod generalization_bench;
 pub mod graded_reward;
