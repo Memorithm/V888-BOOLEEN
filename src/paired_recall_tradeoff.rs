@@ -19,6 +19,42 @@ pub struct RecallTradeoff {
 }
 
 impl RegionRecallMonitor {
+
+    /// Return accepted, confirmed regions on the three-objective Pareto frontier.
+    /// Smaller confirmation tick, active-member ticks and transition count are
+    /// preferred. Censored candidates are excluded, never treated as instant
+    /// recoveries. The input is left unchanged; output is ordered by region ID.
+    #[must_use]
+    pub fn nondominated_recall_regions(tradeoffs: &[RecallTradeoff]) -> Vec<u32> {
+        let mut frontier: Vec<u32> = tradeoffs
+            .iter()
+            .filter(|candidate| {
+                candidate.accepted
+                    && candidate.candidate_confirmation.is_some()
+                    && !tradeoffs.iter().any(|other| {
+                        if !other.accepted {
+                            return false;
+                        }
+                        let (Some(a), Some(b)) =
+                            (other.candidate_confirmation, candidate.candidate_confirmation)
+                        else {
+                            return false;
+                        };
+                        a <= b
+                            && other.candidate_active_ticks <= candidate.candidate_active_ticks
+                            && other.candidate_transitions <= candidate.candidate_transitions
+                            && (a < b
+                                || other.candidate_active_ticks < candidate.candidate_active_ticks
+                                || other.candidate_transitions < candidate.candidate_transitions)
+                    })
+            })
+            .map(|candidate| candidate.region)
+            .collect();
+        frontier.sort_unstable();
+        frontier.dedup();
+        frontier
+    }
+
     /// Evaluate an equal-horizon, paired recall experiment without changing
     /// either trajectory or the underlying connectivity. Missing confirmation
     /// means right-censoring, never a zero-latency recovery.
@@ -72,6 +108,36 @@ impl RegionRecallMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+
+    #[test]
+    fn pareto_frontier_preserves_tradeoffs_and_rejects_censoring() {
+        let row = |region, tick, activity, flips, accepted| RecallTradeoff {
+            region,
+            baseline_confirmation: None,
+            candidate_confirmation: tick,
+            baseline_active_ticks: 0,
+            candidate_active_ticks: activity,
+            baseline_transitions: 0,
+            candidate_transitions: flips,
+            accepted,
+        };
+        let observations = vec![
+            row(8, Some(4), 3, 2, true),
+            row(2, Some(3), 3, 2, true), // Dominates region 8.
+            row(4, Some(5), 1, 1, true), // Lower cost, slower recovery.
+            row(9, None, 0, 0, true),    // Censored, not a winner.
+            row(1, Some(1), 0, 0, false), // Rejected by policy.
+            row(6, Some(3), 3, 2, true), // Equal objective values.
+        ];
+        let original = observations.clone();
+        assert_eq!(
+            RegionRecallMonitor::nondominated_recall_regions(&observations),
+            vec![2, 4, 6],
+        );
+        assert_eq!(observations, original);
+        assert!(RegionRecallMonitor::nondominated_recall_regions(&[]).is_empty());
+    }
 
     #[test]
     fn tradeoff_requires_confirmed_improvement_and_explicit_cost_allowances() {
