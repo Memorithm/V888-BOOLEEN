@@ -381,6 +381,61 @@ impl RegionRecallMonitor {
         Ok((current, maximum_steps, Vec::new()))
     }
 
+    /// Confirm durable recall only after consecutive post-propagation observations.
+    /// A single transient threshold crossing is not counted as recovery.
+    /// Stimulation is hypothetical; the callback supplies the transition rule.
+    /// Returns the final state, executed steps and durably recovered region IDs.
+    pub fn recover_durable_with_propagation<F>(
+        &self,
+        state: &BooleanState,
+        minimum_gap: u64,
+        minimum_members: usize,
+        maximum_regions: usize,
+        maximum_new_activations: usize,
+        maximum_steps: usize,
+        minimum_active_for_recall: usize,
+        required_consecutive_ticks: u64,
+        mut propagate: F,
+    ) -> Result<(BooleanState, usize, Vec<u32>), RegionMonitorError>
+    where
+        F: FnMut(&BooleanState) -> Result<BooleanState, RegionMonitorError>,
+    {
+        if state.len() != self.universe {
+            return Err(RegionMonitorError::InvalidDimensions);
+        }
+        if maximum_steps == 0 || minimum_active_for_recall == 0
+            || required_consecutive_ticks == 0
+        {
+            return Err(RegionMonitorError::InvalidBudget);
+        }
+        let targets = self.recall_gap_regions(
+            minimum_gap, minimum_members, maximum_regions,
+        )?;
+        let (mut current, _) = self.stimulate_inactive_recall_gap(
+            state, minimum_gap, minimum_members, maximum_regions,
+            maximum_new_activations,
+        )?;
+        let mut observer = self.clone();
+        for step in 1..=maximum_steps {
+            let next = propagate(&current)?;
+            if next.len() != self.universe {
+                return Err(RegionMonitorError::InvalidDimensions);
+            }
+            observer.observe(&next, minimum_active_for_recall)?;
+            current = next;
+            let confirmed: Vec<u32> = targets.iter().filter_map(|&(region, _)| {
+                observer.regions.get(&region).and_then(|stats| {
+                    (stats.current_streak >= required_consecutive_ticks)
+                        .then_some(region)
+                })
+            }).collect();
+            if !confirmed.is_empty() {
+                return Ok((current, step, confirmed));
+            }
+        }
+        Ok((current, maximum_steps, Vec::new()))
+    }
+
     pub fn ticks(&self) -> u64 { self.ticks }
 
     pub fn regions(&self) -> impl Iterator<Item = &RegionRecall> {
@@ -621,6 +676,45 @@ mod tests {
                 |_| Ok(BooleanState::new(3)),
             ),
             Err(RegionMonitorError::InvalidDimensions),
+        );
+    }
+
+    #[test]
+    fn durable_recovery_rejects_transient_recall_and_confirms_streak() {
+        let mut monitor = RegionRecallMonitor::new(
+            2, &[0, 1], &[Some(7), Some(7)],
+        ).unwrap();
+        monitor.observe(&BooleanState::new(2), 2).unwrap();
+        let before = monitor.clone();
+        let input = BooleanState::new(2);
+        let mut tick = 0;
+        let (_, steps, confirmed) = monitor.recover_durable_with_propagation(
+            &input, 1, 2, 1, 2, 3, 2, 2,
+            |_| {
+                tick += 1;
+                let mut next = BooleanState::new(2);
+                if tick != 2 {
+                    next.set(0, true).unwrap();
+                    next.set(1, true).unwrap();
+                }
+                Ok(next)
+            },
+        ).unwrap();
+        assert_eq!(steps, 3);
+        assert!(confirmed.is_empty());
+        let (_, steps, confirmed) = monitor.recover_durable_with_propagation(
+            &input, 1, 2, 1, 2, 3, 2, 2,
+            |state| Ok(state.clone()),
+        ).unwrap();
+        assert_eq!(steps, 2);
+        assert_eq!(confirmed, vec![7]);
+        assert_eq!(monitor, before);
+        assert_eq!(
+            monitor.recover_durable_with_propagation(
+                &input, 1, 2, 1, 2, 3, 2, 0,
+                |state| Ok(state.clone()),
+            ),
+            Err(RegionMonitorError::InvalidBudget),
         );
     }
 
