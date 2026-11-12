@@ -499,6 +499,62 @@ impl RegionRecallMonitor {
         }).collect())
     }
 
+
+    /// Execute matched baseline and stimulated propagation with the same transition
+    /// function and step budget. The intervention is an explicitly hypothetical
+    /// initial-state perturbation; this does not infer anatomical connectivity.
+    /// Returns paired regional latency observations with right-censored outcomes.
+    /// The transition callback is invoked once per arm per step, baseline first.
+    pub fn compare_live_recovery<F>(
+        &self,
+        initial: &BooleanState,
+        minimum_gap: u64,
+        minimum_members: usize,
+        maximum_regions: usize,
+        maximum_new_activations: usize,
+        steps: usize,
+        minimum_active: usize,
+        durable_ticks: usize,
+        mut propagate: F,
+    ) -> Result<Vec<(u32, Option<usize>, Option<usize>, Option<usize>, Option<usize>)>, RegionMonitorError>
+    where
+        F: FnMut(&BooleanState) -> Result<BooleanState, RegionMonitorError>,
+    {
+        if initial.len() != self.universe {
+            return Err(RegionMonitorError::InvalidDimensions);
+        }
+        if steps == 0 || steps > 1000 || minimum_active == 0
+            || durable_ticks == 0 || durable_ticks > steps
+        {
+            return Err(RegionMonitorError::InvalidBudget);
+        }
+        // Validate selection and intervention before invoking the transition.
+        let (mut candidate, _) = self.stimulate_inactive_recall_gap(
+            initial, minimum_gap, minimum_members, maximum_regions,
+            maximum_new_activations,
+        )?;
+        let mut baseline = initial.clone();
+        let mut baseline_trace = Vec::with_capacity(steps);
+        let mut candidate_trace = Vec::with_capacity(steps);
+        for _ in 0..steps {
+            let next_baseline = propagate(&baseline)?;
+            if next_baseline.len() != self.universe {
+                return Err(RegionMonitorError::InvalidDimensions);
+            }
+            let next_candidate = propagate(&candidate)?;
+            if next_candidate.len() != self.universe {
+                return Err(RegionMonitorError::InvalidDimensions);
+            }
+            baseline = next_baseline;
+            candidate = next_candidate;
+            baseline_trace.push(baseline.clone());
+            candidate_trace.push(candidate.clone());
+        }
+        self.compare_recall_traces(
+            &baseline_trace, &candidate_trace, minimum_active, durable_ticks,
+        )
+    }
+
     pub fn ticks(&self) -> u64 { self.ticks }
 
     pub fn regions(&self) -> impl Iterator<Item = &RegionRecall> {
@@ -832,6 +888,48 @@ mod tests {
             Err(RegionMonitorError::InvalidBudget),
         );
         assert_eq!(monitor, before);
+    }
+
+
+    #[test]
+    fn paired_live_recovery_uses_equal_steps_and_explicit_intervention() {
+        let mut monitor = RegionRecallMonitor::new(
+            4, &[0, 1, 2, 3],
+            &[Some(7), Some(7), Some(9), Some(9)],
+        ).unwrap();
+        let initial = BooleanState::new(4);
+        monitor.observe(&initial, 2).unwrap();
+        let before = monitor.clone();
+        let mut calls = 0;
+        let comparison = monitor.compare_live_recovery(
+            &initial, 1, 2, 2, 2, 3, 1, 2,
+            |state| {
+                calls += 1;
+                Ok(state.clone())
+            },
+        ).unwrap();
+        assert_eq!(calls, 6);
+        assert_eq!(
+            comparison,
+            vec![(7, None, Some(1), None, Some(2)),
+                 (9, None, Some(1), None, Some(2))],
+        );
+        assert_eq!(monitor, before);
+        assert_eq!(initial, BooleanState::new(4));
+        assert_eq!(
+            monitor.compare_live_recovery(
+                &initial, 1, 2, 2, 2, 0, 1, 1,
+                |state| Ok(state.clone()),
+            ),
+            Err(RegionMonitorError::InvalidBudget),
+        );
+        assert_eq!(
+            monitor.compare_live_recovery(
+                &initial, 1, 2, 2, 2, 1, 1, 1,
+                |_| Ok(BooleanState::new(3)),
+            ),
+            Err(RegionMonitorError::InvalidDimensions),
+        );
     }
 
     #[test]
