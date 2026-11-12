@@ -647,6 +647,42 @@ impl RegionRecallMonitor {
     pub fn regions(&self) -> impl Iterator<Item = &RegionRecall> {
         self.regions.values()
     }
+
+    /// Count actual bit flips between consecutive observations by explicit region.
+    /// This is a simulated stability proxy, not CPU energy or biological plasticity.
+    /// Both arms must have identical nonempty horizons (at most 1000 states).
+    /// The first state establishes the reference; no imaginary pre-trial state.
+    /// Returns (region_id, baseline_flips, candidate_flips), ordered by region ID.
+    pub fn paired_region_transition_cost(
+        &self,
+        baseline: &[BooleanState],
+        candidate: &[BooleanState],
+    ) -> Result<Vec<(u32, u128, u128)>, RegionMonitorError> {
+        if baseline.is_empty() || baseline.len() > 1000 || baseline.len() != candidate.len() {
+            return Err(RegionMonitorError::InvalidBudget);
+        }
+        if baseline.iter().chain(candidate.iter()).any(|state| state.len() != self.universe) {
+            return Err(RegionMonitorError::InvalidDimensions);
+        }
+        let mut counts: BTreeMap<u32, (u128, u128)> =
+            self.regions.keys().map(|&id| (id, (0, 0))).collect();
+        for (previous, current) in baseline.windows(2).map(|pair| (&pair[0], &pair[1]))
+            .zip(candidate.windows(2).map(|pair| (&pair[0], &pair[1]))) {
+            let ((baseline_before, baseline_after), (candidate_before, candidate_after)) =
+                (previous, current);
+            for &(index, region) in &self.members {
+                let baseline_flip = baseline_before.get(index) != baseline_after.get(index);
+                let candidate_flip = candidate_before.get(index) != candidate_after.get(index);
+                let entry = counts.get_mut(&region).ok_or(RegionMonitorError::InvalidDimensions)?;
+                entry.0 = entry.0.checked_add(u128::from(baseline_flip))
+                    .ok_or(RegionMonitorError::Overflow)?;
+                entry.1 = entry.1.checked_add(u128::from(candidate_flip))
+                    .ok_or(RegionMonitorError::Overflow)?;
+            }
+        }
+        Ok(counts.into_iter().map(|(id, (baseline, candidate))| (id, baseline, candidate)).collect())
+    }
+
 }
 
 #[cfg(test)]
@@ -1116,4 +1152,38 @@ mod tests {
             Err(RegionMonitorError::InvalidDimensions));
         assert_eq!(monitor, before);
     }
+
+    #[test]
+    fn paired_transition_cost_excludes_unannotated_and_initial_state() {
+        let monitor = RegionRecallMonitor::new(
+            4, &[0, 1, 2, 3], &[Some(7), Some(7), Some(9), None],
+        ).unwrap();
+        let original = monitor.clone();
+        let mut baseline = vec![BooleanState::new(4); 3];
+        let mut candidate = baseline.clone();
+        baseline[0].set(0, true).unwrap();
+        baseline[1].set(1, true).unwrap();
+        baseline[2].set(1, true).unwrap();
+        candidate[0].set(3, true).unwrap();
+        candidate[1].set(2, true).unwrap();
+        candidate[2].set(2, true).unwrap();
+        assert_eq!(
+            monitor.paired_region_transition_cost(&baseline, &candidate).unwrap(),
+            vec![(7, 2, 0), (9, 0, 1)],
+        );
+        assert_eq!(
+            monitor.paired_region_transition_cost(&baseline[..2], &candidate),
+            Err(RegionMonitorError::InvalidBudget),
+        );
+        assert_eq!(
+            monitor.paired_region_transition_cost(&baseline, &[BooleanState::new(3); 3]),
+            Err(RegionMonitorError::InvalidDimensions),
+        );
+        assert_eq!(
+            monitor.paired_region_transition_cost(&baseline[..1], &candidate[..1]).unwrap(),
+            vec![(7, 0, 0), (9, 0, 0)],
+        );
+        assert_eq!(monitor, original);
+    }
+
 }
