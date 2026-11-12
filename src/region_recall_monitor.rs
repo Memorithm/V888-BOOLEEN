@@ -555,6 +555,34 @@ impl RegionRecallMonitor {
         )
     }
 
+    /// Count durable regional outcomes from paired equal-horizon traces.
+    /// None is right-censored, not an immediate recovery. Returns counts of
+    /// candidate earlier, baseline earlier, tied, candidate only, baseline only,
+    /// and neither. Descriptive only; no causal or biological inference.
+    pub fn durable_recovery_outcomes(
+        &self,
+        baseline: &[BooleanState],
+        candidate: &[BooleanState],
+        minimum_active: usize,
+        consecutive: usize,
+    ) -> Result<(usize, usize, usize, usize, usize, usize), RegionMonitorError> {
+        let pairs = self.compare_recall_traces(
+            baseline, candidate, minimum_active, consecutive,
+        )?;
+        let mut result = (0, 0, 0, 0, 0, 0);
+        for (_, _, _, a, b) in pairs {
+            match (a, b) {
+                (Some(x), Some(y)) if y < x => result.0 += 1,
+                (Some(x), Some(y)) if x < y => result.1 += 1,
+                (Some(_), Some(_)) => result.2 += 1,
+                (None, Some(_)) => result.3 += 1,
+                (Some(_), None) => result.4 += 1,
+                (None, None) => result.5 += 1,
+            }
+        }
+        Ok(result)
+    }
+
     pub fn ticks(&self) -> u64 { self.ticks }
 
     pub fn regions(&self) -> impl Iterator<Item = &RegionRecall> {
@@ -890,6 +918,28 @@ mod tests {
         assert_eq!(monitor, before);
     }
 
+
+    #[test]
+    fn durable_outcomes_count_confirmed_and_censored_regions() {
+        let monitor = RegionRecallMonitor::new(
+            6, &[0, 1, 2, 3, 4, 5],
+            &[Some(1), Some(1), Some(2), Some(2), Some(3), Some(3)],
+        ).unwrap();
+        let baseline = vec![BooleanState::new(6); 3];
+        let mut candidate = baseline.clone();
+        for tick in [1, 2] {
+            candidate[tick].set(0, true).unwrap();
+            candidate[tick].set(1, true).unwrap();
+        }
+        assert_eq!(
+            monitor.durable_recovery_outcomes(&baseline, &candidate, 2, 2).unwrap(),
+            (0, 0, 0, 1, 0, 2),
+        );
+        assert_eq!(
+            monitor.durable_recovery_outcomes(&baseline[..2], &candidate, 2, 2),
+            Err(RegionMonitorError::InvalidDimensions),
+        );
+    }
 
     #[test]
     fn paired_live_recovery_uses_equal_steps_and_explicit_intervention() {
