@@ -326,6 +326,61 @@ impl RegionRecallMonitor {
         }
     }
 
+    /// Run bounded hypothetical recovery with caller-provided graph propagation.
+    /// The callback owns the transition rule; this method never edits graph edges.
+    /// A successful recall requires an observed threshold crossing after a step.
+    /// Returns (final state, propagation steps used, confirmed region IDs).
+    pub fn recover_with_propagation<F>(
+        &self,
+        state: &BooleanState,
+        minimum_gap: u64,
+        minimum_members: usize,
+        maximum_regions: usize,
+        maximum_new_activations: usize,
+        maximum_steps: usize,
+        minimum_active_for_recall: usize,
+        mut propagate: F,
+    ) -> Result<(BooleanState, usize, Vec<u32>), RegionMonitorError>
+    where
+        F: FnMut(&BooleanState) -> Result<BooleanState, RegionMonitorError>,
+    {
+        if state.len() != self.universe {
+            return Err(RegionMonitorError::InvalidDimensions);
+        }
+        if maximum_steps == 0 || minimum_active_for_recall == 0 {
+            return Err(RegionMonitorError::InvalidBudget);
+        }
+        let target_regions = self.recall_gap_regions(
+            minimum_gap, minimum_members, maximum_regions,
+        )?;
+        let (mut current, _) = self.stimulate_inactive_recall_gap(
+            state, minimum_gap, minimum_members, maximum_regions,
+            maximum_new_activations,
+        )?;
+        let mut observer = self.clone();
+        for step in 1..=maximum_steps {
+            let next = propagate(&current)?;
+            if next.len() != self.universe {
+                return Err(RegionMonitorError::InvalidDimensions);
+            }
+            observer.observe(&next, minimum_active_for_recall)?;
+            current = next;
+            let confirmed: Vec<u32> = target_regions
+                .iter()
+                .filter_map(|&(region, _)| {
+                    observer.regions.get(&region).and_then(|stats| {
+                        (stats.last_recalled_tick == Some(observer.ticks))
+                            .then_some(region)
+                    })
+                })
+                .collect();
+            if !confirmed.is_empty() {
+                return Ok((current, step, confirmed));
+            }
+        }
+        Ok((current, maximum_steps, Vec::new()))
+    }
+
     pub fn ticks(&self) -> u64 { self.ticks }
 
     pub fn regions(&self) -> impl Iterator<Item = &RegionRecall> {
@@ -523,6 +578,49 @@ mod tests {
         assert_eq!(
             monitor.stimulate_inactive_recall_gap(&state, 1, 2, 2, 0),
             Err(RegionMonitorError::InvalidBudget),
+        );
+    }
+
+    #[test]
+    fn bounded_recovery_confirms_only_post_propagation_recall() {
+        let mut monitor = RegionRecallMonitor::new(
+            4, &[0, 1, 2, 3],
+            &[Some(7), Some(7), Some(9), Some(9)],
+        ).unwrap();
+        monitor.observe(&BooleanState::new(4), 2).unwrap();
+        let before = monitor.clone();
+        let state = BooleanState::new(4);
+        let (recovered, steps, regions) = monitor.recover_with_propagation(
+            &state, 1, 2, 2, 2, 3, 1,
+            |input| Ok(input.clone()),
+        ).unwrap();
+        assert_eq!(steps, 1);
+        assert_eq!(regions, vec![7, 9]);
+        assert_eq!(recovered.get(0), Ok(true));
+        assert_eq!(recovered.get(2), Ok(true));
+        assert_eq!(monitor, before);
+
+        let (silent, steps, regions) = monitor.recover_with_propagation(
+            &state, 1, 2, 2, 2, 2, 1,
+            |_| Ok(BooleanState::new(4)),
+        ).unwrap();
+        assert_eq!(steps, 2);
+        assert!(regions.is_empty());
+        assert_eq!(silent, state);
+        assert_eq!(monitor, before);
+        assert_eq!(
+            monitor.recover_with_propagation(
+                &state, 1, 2, 2, 2, 0, 1,
+                |input| Ok(input.clone()),
+            ),
+            Err(RegionMonitorError::InvalidBudget),
+        );
+        assert_eq!(
+            monitor.recover_with_propagation(
+                &state, 1, 2, 2, 2, 1, 1,
+                |_| Ok(BooleanState::new(3)),
+            ),
+            Err(RegionMonitorError::InvalidDimensions),
         );
     }
 
