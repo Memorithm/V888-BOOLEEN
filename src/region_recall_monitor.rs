@@ -477,6 +477,28 @@ impl RegionRecallMonitor {
         Ok(output)
     }
 
+    /// Compare two equal-horizon observational traces on identical explicit regions.
+    /// Returns per-region (id, baseline_first, candidate_first, baseline_durable,
+    /// candidate_durable), with one-based confirmation ticks. None is censored.
+    /// This is descriptive, not evidence of a causal stimulation benefit.
+    pub fn compare_recall_traces(
+        &self,
+        baseline: &[BooleanState],
+        candidate: &[BooleanState],
+        minimum_active: usize,
+        durable_ticks: usize,
+    ) -> Result<Vec<(u32, Option<usize>, Option<usize>, Option<usize>, Option<usize>)>, RegionMonitorError> {
+        if baseline.len() != candidate.len() {
+            return Err(RegionMonitorError::InvalidDimensions);
+        }
+        let a = self.recall_trace_latency(baseline, minimum_active, durable_ticks)?;
+        let b = self.recall_trace_latency(candidate, minimum_active, durable_ticks)?;
+        Ok(a.into_iter().zip(b).map(|((region, first_a, durable_a), (other, first_b, durable_b))| {
+            debug_assert_eq!(region, other);
+            (region, first_a, first_b, durable_a, durable_b)
+        }).collect())
+    }
+
     pub fn ticks(&self) -> u64 { self.ticks }
 
     pub fn regions(&self) -> impl Iterator<Item = &RegionRecall> {
@@ -782,6 +804,33 @@ mod tests {
             Err(RegionMonitorError::InvalidBudget));
         assert_eq!(monitor.recall_trace_latency(&[BooleanState::new(3)], 2, 1),
             Err(RegionMonitorError::InvalidDimensions));
+        assert_eq!(monitor, before);
+    }
+
+    #[test]
+    fn paired_traces_preserve_censoring_and_equal_budgets() {
+        let monitor = RegionRecallMonitor::new(
+            4, &[0, 1, 2, 3], &[Some(7), Some(7), Some(9), Some(9)],
+        ).unwrap();
+        let before = monitor.clone();
+        let baseline = vec![BooleanState::new(4); 3];
+        let mut candidate = baseline.clone();
+        for tick in [1, 2] {
+            candidate[tick].set(0, true).unwrap();
+            candidate[tick].set(1, true).unwrap();
+        }
+        assert_eq!(
+            monitor.compare_recall_traces(&baseline, &candidate, 2, 2).unwrap(),
+            vec![(7, None, Some(2), None, Some(3)), (9, None, None, None, None)],
+        );
+        assert_eq!(
+            monitor.compare_recall_traces(&baseline[..2], &candidate, 2, 2),
+            Err(RegionMonitorError::InvalidDimensions),
+        );
+        assert_eq!(
+            monitor.compare_recall_traces(&baseline, &candidate, 0, 2),
+            Err(RegionMonitorError::InvalidBudget),
+        );
         assert_eq!(monitor, before);
     }
 
