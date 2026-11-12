@@ -436,6 +436,47 @@ impl RegionRecallMonitor {
         Ok((current, maximum_steps, Vec::new()))
     }
 
+    /// Evaluate first and durable regional recall on a bounded, held-out state trace.
+    /// The trace is observational: no stimulation, graph edits or monitor mutation.
+    /// Durability requires consecutive observations, not a single transient spike.
+    pub fn recall_trace_latency(
+        &self,
+        states: &[BooleanState],
+        minimum_active: usize,
+        durable_ticks: usize,
+    ) -> Result<Vec<(u32, Option<usize>, Option<usize>)>, RegionMonitorError> {
+        if states.is_empty() || states.len() > 1000
+            || minimum_active == 0 || durable_ticks == 0
+        {
+            return Err(RegionMonitorError::InvalidBudget);
+        }
+        if states.iter().any(|state| state.len() != self.universe) {
+            return Err(RegionMonitorError::InvalidDimensions);
+        }
+        let mut output = Vec::with_capacity(self.regions.len());
+        for &region in self.regions.keys() {
+            let mut first = None;
+            let mut durable = None;
+            let mut streak = 0usize;
+            for (tick, state) in states.iter().enumerate() {
+                let active = self.members.iter()
+                    .filter(|&&(index, label)| label == region && state.get(index) == Ok(true))
+                    .count();
+                if active >= minimum_active {
+                    if first.is_none() { first = Some(tick + 1); }
+                    streak += 1;
+                    if streak >= durable_ticks && durable.is_none() {
+                        durable = Some(tick + 1);
+                    }
+                } else {
+                    streak = 0;
+                }
+            }
+            output.push((region, first, durable));
+        }
+        Ok(output)
+    }
+
     pub fn ticks(&self) -> u64 { self.ticks }
 
     pub fn regions(&self) -> impl Iterator<Item = &RegionRecall> {
@@ -716,6 +757,32 @@ mod tests {
             ),
             Err(RegionMonitorError::InvalidBudget),
         );
+    }
+
+    #[test]
+    fn trace_latency_separates_transient_and_durable_recall() {
+        let monitor = RegionRecallMonitor::new(
+            4, &[0, 1, 2, 3], &[Some(7), Some(7), Some(9), Some(9)],
+        ).unwrap();
+        let before = monitor.clone();
+        let mut states = vec![BooleanState::new(4); 4];
+        for tick in [0, 2, 3] {
+            for index in [0, 1] { states[tick].set(index, true).unwrap(); }
+        }
+        for tick in [1, 2, 3] {
+            for index in [2, 3] { states[tick].set(index, true).unwrap(); }
+        }
+        assert_eq!(monitor.recall_trace_latency(&states, 2, 2).unwrap(),
+            vec![(7, Some(1), Some(4)), (9, Some(2), Some(3))]);
+        assert_eq!(monitor.recall_trace_latency(&states[..1], 2, 2).unwrap(),
+            vec![(7, Some(1), None), (9, None, None)]);
+        assert_eq!(monitor.recall_trace_latency(&[], 2, 2),
+            Err(RegionMonitorError::InvalidBudget));
+        assert_eq!(monitor.recall_trace_latency(&states, 2, 0),
+            Err(RegionMonitorError::InvalidBudget));
+        assert_eq!(monitor.recall_trace_latency(&[BooleanState::new(3)], 2, 1),
+            Err(RegionMonitorError::InvalidDimensions));
+        assert_eq!(monitor, before);
     }
 
     #[test]
