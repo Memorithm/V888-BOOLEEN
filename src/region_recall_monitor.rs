@@ -583,6 +583,41 @@ impl RegionRecallMonitor {
         Ok(result)
     }
 
+    /// Measure the total number of active annotated member-ticks in two
+    /// equal-horizon traces. This is a descriptive activity cost proxy, not
+    /// energy or CPU usage. Unannotated neurons are deliberately excluded.
+    /// Returns (region ID, baseline active ticks, candidate active ticks).
+    pub fn paired_region_activity_cost(
+        &self,
+        baseline: &[BooleanState],
+        candidate: &[BooleanState],
+    ) -> Result<Vec<(u32, u128, u128)>, RegionMonitorError> {
+        if baseline.is_empty() || baseline.len() != candidate.len()
+            || baseline.len() > 1000
+        {
+            return Err(RegionMonitorError::InvalidBudget);
+        }
+        if baseline.iter().chain(candidate.iter()).any(|s| s.len() != self.universe) {
+            return Err(RegionMonitorError::InvalidDimensions);
+        }
+        let mut totals = BTreeMap::<u32, (u128, u128)>::new();
+        for &region in self.regions.keys() {
+            totals.insert(region, (0, 0));
+        }
+        for (a, b) in baseline.iter().zip(candidate) {
+            for &(index, region) in &self.members {
+                let pair = totals.get_mut(&region).ok_or(RegionMonitorError::InvalidDimensions)?;
+                if a.get(index) == Ok(true) {
+                    pair.0 = pair.0.checked_add(1).ok_or(RegionMonitorError::Overflow)?;
+                }
+                if b.get(index) == Ok(true) {
+                    pair.1 = pair.1.checked_add(1).ok_or(RegionMonitorError::Overflow)?;
+                }
+            }
+        }
+        Ok(totals.into_iter().map(|(region, (a, b))| (region, a, b)).collect())
+    }
+
     pub fn ticks(&self) -> u64 { self.ticks }
 
     pub fn regions(&self) -> impl Iterator<Item = &RegionRecall> {
@@ -980,6 +1015,40 @@ mod tests {
             ),
             Err(RegionMonitorError::InvalidDimensions),
         );
+    }
+
+    #[test]
+    fn paired_activity_cost_counts_only_explicit_members() {
+        let monitor = RegionRecallMonitor::new(
+            5, &[0, 1, 2, 3, 4],
+            &[Some(9), Some(9), Some(2), Some(2), None],
+        ).unwrap();
+        let original = monitor.clone();
+        let mut baseline = vec![BooleanState::new(5); 2];
+        let mut candidate = baseline.clone();
+        baseline[0].set(0, true).unwrap();
+        baseline[1].set(2, true).unwrap();
+        candidate[0].set(0, true).unwrap();
+        candidate[0].set(1, true).unwrap();
+        candidate[1].set(3, true).unwrap();
+        candidate[1].set(4, true).unwrap();
+        assert_eq!(
+            monitor.paired_region_activity_cost(&baseline, &candidate).unwrap(),
+            vec![(2, 1, 1), (9, 1, 2)],
+        );
+        assert_eq!(
+            monitor.paired_region_activity_cost(&baseline[..1], &candidate),
+            Err(RegionMonitorError::InvalidBudget),
+        );
+        assert_eq!(
+            monitor.paired_region_activity_cost(&[], &[]),
+            Err(RegionMonitorError::InvalidBudget),
+        );
+        assert_eq!(
+            monitor.paired_region_activity_cost(&baseline, &[BooleanState::new(3), BooleanState::new(3)]),
+            Err(RegionMonitorError::InvalidDimensions),
+        );
+        assert_eq!(monitor, original);
     }
 
     #[test]
