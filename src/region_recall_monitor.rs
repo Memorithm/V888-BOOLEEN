@@ -618,6 +618,30 @@ impl RegionRecallMonitor {
         Ok(totals.into_iter().map(|(region, (a, b))| (region, a, b)).collect())
     }
 
+    /// Join durable recall and simulated activity cost on the same annotated regions.
+    /// The two arms must have identical horizons; None denotes right-censoring.
+    /// Costs are active member-ticks, not CPU time or biological energy.
+    /// Returns (region, baseline confirmation, candidate confirmation,
+    ///          baseline activity, candidate activity).
+    pub fn paired_durable_recall_activity(
+        &self,
+        baseline: &[BooleanState],
+        candidate: &[BooleanState],
+        minimum_active: usize,
+        consecutive: usize,
+    ) -> Result<Vec<(u32, Option<usize>, Option<usize>, u128, u128)>, RegionMonitorError> {
+        let recall = self.compare_recall_traces(
+            baseline, candidate, minimum_active, consecutive,
+        )?;
+        let costs = self.paired_region_activity_cost(baseline, candidate)?;
+        Ok(recall.into_iter().zip(costs).map(
+            |((region, _, _, durable_a, durable_b), (cost_region, cost_a, cost_b))| {
+                debug_assert_eq!(region, cost_region);
+                (region, durable_a, durable_b, cost_a, cost_b)
+            },
+        ).collect())
+    }
+
     pub fn ticks(&self) -> u64 { self.ticks }
 
     pub fn regions(&self) -> impl Iterator<Item = &RegionRecall> {
@@ -1047,6 +1071,35 @@ mod tests {
         assert_eq!(
             monitor.paired_region_activity_cost(&baseline, &[BooleanState::new(3), BooleanState::new(3)]),
             Err(RegionMonitorError::InvalidDimensions),
+        );
+        assert_eq!(monitor, original);
+    }
+
+    #[test]
+    fn paired_durable_recall_activity_keeps_censoring_and_costs() {
+        let monitor = RegionRecallMonitor::new(
+            5, &[0, 1, 2, 3, 4],
+            &[Some(7), Some(7), Some(9), Some(9), None],
+        ).unwrap();
+        let original = monitor.clone();
+        let baseline = vec![BooleanState::new(5); 3];
+        let mut candidate = baseline.clone();
+        for tick in [1, 2] {
+            candidate[tick].set(0, true).unwrap();
+            candidate[tick].set(1, true).unwrap();
+        }
+        candidate[0].set(4, true).unwrap();
+        assert_eq!(
+            monitor.paired_durable_recall_activity(&baseline, &candidate, 2, 2).unwrap(),
+            vec![(7, None, Some(3), 0, 4), (9, None, None, 0, 0)],
+        );
+        assert_eq!(
+            monitor.paired_durable_recall_activity(&baseline[..2], &candidate, 2, 2),
+            Err(RegionMonitorError::InvalidDimensions),
+        );
+        assert_eq!(
+            monitor.paired_durable_recall_activity(&baseline, &candidate, 0, 2),
+            Err(RegionMonitorError::InvalidBudget),
         );
         assert_eq!(monitor, original);
     }
