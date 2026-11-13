@@ -141,10 +141,7 @@ fn pack_train(
     model: &FiveCircleHierarchy,
     train: &[RoutingSample],
 ) -> Result<Vec<PackedTrain>, RoutingSelectionError> {
-    if train.is_empty()
-        || train.len() > MAX_ROUTING_TRAIN
-        || train.len() % BITSLICE_LANES != 0
-    {
+    if train.is_empty() || train.len() > MAX_ROUTING_TRAIN || train.len() % BITSLICE_LANES != 0 {
         return Err(RoutingSelectionError::InvalidTraining);
     }
     let mut unique = BTreeSet::new();
@@ -225,11 +222,7 @@ mod tests {
     use super::*;
     use crate::fourier5_hierarchy::{GateKind, LeafRouting};
 
-    fn make_train(
-        teacher: &FiveCircleHierarchy,
-        size: usize,
-        seed: u64,
-    ) -> Vec<RoutingSample> {
+    fn make_train(teacher: &FiveCircleHierarchy, size: usize, seed: u64) -> Vec<RoutingSample> {
         let mut rng = Xorshift64::new(seed);
         let mut seen = BTreeSet::new();
         let mut data = Vec::with_capacity(size);
@@ -279,11 +272,9 @@ mod tests {
         assert_eq!(fit.model.neuron_count(), base.neuron_count());
         assert_eq!(fit.model.directed_contacts(), base.directed_contacts());
         let heldout = make_train(&teacher, 256, 0x85_1321);
-        assert!(
-            heldout
-                .iter()
-                .all(|row| fit.model.infer_scalar(&row.state) == Ok(row.label))
-        );
+        assert!(heldout
+            .iter()
+            .all(|row| fit.model.infer_scalar(&row.state) == Ok(row.label)));
         let second = select_route(&base, &train, 73, 32).unwrap();
         assert_eq!(fit.selected_index, second.selected_index);
         assert_eq!(fit.model.routing(), second.model.routing());
