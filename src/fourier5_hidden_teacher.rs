@@ -24,10 +24,14 @@ pub enum HiddenError {
 }
 
 impl From<HierarchyError> for HiddenError {
-    fn from(value: HierarchyError) -> Self { Self::Hierarchy(value) }
+    fn from(value: HierarchyError) -> Self {
+        Self::Hierarchy(value)
+    }
 }
 impl From<JointError> for HiddenError {
-    fn from(value: JointError) -> Self { Self::Joint(value) }
+    fn from(value: JointError) -> Self {
+        Self::Joint(value)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -47,7 +51,11 @@ pub struct HiddenFit {
 }
 
 fn sign(input: u8, mask: u8) -> i32 {
-    if (input & mask).count_ones() % 2 == 0 { 1 } else { -1 }
+    if (input & mask).count_ones() % 2 == 0 {
+        1
+    } else {
+        -1
+    }
 }
 
 /// Exact integer local perceptron with bounded signed Walsh weights.
@@ -61,17 +69,27 @@ fn fit_node(
     let mut weights: [i32; CIRCLES] = std::array::from_fn(|i| {
         let c = starting.circles()[i];
         let value = c.radius.min(MAX_READOUT_WEIGHT as u32) as i32;
-        if c.phase_pi { -value } else { value }
+        if c.phase_pi {
+            -value
+        } else {
+            value
+        }
     });
-    let mut bias = starting.bias().clamp(-MAX_READOUT_WEIGHT, MAX_READOUT_WEIGHT);
+    let mut bias = starting
+        .bias()
+        .clamp(-MAX_READOUT_WEIGHT, MAX_READOUT_WEIGHT);
     let mut visits = 0;
     let mut updates = 0;
     for _ in 0..epochs {
         let mut mistakes = 0;
         for &(input, expected) in examples {
             visits += 1;
-            let score: i32 = bias + weights.iter().zip(masks)
-                .map(|(&w, mask)| w * sign(input, mask)).sum::<i32>();
+            let score: i32 = bias
+                + weights
+                    .iter()
+                    .zip(masks)
+                    .map(|(&w, mask)| w * sign(input, mask))
+                    .sum::<i32>();
             if (score < 0) != expected {
                 let direction = if expected { -1 } else { 1 };
                 bias = (bias + direction).clamp(-MAX_READOUT_WEIGHT, MAX_READOUT_WEIGHT);
@@ -83,7 +101,9 @@ fn fit_node(
                 mistakes += 1;
             }
         }
-        if mistakes == 0 { break; }
+        if mistakes == 0 {
+            break;
+        }
     }
     let circles = std::array::from_fn(|i| Circle {
         mask: masks[i],
@@ -91,9 +111,10 @@ fn fit_node(
         phase_pi: weights[i] < 0,
     });
     let next = FiveCircle::new(circles, bias).expect("existing masks are valid");
-    let correct = examples.iter().filter(|&&(input, target)| {
-        next.predict(input) == Ok(target)
-    }).count();
+    let correct = examples
+        .iter()
+        .filter(|&&(input, target)| next.predict(input) == Ok(target))
+        .count();
     (next, updates, visits, correct)
 }
 
@@ -147,13 +168,16 @@ pub fn fit_hidden_with_teacher_taps(
     for layer in 0..model.depth() - 1 {
         // All neurons in the same layer receive features computed from the
         // prior stage only; no within-layer ordering or label contamination.
-        let actual: Vec<_> = train.iter()
+        let actual: Vec<_> = train
+            .iter()
             .map(|row| model.layer_trace(&row.state))
             .collect::<Result<Vec<_>, _>>()?;
         let count = actual[0][layer].0.len();
         for neuron in 0..count {
-            let local: Vec<(u8,bool)> = actual.iter().zip(&teacher_traces)
-                .map(|(observed, goal)| (observed[layer].0[neuron],goal[layer].1[neuron]))
+            let local: Vec<(u8, bool)> = actual
+                .iter()
+                .zip(&teacher_traces)
+                .map(|(observed, goal)| (observed[layer].0[neuron], goal[layer].1[neuron]))
                 .collect();
             let previous = model.layer_model(layer, neuron)?;
             let (learned, updates, visits, hits) = fit_node(previous, &local, epochs);
@@ -197,9 +221,13 @@ mod tests {
                 seed ^= seed << 13;
                 seed ^= seed >> 7;
                 seed ^= seed << 17;
-                if seed & 1024 != 0 { state.set(i, true).unwrap(); }
+                if seed & 1024 != 0 {
+                    state.set(i, true).unwrap();
+                }
             }
-            if !seen.insert(state.words().to_vec()) { continue; }
+            if !seen.insert(state.words().to_vec()) {
+                continue;
+            }
             let label = teacher.infer_scalar(&state).unwrap();
             rows.push(RoutingSample { state, label });
         }
@@ -211,11 +239,13 @@ mod tests {
         let teacher = FiveCircleHierarchy::from_modes(
             &[GateKind::Majority, GateKind::Majority],
             LeafRouting::Contiguous,
-        ).unwrap();
+        )
+        .unwrap();
         let base = FiveCircleHierarchy::from_modes(
             &[GateKind::And, GateKind::And],
             LeafRouting::Contiguous,
-        ).unwrap();
+        )
+        .unwrap();
         let train = samples(&teacher);
         let fit = fit_hidden_with_teacher_taps(&base, &teacher, &train, 16).unwrap();
         assert_eq!(fit.hidden_neurons, 5);
@@ -239,11 +269,12 @@ mod tests {
     #[test]
     fn rejects_mismatched_teacher_and_unbounded_epoch_budget() {
         let base = FiveCircleHierarchy::from_modes(
-            &[GateKind::And, GateKind::And], LeafRouting::Contiguous,
-        ).unwrap();
-        let wrong_depth = FiveCircleHierarchy::from_modes(
-            &[GateKind::And], LeafRouting::Contiguous,
-        ).unwrap();
+            &[GateKind::And, GateKind::And],
+            LeafRouting::Contiguous,
+        )
+        .unwrap();
+        let wrong_depth =
+            FiveCircleHierarchy::from_modes(&[GateKind::And], LeafRouting::Contiguous).unwrap();
         let train = samples(&base);
         assert!(matches!(
             fit_hidden_with_teacher_taps(&base, &wrong_depth, &train, 8),
@@ -272,7 +303,8 @@ mod tests {
         let base = FiveCircleHierarchy::from_modes(
             &[GateKind::Majority, GateKind::Majority],
             LeafRouting::Contiguous,
-        ).unwrap();
+        )
+        .unwrap();
         let train = samples(&base);
         let fit = fit_hidden_with_teacher_taps(&base, &base, &train, 8).unwrap();
         assert_eq!(fit.changed_neurons, 0);
