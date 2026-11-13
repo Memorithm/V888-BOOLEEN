@@ -145,7 +145,7 @@ pub fn fit_output(
         return Err(JointError::InvalidBudget);
     }
     let current = base.output_model();
-    let masks = std::array::from_fn(|i| current.circles()[i].mask);
+    let masks: [u8; CIRCLES] = std::array::from_fn(|i| current.circles()[i].mask);
     let mut weights: [i32; CIRCLES] = std::array::from_fn(|i| {
         let circle = current.circles()[i];
         let radius = (circle.radius.min(MAX_READOUT_WEIGHT as u32)) as i32;
