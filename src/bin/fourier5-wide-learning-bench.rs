@@ -4,6 +4,7 @@
 //! are available; logical word accesses are never called DRAM traffic.
 use std::fs;
 use std::hint::black_box;
+use std::io::{self, Write};
 use std::time::Instant;
 
 use v888_booleen::fourier5_hierarchy::GateKind;
@@ -133,6 +134,52 @@ fn energy_delta(
         };
     }
     Some(total)
+}
+
+/// Marker protocol is opt-in and flushed for a trusted HOST RAPL reader.
+fn marker(label: &str) {
+    if std::env::var_os("V888_HOST_RAPL_OBSERVER").is_some() {
+        println!("V888_RAPL_MARKER={label}");
+        io::stdout().flush().expect("stdout marker flush");
+    }
+}
+
+/// No internal power sensor access is needed. The host wrapper reads RAPL
+/// while this code runs unprivileged in a network-disabled Docker sandbox.
+fn observer_phase(
+    label: &str,
+    full: bool,
+    repetitions: usize,
+    learner: &WidePlasticCircuit<'_>,
+    edits: &[(usize, usize, v888_booleen::fourier5::FiveCircle)],
+    reference: &[u64],
+) -> Result<(), String> {
+    marker(&format!("{label}_BEGIN"));
+    let started = Instant::now();
+    for _ in 0..repetitions {
+        for (index, &(layer, neuron, model)) in edits.iter().enumerate() {
+            let output = if full {
+                learner
+                    .evaluate_full_edit(layer, neuron, model)
+                    .map_err(|e| format!("{e:?}"))?
+            } else {
+                learner
+                    .propose(layer, neuron, model)
+                    .map_err(|e| format!("{e:?}"))?
+                    .output
+            };
+            if black_box(output) != reference[index] {
+                return Err(format!("observer mismatch phase={label} edit={index}"));
+            }
+        }
+    }
+    marker(&format!("{label}_END"));
+    println!(
+        "V888_RAPL_PHASE phase={label} trials={} duration_us={} exact=true",
+        edits.len() * repetitions,
+        started.elapsed().as_micros()
+    );
+    Ok(())
 }
 
 fn main() -> Result<(), String> {
@@ -330,6 +377,16 @@ fn main() -> Result<(), String> {
             "LARGE_RAPL_PACKAGE_ENERGY status=measured_uncontrolled full_uj={full} cached_uj={cached} note=package_shared_other_processes_and_measurement_granularity"
         ),
         _ => println!("LARGE_RAPL_PACKAGE_ENERGY status=unavailable reason=counter_inaccessible_or_resolution"),
+    }
+    if std::env::var_os("V888_HOST_RAPL_OBSERVER").is_some() {
+        // ABBA order limits (does not eliminate) drift and shared-host noise.
+        // Full: 64 edits/run; cached: 64 * 8192 edits/run.
+        // Normalization and host RAPL readings are done ONLY by the trusted
+        // RemoteOps wrapper; the two windows have different durations.
+        observer_phase("FULL_A", true, 1, &learner, &edits, &full_outputs)?;
+        observer_phase("CACHED_A", false, 8192, &learner, &edits, &full_outputs)?;
+        observer_phase("CACHED_B", false, 8192, &learner, &edits, &full_outputs)?;
+        observer_phase("FULL_B", true, 1, &learner, &edits, &full_outputs)?;
     }
     println!(
         "LARGE_LEARNING_6250000_DONE elapsed_ms={} note=teacher_tapped_and_output_only_are_distinct",
