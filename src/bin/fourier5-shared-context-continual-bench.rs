@@ -10,7 +10,13 @@ use v888_booleen::fourier5_task_memory::TaskBatch;
 use v888_booleen::fourier5_wide::{WideFiveTree, SIX_MILLION_INPUTS};
 use v888_booleen::fourier5_wide_learning::WidePlasticCircuit;
 
-const SEEDS: [u64; 5] = [0xb888_5101, 0xb888_5102, 0xb888_5103, 0xb888_5104, 0xb888_5105];
+const SEEDS: [u64; 5] = [
+    0xb888_5101,
+    0xb888_5102,
+    0xb888_5103,
+    0xb888_5104,
+    0xb888_5105,
+];
 const TASKS: usize = 4;
 
 fn data(size: usize, seed: u64) -> Vec<u64> {
@@ -45,7 +51,11 @@ fn withheld(planes: [u64; CIRCLES]) -> u64 {
 
 fn scores(model: &SharedContextNeuron, items: &[TaskBatch], novel: bool) -> (u64, u64) {
     items.iter().fold((0, 0), |(right, count), item| {
-        let admit = if novel { withheld(item.features) } else { item.observed };
+        let admit = if novel {
+            withheld(item.features)
+        } else {
+            item.observed
+        };
         let wrong = (model.predict(item.features) ^ item.labels) & admit;
         (
             right + u64::from(admit.count_ones() - wrong.count_ones()),
@@ -55,13 +65,15 @@ fn scores(model: &SharedContextNeuron, items: &[TaskBatch], novel: bool) -> (u64
 }
 
 fn total_score(model: &SharedContextNeuron, tasks: &[Task], split: usize) -> (u64, u64) {
-    tasks.iter().map(|t| match split {
-        0 => scores(model, &t.valid, false),
-        1 => scores(model, &t.test, false),
-        2 => scores(model, &t.ood, false),
-        _ => scores(model, &t.test, true),
-    })
-    .fold((0, 0), |(a, b), (x, y)| (a + x, b + y))
+    tasks
+        .iter()
+        .map(|t| match split {
+            0 => scores(model, &t.valid, false),
+            1 => scores(model, &t.test, false),
+            2 => scores(model, &t.ood, false),
+            _ => scores(model, &t.test, true),
+        })
+        .fold((0, 0), |(a, b), (x, y)| (a + x, b + y))
 }
 
 struct Task {
@@ -87,10 +99,13 @@ fn split(
     for i in 0..batches {
         let source = data(
             size,
-            seed ^ salt ^ ((task as u64 + 1) << 48)
+            seed ^ salt
+                ^ ((task as u64 + 1) << 48)
                 ^ (i as u64 + 1).wrapping_mul(0x6a09_e667_f3bc_c909),
         );
-        let trace = circuit.evaluate_trace(&source).map_err(|e| format!("{e:?}"))?;
+        let trace = circuit
+            .evaluate_trace(&source)
+            .map_err(|e| format!("{e:?}"))?;
         let row = trace.get(layer).ok_or("missing feature layer")?;
         if row.len() < 3 {
             return Err("need three independent backbone nodes".into());
@@ -108,7 +123,11 @@ fn split(
         result.push(TaskBatch {
             features,
             labels: oracle(target, features),
-            observed: if training { !withheld(features) } else { u64::MAX },
+            observed: if training {
+                !withheld(features)
+            } else {
+                u64::MAX
+            },
         });
     }
     Ok(result)
@@ -124,18 +143,65 @@ fn suite(
     (0..TASKS)
         .map(|t| {
             Ok(Task {
-                train: split(circuit, size, layer, seed, t, 0x1111_0001, 3, true, false, target)?,
-                valid: split(circuit, size, layer, seed, t, 0x2222_0002, 2, false, false, target)?,
-                test: split(circuit, size, layer, seed, t, 0x3333_0003, 2, false, false, target)?,
-                ood: split(circuit, size, layer, seed, t, 0x4444_0004, 2, false, true, target)?,
+                train: split(
+                    circuit,
+                    size,
+                    layer,
+                    seed,
+                    t,
+                    0x1111_0001,
+                    3,
+                    true,
+                    false,
+                    target,
+                )?,
+                valid: split(
+                    circuit,
+                    size,
+                    layer,
+                    seed,
+                    t,
+                    0x2222_0002,
+                    2,
+                    false,
+                    false,
+                    target,
+                )?,
+                test: split(
+                    circuit,
+                    size,
+                    layer,
+                    seed,
+                    t,
+                    0x3333_0003,
+                    2,
+                    false,
+                    false,
+                    target,
+                )?,
+                ood: split(
+                    circuit,
+                    size,
+                    layer,
+                    seed,
+                    t,
+                    0x4444_0004,
+                    2,
+                    false,
+                    true,
+                    target,
+                )?,
             })
         })
         .collect()
 }
 
 fn feature_activity(items: &[TaskBatch]) -> (u64, u64) {
-    let active = items.iter().flat_map(|item| item.features[..3].iter())
-        .map(|w| u64::from(w.count_ones())).sum();
+    let active = items
+        .iter()
+        .flat_map(|item| item.features[..3].iter())
+        .map(|w| u64::from(w.count_ones()))
+        .sum();
     (active, items.len() as u64 * 3 * 64)
 }
 
@@ -162,29 +228,47 @@ fn experiment(tree: &WideFiveTree, seed: u64) -> Result<(), String> {
     );
     let mut initial_test = Vec::new();
     for task in 0..TASKS {
-        let previous: Vec<&[TaskBatch]> = tasks[..task].iter().map(|t| t.train.as_slice()).collect();
-        let past_test: Vec<_> = tasks[..task].iter()
+        let previous: Vec<&[TaskBatch]> =
+            tasks[..task].iter().map(|t| t.train.as_slice()).collect();
+        let past_test: Vec<_> = tasks[..task]
+            .iter()
             .map(|t| scores(&model, &t.test, false))
             .collect();
         let pre = scores(&model, &tasks[task].test, false);
         let now = Instant::now();
-        let fit = model.fit(&tasks[task].train, &previous).map_err(|e| format!("{e:?}"))?;
+        let fit = model
+            .fit(&tasks[task].train, &previous)
+            .map_err(|e| format!("{e:?}"))?;
         let fit_us = now.elapsed().as_micros();
-        no_replay.fit(&tasks[task].train, &[]).map_err(|e| format!("{e:?}"))?;
-        let corrupted: Vec<TaskBatch> = tasks[task].train.iter().map(|b| TaskBatch {
-            features: b.features,
-            labels: b.labels.rotate_left(17),
-            observed: b.observed,
-        }).collect();
-        let prior_corrupted: Vec<Vec<TaskBatch>> = tasks[..task].iter()
-            .map(|t| t.train.iter().map(|b| TaskBatch {
+        no_replay
+            .fit(&tasks[task].train, &[])
+            .map_err(|e| format!("{e:?}"))?;
+        let corrupted: Vec<TaskBatch> = tasks[task]
+            .train
+            .iter()
+            .map(|b| TaskBatch {
                 features: b.features,
                 labels: b.labels.rotate_left(17),
                 observed: b.observed,
-            }).collect())
+            })
+            .collect();
+        let prior_corrupted: Vec<Vec<TaskBatch>> = tasks[..task]
+            .iter()
+            .map(|t| {
+                t.train
+                    .iter()
+                    .map(|b| TaskBatch {
+                        features: b.features,
+                        labels: b.labels.rotate_left(17),
+                        observed: b.observed,
+                    })
+                    .collect()
+            })
             .collect();
         let prior_refs: Vec<&[TaskBatch]> = prior_corrupted.iter().map(Vec::as_slice).collect();
-        shuffled.fit(&corrupted, &prior_refs).map_err(|e| format!("{e:?}"))?;
+        shuffled
+            .fit(&corrupted, &prior_refs)
+            .map_err(|e| format!("{e:?}"))?;
         let checkpoint = model.checkpoint();
         let restored = SharedContextNeuron::restore(&checkpoint, layer as u32, [0, 1, 2])
             .map_err(|e| format!("{e:?}"))?;
@@ -271,7 +355,9 @@ mod tests {
                 let planes = [
                     if a { u64::MAX } else { 0 },
                     if b { u64::MAX } else { 0 },
-                    0, 0, 0,
+                    0,
+                    0,
+                    0,
                 ];
                 assert_eq!(withheld(planes) == u64::MAX, !a && !b);
             }
