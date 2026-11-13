@@ -231,9 +231,11 @@ fn main() -> Result<(), String> {
         .collect();
     let energy_full_start = rapl();
     let full_start = Instant::now();
+    let mut full_outputs = Vec::with_capacity(edits.len());
     for &(layer, neuron, model) in &edits {
-        black_box(learner.evaluate_full_edit(layer, neuron, model)
-            .map_err(|e| format!("{e:?}"))?);
+        let output = learner.evaluate_full_edit(layer, neuron, model)
+            .map_err(|e| format!("{e:?}"))?;
+        full_outputs.push(black_box(output));
     }
     let full_us = full_start.elapsed().as_micros();
     let energy_full_end = rapl();
@@ -242,16 +244,20 @@ fn main() -> Result<(), String> {
     let mut logical_reads = 0_usize;
     let mut changed_words = 0_usize;
     let mut gate_evals = 0_usize;
+    let mut cached_outputs = Vec::with_capacity(edits.len());
     for &(layer, neuron, model) in &edits {
         let proposal = learner.propose(layer, neuron, model)
             .map_err(|e| format!("{e:?}"))?;
         logical_reads += proposal.child_word_reads;
         changed_words += proposal.changed_cache_words;
         gate_evals += proposal.gate_evaluations;
-        black_box(proposal.output);
+        cached_outputs.push(black_box(proposal.output));
     }
     let cached_us = cached_start.elapsed().as_micros();
     let energy_cached_end = rapl();
+    if full_outputs != cached_outputs {
+        return Err("large trained circuit: full/delta mismatch".into());
+    }
     println!(
         "LARGE_MEMORY_ACCESS_ESTIMATE trials={} full_logical_child_words={} cached_logical_child_words={} cached_changed_words={} full_gate_evals={} cached_gate_evals={} full_us={full_us} cached_us={cached_us} peak_rss_kib={}",
         edits.len(), tree.real_contacts() * edits.len(), logical_reads,
