@@ -1,7 +1,7 @@
 //! Bounded synthetic demonstration of *learned* context gate masks.
 //! Run inside trusted RemoteOps: cargo run --offline --bin fourier5-context-bench
 //! Do not interpret accuracy as biological fidelity or broad OOD transfer.
-use v888_booleen::fourier5::{Circle, FiveCircle, CIRCLES};
+use v888_booleen::fourier5::{Circle, FiveCircle};
 use v888_booleen::fourier5_context_search::{learn_context_masks, ContextSample};
 use v888_booleen::fourier5_dynamic::{train_context_gates, GatedFiveCircle, RadiusGate};
 
