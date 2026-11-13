@@ -10,6 +10,7 @@ use std::collections::BTreeSet;
 
 use crate::fourier5::{Circle, FiveCircle, CIRCLES};
 use crate::fourier5_hierarchy::{FiveCircleHierarchy, HierarchyError, BITSLICE_LANES};
+use crate::fourier5_incremental::{FiveCircleIncrementalCache, PackedIntervention};
 use crate::fourier5_routing_search::{RoutingSample, MAX_ROUTING_TRAIN};
 
 pub const MAX_CREDIT_ROUNDS: usize = 16;
@@ -68,6 +69,14 @@ pub struct CreditResult {
     pub accepted_routing_moves: usize,
     pub rounds_without_improvement: usize,
     pub rounds_run: usize,
+    /// Gate calls needed to build all immutable 64-lane round baselines,
+    /// including the initial complete evaluation.
+    pub cache_build_gate_evaluations: usize,
+    /// Exact gate calls used to evaluate only counterfactual dependency cones.
+    pub delta_gate_evaluations: usize,
+    /// Gate calls that full-model reevaluation of every candidate would need.
+    /// Counts 64-lane gates, NOT wall time or scalar Boolean predictions.
+    pub full_recompute_gate_evaluations: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -150,7 +159,7 @@ fn perturb_parameter(
     model: &FiveCircleHierarchy,
     scope: CreditScope,
     random: &mut Xorshift,
-) -> Result<FiveCircleHierarchy, CreditError> {
+) -> Result<(FiveCircleHierarchy, PackedIntervention), CreditError> {
     let depth = model.depth();
     let allowed = if scope == CreditScope::OutputParameters {
         1
@@ -191,7 +200,10 @@ fn perturb_parameter(
         circles[coordinate].phase_pi = value < 0;
     }
     let next = FiveCircle::new(circles, bias).expect("unchanged valid Walsh masks");
-    Ok(model.with_neuron_parameters(layer, node, next)?)
+    Ok((
+        model.with_neuron_parameters(layer, node, next)?,
+        PackedIntervention::Parameter { layer, neuron: node, model: next },
+    ))
 }
 
 /// Explicit top-level cross-group swap: every source remains used exactly
@@ -199,7 +211,7 @@ fn perturb_parameter(
 fn perturb_route(
     model: &FiveCircleHierarchy,
     random: &mut Xorshift,
-) -> Result<FiveCircleHierarchy, CreditError> {
+) -> Result<(FiveCircleHierarchy, PackedIntervention), CreditError> {
     let width = model.input_bits();
     let stride = width / CIRCLES;
     let a = (random.next() % width as u64) as usize;
@@ -208,7 +220,10 @@ fn perturb_route(
     let b = other_group * stride + (random.next() % stride as u64) as usize;
     let mut routing = model.routing().to_vec();
     routing.swap(a, b);
-    Ok(model.rerouted(routing)?)
+    Ok((
+        model.rerouted(routing)?,
+        PackedIntervention::LeafSwap { first: a, second: b },
+    ))
 }
 
 /// Select among interventions by measuring exact OUTPUT LABEL error on
@@ -235,8 +250,26 @@ pub fn fit_final_loss(
     let mut accepted_parameter_moves = 0;
     let mut accepted_routing_moves = 0;
     let mut rounds_without_improvement = 0;
+    let mut cache_build_gate_evaluations = batches.len() * base.neuron_count();
+    let mut delta_gate_evaluations = 0;
 
     for _ in 0..config.rounds {
+        // One full 64-lane baseline traversal per batch per round.
+        // Interventions then evaluate *only* gates inside changed cones.
+        let caches: Vec<_> = batches
+            .iter()
+            .map(|batch| FiveCircleIncrementalCache::new(&model, &batch.planes))
+            .collect::<Result<_, _>>()?;
+        cache_build_gate_evaluations += caches
+            .iter()
+            .map(FiveCircleIncrementalCache::build_gate_evaluations)
+            .sum::<usize>();
+        debug_assert_eq!(
+            caches.iter().zip(&batches).map(|(cache, batch)| {
+                (BITSLICE_LANES as u32 - (cache.baseline_output() ^ batch.labels).count_ones()) as usize
+            }).sum::<usize>(),
+            hits
+        );
         let blind_index = (rng.next() % config.proposals_per_round as u64) as usize;
         let mut winning_model: Option<FiveCircleHierarchy> = None;
         let mut winning_hits = hits;
@@ -247,12 +280,18 @@ pub fn fit_final_loss(
                 CreditScope::JointHiddenAndRouting => rng.next() & 3 == 0,
                 CreditScope::HiddenParameters | CreditScope::OutputParameters => false,
             };
-            let proposal = if route {
+            let (proposal, delta) = if route {
                 perturb_route(&model, &mut rng)?
             } else {
                 perturb_parameter(&model, config.scope, &mut rng)?
             };
-            let candidate_hits = correct(&proposal, &batches)?;
+            let mut candidate_hits = 0;
+            for (cache, batch) in caches.iter().zip(&batches) {
+                let evaluation = cache.evaluate(delta)?;
+                delta_gate_evaluations += evaluation.gate_evaluations;
+                candidate_hits += (BITSLICE_LANES as u32
+                    - (evaluation.output ^ batch.labels).count_ones()) as usize;
+            }
             let chosen = match config.policy {
                 CreditPolicy::Greedy => candidate_hits > winning_hits,
                 CreditPolicy::Blind => index == blind_index,
@@ -290,6 +329,11 @@ pub fn fit_final_loss(
         accepted_routing_moves,
         rounds_without_improvement,
         rounds_run: config.rounds,
+        cache_build_gate_evaluations,
+        delta_gate_evaluations,
+        full_recompute_gate_evaluations: (evaluations + 1)
+            * batches.len()
+            * base.neuron_count(),
     })
 }
 
