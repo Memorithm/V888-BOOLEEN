@@ -21,7 +21,11 @@ const SHIFT: usize = 256;
 struct Random(u64);
 impl Random {
     fn new(seed: u64) -> Self {
-        Self(if seed == 0 { 0x9e37_79b9_7f4a_7c15 } else { seed })
+        Self(if seed == 0 {
+            0x9e37_79b9_7f4a_7c15
+        } else {
+            seed
+        })
     }
 
     fn next(&mut self) -> u64 {
@@ -44,9 +48,10 @@ fn oracle(state: &BooleanState, routing: &[u16], modes: &[GateKind]) -> bool {
         current = current
             .chunks_exact(5)
             .map(|inputs| {
-                let value = inputs.iter().enumerate().fold(0_u8, |acc, (bit, &is_on)| {
-                    acc | (u8::from(is_on) << bit)
-                });
+                let value = inputs
+                    .iter()
+                    .enumerate()
+                    .fold(0_u8, |acc, (bit, &is_on)| acc | (u8::from(is_on) << bit));
                 mode.oracle(value)
             })
             .collect();
@@ -97,15 +102,18 @@ struct Confusion {
     negatives: usize,
 }
 
-fn confusion(
-    model: &FiveCircleHierarchy,
-    rows: &[RoutingSample],
-) -> Result<Confusion, String> {
+fn confusion(model: &FiveCircleHierarchy, rows: &[RoutingSample]) -> Result<Confusion, String> {
     let mut answer = Confusion {
-        correct: 0, tp: 0, positives: 0, tn: 0, negatives: 0,
+        correct: 0,
+        tp: 0,
+        positives: 0,
+        tn: 0,
+        negatives: 0,
     };
     for row in rows {
-        let actual = model.infer_scalar(&row.state).map_err(|err| format!("{err:?}"))?;
+        let actual = model
+            .infer_scalar(&row.state)
+            .map_err(|err| format!("{err:?}"))?;
         answer.correct += usize::from(actual == row.label);
         if row.label {
             answer.positives += 1;
@@ -122,13 +130,12 @@ fn confusion(
 }
 
 fn profile(seed: u64, modes: &[GateKind], scope: CreditScope) -> Result<(), String> {
-    let teacher = FiveCircleHierarchy::from_modes(
-        modes, LeafRouting::SeededShuffle(seed ^ 0x5eed_08ee)
-    ).map_err(|err| format!("{err:?}"))?;
+    let teacher =
+        FiveCircleHierarchy::from_modes(modes, LeafRouting::SeededShuffle(seed ^ 0x5eed_08ee))
+            .map_err(|err| format!("{err:?}"))?;
     let width = teacher.input_bits();
-    let mut student = FiveCircleHierarchy::from_modes(
-        modes, LeafRouting::Contiguous
-    ).map_err(|err| format!("{err:?}"))?;
+    let mut student = FiveCircleHierarchy::from_modes(modes, LeafRouting::Contiguous)
+        .map_err(|err| format!("{err:?}"))?;
     // Model mismatch is transparent: some frozen first-layer Majorities
     // are replaced by AND gates, which retain the same Walsh singleton masks.
     for neuron in (0..width / 5).step_by(5) {
@@ -139,9 +146,33 @@ fn profile(seed: u64, modes: &[GateKind], scope: CreditScope) -> Result<(), Stri
 
     let mut rng = Random::new(seed ^ 0x614b_297a);
     let mut seen = BTreeSet::new();
-    let train = generate(&mut rng, &mut seen, TRAIN, width, 128, teacher.routing(), modes)?;
-    let test = generate(&mut rng, &mut seen, TEST, width, 128, teacher.routing(), modes)?;
-    let shift = generate(&mut rng, &mut seen, SHIFT, width, 64, teacher.routing(), modes)?;
+    let train = generate(
+        &mut rng,
+        &mut seen,
+        TRAIN,
+        width,
+        128,
+        teacher.routing(),
+        modes,
+    )?;
+    let test = generate(
+        &mut rng,
+        &mut seen,
+        TEST,
+        width,
+        128,
+        teacher.routing(),
+        modes,
+    )?;
+    let shift = generate(
+        &mut rng,
+        &mut seen,
+        SHIFT,
+        width,
+        64,
+        teacher.routing(),
+        modes,
+    )?;
     if seen.len() != TRAIN + TEST + SHIFT {
         return Err("disjoint split guarantee failed".into());
     }
@@ -160,14 +191,18 @@ fn profile(seed: u64, modes: &[GateKind], scope: CreditScope) -> Result<(), Stri
     };
     // Explicit paired order: full reference FIRST, incremental SECOND.
     let now = Instant::now();
-    let full = fit_final_loss_with_evaluator(
-        &student, &train, settings, CreditEvaluationMode::Full
-    ).map_err(|err| format!("{err:?}"))?;
+    let full =
+        fit_final_loss_with_evaluator(&student, &train, settings, CreditEvaluationMode::Full)
+            .map_err(|err| format!("{err:?}"))?;
     let full_ns = now.elapsed().as_nanos();
     let now = Instant::now();
     let cached = fit_final_loss_with_evaluator(
-        &student, &train, settings, CreditEvaluationMode::Incremental
-    ).map_err(|err| format!("{err:?}"))?;
+        &student,
+        &train,
+        settings,
+        CreditEvaluationMode::Incremental,
+    )
+    .map_err(|err| format!("{err:?}"))?;
     let cached_ns = now.elapsed().as_nanos();
 
     if full.final_train_correct != cached.final_train_correct
@@ -185,9 +220,7 @@ fn profile(seed: u64, modes: &[GateKind], scope: CreditScope) -> Result<(), Stri
     for layer in 0..student.depth() {
         let nodes = width / 5_usize.pow((layer + 1) as u32);
         for neuron in 0..nodes {
-            if cached.model.layer_model(layer, neuron)
-                != full.model.layer_model(layer, neuron)
-            {
+            if cached.model.layer_model(layer, neuron) != full.model.layer_model(layer, neuron) {
                 return Err("changed Fourier parameters differ after cache optimization".into());
             }
         }
@@ -198,8 +231,8 @@ fn profile(seed: u64, modes: &[GateKind], scope: CreditScope) -> Result<(), Stri
     if test_cached.correct != test_full.correct || test_cached.tp != test_full.tp {
         return Err("same learnt models disagree on disjoint TEST".into());
     }
-    let gate_saving_percent = 100.0
-        * (1.0 - cached.actual_gate_evaluations as f64 / full.actual_gate_evaluations as f64);
+    let gate_saving_percent =
+        100.0 * (1.0 - cached.actual_gate_evaluations as f64 / full.actual_gate_evaluations as f64);
     println!(
         "delta_cache width={width} depth={} scope={scope:?} seed={seed} train={}/{} test={}/{} test_tp={}/{} test_tn={}/{} shifted={}/{} shift_tp={}/{} shift_tn={}/{} models={} contacts={} proposals={} output_decisions={} baseline_full_gates={} cache_build_gates={} cached_cone_gates={} actual_cached_gates={} exact_gate_saving_percent={gate_saving_percent:.3} full_us={} cache_us={} train_param_moves={} train_route_moves={}",
         modes.len(),
@@ -220,18 +253,46 @@ fn profile(seed: u64, modes: &[GateKind], scope: CreditScope) -> Result<(), Stri
 
 fn main() -> Result<(), String> {
     for seed in [0xcac8_0101_u64, 0xcac8_0202, 0xcac8_0303] {
-        profile(seed, &[GateKind::Majority, GateKind::Parity],
-            CreditScope::HiddenParameters)?;
-        profile(seed, &[GateKind::Majority, GateKind::Parity],
-            CreditScope::JointHiddenAndRouting)?;
-        profile(seed, &[GateKind::Majority, GateKind::Parity, GateKind::Parity],
-            CreditScope::HiddenParameters)?;
-        profile(seed, &[GateKind::Majority, GateKind::Parity, GateKind::Parity],
-            CreditScope::JointHiddenAndRouting)?;
-        profile(seed, &[GateKind::Majority, GateKind::Parity, GateKind::Parity, GateKind::Parity],
-            CreditScope::HiddenParameters)?;
-        profile(seed, &[GateKind::Majority, GateKind::Parity, GateKind::Parity, GateKind::Parity],
-            CreditScope::JointHiddenAndRouting)?;
+        profile(
+            seed,
+            &[GateKind::Majority, GateKind::Parity],
+            CreditScope::HiddenParameters,
+        )?;
+        profile(
+            seed,
+            &[GateKind::Majority, GateKind::Parity],
+            CreditScope::JointHiddenAndRouting,
+        )?;
+        profile(
+            seed,
+            &[GateKind::Majority, GateKind::Parity, GateKind::Parity],
+            CreditScope::HiddenParameters,
+        )?;
+        profile(
+            seed,
+            &[GateKind::Majority, GateKind::Parity, GateKind::Parity],
+            CreditScope::JointHiddenAndRouting,
+        )?;
+        profile(
+            seed,
+            &[
+                GateKind::Majority,
+                GateKind::Parity,
+                GateKind::Parity,
+                GateKind::Parity,
+            ],
+            CreditScope::HiddenParameters,
+        )?;
+        profile(
+            seed,
+            &[
+                GateKind::Majority,
+                GateKind::Parity,
+                GateKind::Parity,
+                GateKind::Parity,
+            ],
+            CreditScope::JointHiddenAndRouting,
+        )?;
     }
     println!("FOURIER5_EXACT_INCREMENTAL_CREDIT_CACHE_PASS");
     Ok(())
@@ -243,7 +304,11 @@ mod tests {
 
     #[test]
     fn exact_same_model_and_heldout_scores_from_full_and_cached_training() {
-        profile(0xcac8_1212, &[GateKind::Majority, GateKind::Parity],
-            CreditScope::JointHiddenAndRouting).unwrap();
+        profile(
+            0xcac8_1212,
+            &[GateKind::Majority, GateKind::Parity],
+            CreditScope::JointHiddenAndRouting,
+        )
+        .unwrap();
     }
 }
