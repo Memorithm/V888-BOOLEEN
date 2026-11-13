@@ -213,7 +213,11 @@ fn perturb_parameter(
     let next = FiveCircle::new(circles, bias).expect("unchanged valid Walsh masks");
     Ok((
         model.with_neuron_parameters(layer, node, next)?,
-        PackedIntervention::Parameter { layer, neuron: node, model: next },
+        PackedIntervention::Parameter {
+            layer,
+            neuron: node,
+            model: next,
+        },
     ))
 }
 
@@ -233,7 +237,10 @@ fn perturb_route(
     routing.swap(a, b);
     Ok((
         model.rerouted(routing)?,
-        PackedIntervention::LeafSwap { first: a, second: b },
+        PackedIntervention::LeafSwap {
+            first: a,
+            second: b,
+        },
     ))
 }
 
@@ -289,9 +296,15 @@ pub fn fit_final_loss_with_evaluator(
                 .map(FiveCircleIncrementalCache::build_gate_evaluations)
                 .sum::<usize>();
             debug_assert_eq!(
-                cached.iter().zip(&batches).map(|(cache, batch)| {
-                    (BITSLICE_LANES as u32 - (cache.baseline_output() ^ batch.labels).count_ones()) as usize
-                }).sum::<usize>(),
+                cached
+                    .iter()
+                    .zip(&batches)
+                    .map(|(cache, batch)| {
+                        (BITSLICE_LANES as u32
+                            - (cache.baseline_output() ^ batch.labels).count_ones())
+                            as usize
+                    })
+                    .sum::<usize>(),
                 hits
             );
             Some(cached)
@@ -319,7 +332,8 @@ pub fn fit_final_loss_with_evaluator(
                     let evaluation = cache.evaluate(delta)?;
                     delta_gate_evaluations += evaluation.gate_evaluations;
                     correct_count += (BITSLICE_LANES as u32
-                        - (evaluation.output ^ batch.labels).count_ones()) as usize;
+                        - (evaluation.output ^ batch.labels).count_ones())
+                        as usize;
                 }
                 correct_count
             } else {
@@ -351,9 +365,7 @@ pub fn fit_final_loss_with_evaluator(
         }
     }
     let evaluations = config.rounds * config.proposals_per_round;
-    let full_recompute_gate_evaluations = (evaluations + 1)
-        * batches.len()
-        * base.neuron_count();
+    let full_recompute_gate_evaluations = (evaluations + 1) * batches.len() * base.neuron_count();
     let actual_gate_evaluations = if evaluation_mode == CreditEvaluationMode::Incremental {
         cache_build_gate_evaluations + delta_gate_evaluations
     } else {
@@ -509,11 +521,13 @@ mod tests {
         let teacher = FiveCircleHierarchy::from_modes(
             &[GateKind::Majority, GateKind::Parity, GateKind::Parity],
             LeafRouting::SeededShuffle(77),
-        ).unwrap();
+        )
+        .unwrap();
         let frozen = FiveCircleHierarchy::from_modes(
             &[GateKind::Majority, GateKind::Parity, GateKind::Parity],
             LeafRouting::Contiguous,
-        ).unwrap();
+        )
+        .unwrap();
         let student = frozen
             .with_neuron_parameters(0, 0, GateKind::And.five_circle())
             .unwrap();
@@ -526,24 +540,39 @@ mod tests {
         ] {
             for policy in [CreditPolicy::Greedy, CreditPolicy::Blind] {
                 let settings = CreditConfig {
-                    scope, policy,
+                    scope,
+                    policy,
                     rounds: 3,
                     proposals_per_round: 32,
                     seed: 9913,
                 };
                 let fast = fit_final_loss_with_evaluator(
-                    &student, &train, settings, CreditEvaluationMode::Incremental
-                ).unwrap();
+                    &student,
+                    &train,
+                    settings,
+                    CreditEvaluationMode::Incremental,
+                )
+                .unwrap();
                 let full = fit_final_loss_with_evaluator(
-                    &student, &train, settings, CreditEvaluationMode::Full
-                ).unwrap();
+                    &student,
+                    &train,
+                    settings,
+                    CreditEvaluationMode::Full,
+                )
+                .unwrap();
                 assert_eq!(fast.final_train_correct, full.final_train_correct);
                 assert_eq!(fast.initial_train_correct, full.initial_train_correct);
                 assert_eq!(fast.model.routing(), full.model.routing());
                 assert_eq!(fast.accepted_parameter_moves, full.accepted_parameter_moves);
                 assert_eq!(fast.accepted_routing_moves, full.accepted_routing_moves);
-                assert_eq!(fast.full_model_train_inferences, full.full_model_train_inferences);
-                assert_eq!(fast.full_recompute_gate_evaluations, full.actual_gate_evaluations);
+                assert_eq!(
+                    fast.full_model_train_inferences,
+                    full.full_model_train_inferences
+                );
+                assert_eq!(
+                    fast.full_recompute_gate_evaluations,
+                    full.actual_gate_evaluations
+                );
                 assert!(fast.actual_gate_evaluations < full.actual_gate_evaluations);
                 for layer in 0..student.depth() {
                     let nodes = student.input_bits() / CIRCLES.pow((layer + 1) as u32);
