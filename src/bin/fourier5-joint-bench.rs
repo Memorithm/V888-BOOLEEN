@@ -137,7 +137,7 @@ fn profile(
     let width = base.input_bits();
     let mut rng = Random::new(seed ^ 0x1a5e_c403);
     let mut seen = BTreeSet::new();
-    let train_count = if width == 625 { 512 } else { 512 };
+    let train_count = 512;
     let train = generate(&mut rng, &mut seen, train_count, width, 128, teacher_route, true_modes)?;
     let validation = generate(&mut rng, &mut seen, 256, width, 128, teacher_route, true_modes)?;
     let test = generate(&mut rng, &mut seen, 512, width, 128, teacher_route, true_modes)?;
