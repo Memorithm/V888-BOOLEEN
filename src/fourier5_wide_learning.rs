@@ -94,7 +94,12 @@ impl<'a> WidePlasticCircuit<'a> {
 
     #[must_use]
     pub fn output(&self) -> u64 {
-        self.stages.last().expect("nonempty").first().copied().expect("root")
+        self.stages
+            .last()
+            .expect("nonempty")
+            .first()
+            .copied()
+            .expect("root")
     }
 
     #[must_use]
@@ -127,10 +132,7 @@ impl<'a> WidePlasticCircuit<'a> {
 
     /// An explicit, independent model for EVERY neuron; installation is
     /// distinct from learning. Rebuilds cache only once after installation.
-    pub fn install_models(
-        &mut self,
-        mut choice: impl FnMut(usize, usize) -> FiveCircle,
-    ) {
+    pub fn install_models(&mut self, mut choice: impl FnMut(usize, usize) -> FiveCircle) {
         for (layer, models) in self.models.iter_mut().enumerate() {
             for (neuron, current) in models.iter_mut().enumerate() {
                 let updated = choice(layer, neuron);
@@ -305,7 +307,10 @@ impl<'a> WidePlasticCircuit<'a> {
     ) -> Result<WideLocalFit, WideError> {
         if candidates.is_empty()
             || targets.len() != self.tree.depth()
-            || targets.iter().zip(self.tree.level_widths()).any(|(row, &n)| row.len() != n)
+            || targets
+                .iter()
+                .zip(self.tree.level_widths())
+                .any(|(row, &n)| row.len() != n)
         {
             return Err(WideError::InvalidInput);
         }
@@ -379,7 +384,9 @@ mod tests {
             let proposal = learner.propose(layer, neuron, candidate).unwrap();
             assert_eq!(
                 proposal.output,
-                learner.evaluate_full_edit(layer, neuron, candidate).unwrap()
+                learner
+                    .evaluate_full_edit(layer, neuron, candidate)
+                    .unwrap()
             );
             assert!(proposal.gate_evaluations <= tree.depth() - layer);
             learner.accept(proposal).unwrap();
@@ -390,7 +397,10 @@ mod tests {
             assert_eq!(learner.model(layer, neuron), Ok(candidate));
         }
         assert_eq!(learner.commits(), 4);
-        assert_eq!(learner.model_bytes(), tree.logical_neurons() * std::mem::size_of::<FiveCircle>());
+        assert_eq!(
+            learner.model_bytes(),
+            tree.logical_neurons() * std::mem::size_of::<FiveCircle>()
+        );
     }
 
     #[test]
@@ -425,7 +435,10 @@ mod tests {
         assert!(learner.accept(unaccepted).is_err());
         let learned_valid = learner.evaluate_trace(&other).unwrap();
         assert_eq!(learned_valid.len(), valid.len());
-        assert_eq!(learner.output(), learner.evaluate_trace(&data).unwrap().last().unwrap()[0]);
+        assert_eq!(
+            learner.output(),
+            learner.evaluate_trace(&data).unwrap().last().unwrap()[0]
+        );
         assert_eq!(learner.commits(), 0);
         assert!(learner.fit_local_teacher(&[], &options).is_err());
     }
