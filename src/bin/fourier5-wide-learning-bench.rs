@@ -23,8 +23,18 @@ impl Rng {
 }
 
 fn words(count: usize, seed: u64) -> Vec<u64> {
-    let mut rng = Rng(seed);
-    (0..count).map(|_| rng.next()).collect()
+    // SplitMix64 avoids GF(2)-linear inter-position correlations from
+    // the xorshift stream reserved for proposal scheduling.
+    let mut state = seed;
+    (0..count)
+        .map(|_| {
+            state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            z ^ (z >> 31)
+        })
+        .collect()
 }
 
 fn hash(layer: usize, neuron: usize) -> u64 {
@@ -326,4 +336,21 @@ fn main() -> Result<(), String> {
         start.elapsed().as_millis()
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn phase_inverted_parity_is_an_exact_complement() {
+        let normal = GateKind::Parity.five_circle();
+        let inverse = complemented_parity();
+        for word in 0..32 {
+            assert_eq!(
+                inverse.predict(word).unwrap(),
+                !normal.predict(word).unwrap()
+            );
+        }
+    }
 }
