@@ -7,9 +7,7 @@ use std::time::Instant;
 use v888_booleen::fourier5::{Circle, FiveCircle, CIRCLES};
 use v888_booleen::fourier5_dynamic::{GatedFiveCircle, RadiusGate};
 use v888_booleen::fourier5_local_learning::{LocalPopulation, LocalTask};
-use v888_booleen::fourier5_recurrent::{
-    NetworkConfig, RecurrentFiveCircle, SyntheticTopology,
-};
+use v888_booleen::fourier5_recurrent::{NetworkConfig, RecurrentFiveCircle, SyntheticTopology};
 
 fn parity_base() -> FiveCircle {
     let mut circles = [Circle::default(); CIRCLES];
@@ -44,8 +42,8 @@ fn profile(
     topology: SyntheticTopology,
 ) -> Result<(), String> {
     let initial = Instant::now();
-    let mut task_a = LocalPopulation::new(nodes, seed, parity_base())
-        .map_err(|error| format!("{error:?}"))?;
+    let mut task_a =
+        LocalPopulation::new(nodes, seed, parity_base()).map_err(|error| format!("{error:?}"))?;
     let untrained_a = task_a
         .evaluate(LocalTask::A)
         .map_err(|error| format!("{error:?}"))?;
@@ -80,8 +78,8 @@ fn profile(
 
     // A costed task-indexed two-head control: a fresh separately learned B.
     let started = Instant::now();
-    let mut task_b = LocalPopulation::new(nodes, seed, parity_base())
-        .map_err(|error| format!("{error:?}"))?;
+    let mut task_b =
+        LocalPopulation::new(nodes, seed, parity_base()).map_err(|error| format!("{error:?}"))?;
     let train_independent_b = task_b
         .train(LocalTask::B, 8)
         .map_err(|error| format!("{error:?}"))?;
@@ -141,12 +139,12 @@ fn profile(
     };
     let started = Instant::now();
     let base = untrained_model();
-    let mut recurrent_a = RecurrentFiveCircle::seeded(config, base)
-        .map_err(|error| format!("{error:?}"))?;
-    let mut recurrent_shared_b = RecurrentFiveCircle::seeded(config, base)
-        .map_err(|error| format!("{error:?}"))?;
-    let mut recurrent_untrained = RecurrentFiveCircle::seeded(config, base)
-        .map_err(|error| format!("{error:?}"))?;
+    let mut recurrent_a =
+        RecurrentFiveCircle::seeded(config, base).map_err(|error| format!("{error:?}"))?;
+    let mut recurrent_shared_b =
+        RecurrentFiveCircle::seeded(config, base).map_err(|error| format!("{error:?}"))?;
+    let mut recurrent_untrained =
+        RecurrentFiveCircle::seeded(config, base).map_err(|error| format!("{error:?}"))?;
     recurrent_a
         .install_local_models(task_a.models())
         .map_err(|error| format!("{error:?}"))?;
@@ -195,8 +193,7 @@ fn profile(
             .map_err(|error| format!("{error:?}"))?;
     }
     let simulation_ms = started.elapsed().as_millis();
-    let initial_final_hamming =
-        state_hamming_words(&initial_state, recurrent_a.state().words());
+    let initial_final_hamming = state_hamming_words(&initial_state, recurrent_a.state().words());
     println!(
         "recurrent_local nodes={nodes} topology={topology:?} contacts={} ticks={ticks} build_ms={build_ms} simulation_ms={simulation_ms} stored_model_bytes={} logical_wiring_and_state_bytes={} a_active={last_a_active} b_active={last_b_active} untrained_active={last_untrained_active} a_rising={a_rising} a_falling={a_falling} a_b_hamming={last_distance_a_b} max_a_b_hamming={max_distance_a_b} a_untrained_hamming={last_distance_a_untrained} initial_final_hamming={initial_final_hamming} wiring_fingerprint={:016x}",
         recurrent_a.contact_count(),
@@ -210,7 +207,10 @@ fn profile(
         || last_distance_a_untrained > nodes as u64
         || task_a.gain_fingerprint() != fingerprints_before.0
         || sequential_b.gain_fingerprint() != fingerprints_before.1
-        || task_a.evaluate(LocalTask::A).map_err(|e| format!("{e:?}"))? != trained_a
+        || task_a
+            .evaluate(LocalTask::A)
+            .map_err(|e| format!("{e:?}"))?
+            != trained_a
     {
         return Err("recurrent long-horizon qualification failed".into());
     }
