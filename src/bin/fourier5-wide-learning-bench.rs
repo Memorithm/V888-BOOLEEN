@@ -28,8 +28,7 @@ fn words(count: usize, seed: u64) -> Vec<u64> {
 }
 
 fn hash(layer: usize, neuron: usize) -> u64 {
-    let mut x = (neuron as u64)
-        ^ ((layer as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15));
+    let mut x = (neuron as u64) ^ ((layer as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15));
     x ^= x >> 30;
     x = x.wrapping_mul(0xbf58_476d_1ce4_e5b9);
     x ^= x >> 27;
@@ -132,8 +131,8 @@ fn main() -> Result<(), String> {
     // Synthetic teacher has INDEPENDENT per-neuron Fourier functions.
     // Labels of EVERY hidden node are intentionally supplied for the
     // privileged teacher-tapped demonstration; this is not end-to-end.
-    let mut teacher = WidePlasticCircuit::new(&tree, &train)
-        .map_err(|e| format!("teacher: {e:?}"))?;
+    let mut teacher =
+        WidePlasticCircuit::new(&tree, &train).map_err(|e| format!("teacher: {e:?}"))?;
     teacher.install_models(|layer, neuron| {
         let bucket = hash(layer, neuron) % 10;
         let choice = match bucket {
@@ -144,21 +143,31 @@ fn main() -> Result<(), String> {
         };
         options[choice]
     });
-    let targets = teacher.evaluate_trace(&train).map_err(|e| format!("{e:?}"))?;
-    let valid_targets = teacher.evaluate_trace(&valid).map_err(|e| format!("{e:?}"))?;
+    let targets = teacher
+        .evaluate_trace(&train)
+        .map_err(|e| format!("{e:?}"))?;
+    let valid_targets = teacher
+        .evaluate_trace(&valid)
+        .map_err(|e| format!("{e:?}"))?;
     drop(teacher);
 
-    let mut learner = WidePlasticCircuit::new(&tree, &train)
-        .map_err(|e| format!("learner: {e:?}"))?;
-    let prior = learner.evaluate_trace(&valid).map_err(|e| format!("{e:?}"))?;
+    let mut learner =
+        WidePlasticCircuit::new(&tree, &train).map_err(|e| format!("learner: {e:?}"))?;
+    let prior = learner
+        .evaluate_trace(&valid)
+        .map_err(|e| format!("{e:?}"))?;
     let prior_agreement = trace_agreement(&prior, &valid_targets);
     let local_start = Instant::now();
     let local = learner
         .fit_local_teacher(&targets, &options)
         .map_err(|e| format!("fit: {e:?}"))?;
     let fit_ms = local_start.elapsed().as_millis();
-    let trained = learner.evaluate_trace(&train).map_err(|e| format!("{e:?}"))?;
-    let heldout = learner.evaluate_trace(&valid).map_err(|e| format!("{e:?}"))?;
+    let trained = learner
+        .evaluate_trace(&train)
+        .map_err(|e| format!("{e:?}"))?;
+    let heldout = learner
+        .evaluate_trace(&valid)
+        .map_err(|e| format!("{e:?}"))?;
     let heldout_agreement = trace_agreement(&heldout, &valid_targets);
     let train_agreement = trace_agreement(&trained, &targets);
     if local.neurons_fitted != tree.logical_neurons()
@@ -181,12 +190,15 @@ fn main() -> Result<(), String> {
 
     // A second, strictly output-only learner must never read hidden target
     // labels for training. VALID is inspected only after the trial.
-    let mut global = WidePlasticCircuit::new(&tree, &train)
-        .map_err(|e| format!("global: {e:?}"))?;
+    let mut global =
+        WidePlasticCircuit::new(&tree, &train).map_err(|e| format!("global: {e:?}"))?;
     let train_label = targets.last().unwrap()[0];
     let valid_label = valid_targets.last().unwrap()[0];
-    let global_valid_before = global.evaluate_trace(&valid)
-        .map_err(|e| format!("{e:?}"))?.last().unwrap()[0];
+    let global_valid_before = global
+        .evaluate_trace(&valid)
+        .map_err(|e| format!("{e:?}"))?
+        .last()
+        .unwrap()[0];
     let initial = matches(global.output(), train_label);
     let mut best = initial;
     let mut rng = Rng(0x2580_fa11_abba_2211);
@@ -196,17 +208,23 @@ fn main() -> Result<(), String> {
         let layer = (rng.next() as usize) % tree.depth();
         let neuron = (rng.next() as usize) % tree.level_widths()[layer];
         let model = options[(rng.next() as usize) % options.len()];
-        let proposal = global.propose(layer, neuron, model)
+        let proposal = global
+            .propose(layer, neuron, model)
             .map_err(|e| format!("propose: {e:?}"))?;
         let score = matches(proposal.output, train_label);
         if score > best {
-            global.accept(proposal).map_err(|e| format!("commit: {e:?}"))?;
+            global
+                .accept(proposal)
+                .map_err(|e| format!("commit: {e:?}"))?;
             best = score;
         }
     }
     let global_ms = global_start.elapsed().as_millis();
-    let global_valid_after = global.evaluate_trace(&valid)
-        .map_err(|e| format!("{e:?}"))?.last().unwrap()[0];
+    let global_valid_after = global
+        .evaluate_trace(&valid)
+        .map_err(|e| format!("{e:?}"))?
+        .last()
+        .unwrap()[0];
     if best != matches(global.output(), train_label) {
         return Err("persistent online objective mismatch".into());
     }
@@ -233,7 +251,8 @@ fn main() -> Result<(), String> {
     let full_start = Instant::now();
     let mut full_outputs = Vec::with_capacity(edits.len());
     for &(layer, neuron, model) in &edits {
-        let output = learner.evaluate_full_edit(layer, neuron, model)
+        let output = learner
+            .evaluate_full_edit(layer, neuron, model)
             .map_err(|e| format!("{e:?}"))?;
         full_outputs.push(black_box(output));
     }
@@ -246,7 +265,8 @@ fn main() -> Result<(), String> {
     let mut gate_evals = 0_usize;
     let mut cached_outputs = Vec::with_capacity(edits.len());
     for &(layer, neuron, model) in &edits {
-        let proposal = learner.propose(layer, neuron, model)
+        let proposal = learner
+            .propose(layer, neuron, model)
             .map_err(|e| format!("{e:?}"))?;
         logical_reads += proposal.child_word_reads;
         changed_words += proposal.changed_cache_words;
