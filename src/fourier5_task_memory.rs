@@ -26,6 +26,9 @@ pub struct TaskBatch {
     pub features: [u64; CIRCLES],
     /// Only the final observable task label. No target hidden activations.
     pub labels: u64,
+    /// TRAIN-only admission mask. Masked-out combinations are never labeled
+    /// for training, permitting a true combinatorial held-out evaluation.
+    pub observed: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,9 +68,10 @@ fn candidate(mask: u8, phase: bool) -> FiveCircle {
     FiveCircle::new(circles, 0).expect("mask between 1 and 31")
 }
 
-fn matches(features: [u64; CIRCLES], labels: u64, mask: u8, phase: bool) -> u64 {
+fn matches(batch: &TaskBatch, mask: u8, phase: bool) -> u64 {
     let truth = compiled_truth_table(candidate(mask, phase));
-    u64::from(64 - (shannon_64(truth, features) ^ labels).count_ones())
+    let wrong = (shannon_64(truth, batch.features) ^ batch.labels) & batch.observed;
+    u64::from(batch.observed.count_ones() - wrong.count_ones())
 }
 
 fn fingerprint(bytes: &[u8]) -> u64 {
@@ -140,7 +144,10 @@ impl TaskHeadBank {
         if self.heads.get(task).is_none() {
             return Err(HeadError::InvalidTask);
         }
-        if train.len() < 2 || train.len() > 1_024 {
+        if train.len() < 2
+            || train.len() > 1_024
+            || train.iter().all(|batch| batch.observed == 0)
+        {
             return Err(HeadError::InvalidShape);
         }
         let old = self.heads[task];
@@ -150,7 +157,7 @@ impl TaskHeadBank {
             for phase in [false, true] {
                 let correct: u64 = train
                     .iter()
-                    .map(|b| matches(b.features, b.labels, mask, phase))
+                    .map(|b| matches(b, mask, phase))
                     .sum();
                 tested += 1;
                 if best.is_none_or(|(score, _, _)| correct > score)
@@ -174,7 +181,7 @@ impl TaskHeadBank {
         Ok(HeadFit {
             task,
             train_correct: correct,
-            train_total: train.len() as u64 * 64,
+            train_total: train.iter().map(|batch| u64::from(batch.observed.count_ones())).sum(),
             candidates_tested: tested,
             changed,
             revision,
@@ -263,7 +270,11 @@ mod tests {
             x
         });
         let labels = shannon_64(compiled_truth_table(candidate(mask, phase)), features);
-        TaskBatch { features, labels }
+        TaskBatch {
+            features,
+            labels,
+            observed: u64::MAX,
+        }
     }
 
     #[test]
