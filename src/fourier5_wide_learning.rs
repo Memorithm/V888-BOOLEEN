@@ -320,7 +320,7 @@ impl<'a> WidePlasticCircuit<'a> {
             .map(|model| (model, compiled_truth_table(model)))
             .collect();
         let mut report = WideLocalFit::default();
-        for layer in 0..self.tree.depth() {
+        for (layer, target_row) in targets.iter().enumerate() {
             for neuron in 0..self.stages[layer].len() {
                 let previous = if layer == 0 {
                     self.sources
@@ -328,7 +328,7 @@ impl<'a> WidePlasticCircuit<'a> {
                     &self.stages[layer - 1]
                 };
                 let input = children(previous, neuron);
-                let label = targets[layer][neuron];
+                let label = target_row[neuron];
                 let mut best = (u32::MAX, self.models[layer][neuron], 0_u32, 0_u64);
                 for &(model, truth) in &options {
                     let prediction = shannon_64(truth, input);
