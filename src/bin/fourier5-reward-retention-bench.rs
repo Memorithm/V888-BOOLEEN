@@ -40,9 +40,7 @@ fn words(count: usize, seed: u64) -> Vec<u64> {
 }
 
 fn hash(layer: usize, neuron: usize, seed: u64) -> u64 {
-    let mut x = (neuron as u64)
-        ^ ((layer as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15))
-        ^ seed;
+    let mut x = (neuron as u64) ^ ((layer as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15)) ^ seed;
     x ^= x >> 30;
     x = x.wrapping_mul(0xbf58_476d_1ce4_e5b9);
     x ^= x >> 27;
@@ -74,7 +72,9 @@ fn correct(predicted: u64, label: u64) -> u32 {
 }
 
 fn score(circuit: &WidePlasticCircuit<'_>, sample: &[u64], label: u64) -> Result<u32, String> {
-    let layers = circuit.evaluate_trace(sample).map_err(|e| format!("{e:?}"))?;
+    let layers = circuit
+        .evaluate_trace(sample)
+        .map_err(|e| format!("{e:?}"))?;
     Ok(correct(layers.last().expect("one output layer")[0], label))
 }
 
@@ -114,7 +114,9 @@ fn train_pass(
         if model == before_model {
             continue;
         }
-        let proposal = circuit.propose(layer, neuron, model).map_err(|e| format!("{e:?}"))?;
+        let proposal = circuit
+            .propose(layer, neuron, model)
+            .map_err(|e| format!("{e:?}"))?;
         evaluations += proposal.gate_evaluations;
         child_reads += proposal.child_word_reads;
         let candidate = correct(proposal.output, target);
@@ -214,9 +216,21 @@ fn experiment(width: usize, seed: u64, trials: usize, passes: usize) -> Result<(
     });
     // Only the teacher's FINAL output is returned as an observable label.
     let label_a = teacher.output();
-    let label_b = teacher.evaluate_trace(&b).map_err(|e| format!("{e:?}"))?.last().unwrap()[0];
-    let label_valid = teacher.evaluate_trace(&valid).map_err(|e| format!("{e:?}"))?.last().unwrap()[0];
-    let label_test = teacher.evaluate_trace(&test).map_err(|e| format!("{e:?}"))?.last().unwrap()[0];
+    let label_b = teacher
+        .evaluate_trace(&b)
+        .map_err(|e| format!("{e:?}"))?
+        .last()
+        .unwrap()[0];
+    let label_valid = teacher
+        .evaluate_trace(&valid)
+        .map_err(|e| format!("{e:?}"))?
+        .last()
+        .unwrap()[0];
+    let label_test = teacher
+        .evaluate_trace(&test)
+        .map_err(|e| format!("{e:?}"))?
+        .last()
+        .unwrap()[0];
     drop(teacher);
     println!(
         "REWARD_SPLITS seed={seed} width={width} lanes=64 train_a_positive={}          train_b_positive={} valid_positive={} test_positive={} streams_seeded_separately=true",
@@ -238,9 +252,20 @@ fn experiment(width: usize, seed: u64, trials: usize, passes: usize) -> Result<(
         elapsed_us: 0,
     };
     report(
-        seed, "A", 0, "replay_guard", &guarded,
-        &a, label_a, &b, label_b, &valid, label_valid,
-        &test, label_test, &empty
+        seed,
+        "A",
+        0,
+        "replay_guard",
+        &guarded,
+        &a,
+        label_a,
+        &b,
+        label_b,
+        &valid,
+        label_valid,
+        &test,
+        label_test,
+        &empty,
     )?;
     for pass in 1..=passes {
         let stats = train_pass(
@@ -253,9 +278,20 @@ fn experiment(width: usize, seed: u64, trials: usize, passes: usize) -> Result<(
             trials,
         )?;
         report(
-            seed, "A", pass, "replay_guard", &guarded,
-            &a, label_a, &b, label_b, &valid, label_valid,
-            &test, label_test, &stats
+            seed,
+            "A",
+            pass,
+            "replay_guard",
+            &guarded,
+            &a,
+            label_a,
+            &b,
+            label_b,
+            &valid,
+            label_valid,
+            &test,
+            label_test,
+            &stats,
         )?;
     }
     let retained_floor = correct(guarded.output(), label_a);
@@ -277,22 +313,54 @@ fn experiment(width: usize, seed: u64, trials: usize, passes: usize) -> Result<(
     for pass in 1..=passes {
         let proposal_seed = seed ^ (pass as u64).wrapping_mul(0xace5_d00d);
         let guarded_stats = train_pass(
-            &mut guarded, tree.level_widths(), label_b,
-            proposal_seed, &options, Some((&a, label_a, retained_floor)), trials
+            &mut guarded,
+            tree.level_widths(),
+            label_b,
+            proposal_seed,
+            &options,
+            Some((&a, label_a, retained_floor)),
+            trials,
         )?;
         let unguarded_stats = train_pass(
-            &mut unguarded, tree.level_widths(), label_b,
-            proposal_seed, &options, None, trials
+            &mut unguarded,
+            tree.level_widths(),
+            label_b,
+            proposal_seed,
+            &options,
+            None,
+            trials,
         )?;
         report(
-            seed, "B", pass, "replay_guard", &guarded,
-            &a, label_a, &b, label_b, &valid, label_valid,
-            &test, label_test, &guarded_stats
+            seed,
+            "B",
+            pass,
+            "replay_guard",
+            &guarded,
+            &a,
+            label_a,
+            &b,
+            label_b,
+            &valid,
+            label_valid,
+            &test,
+            label_test,
+            &guarded_stats,
         )?;
         report(
-            seed, "B", pass, "no_replay", &unguarded,
-            &a, label_a, &b, label_b, &valid, label_valid,
-            &test, label_test, &unguarded_stats
+            seed,
+            "B",
+            pass,
+            "no_replay",
+            &unguarded,
+            &a,
+            label_a,
+            &b,
+            label_b,
+            &valid,
+            label_valid,
+            &test,
+            label_test,
+            &unguarded_stats,
         )?;
     }
     if score(&guarded, &a, label_a)? < retained_floor {
