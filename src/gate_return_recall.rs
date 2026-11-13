@@ -55,6 +55,43 @@ pub fn rank_gate_return_sustained_recall(
     horizon: usize,
     minimum_sustained_ticks: usize,
 ) -> Result<Vec<GateReturnScore>, GateReturnError> {
+    rank_gate_return_with_window_policy(
+        candidates, snapshots, annotations, region, minimum_region_active,
+        minimum_circuit_active, horizon, minimum_sustained_ticks, false,
+    )
+}
+
+/// Evaluate each return as a distinct episode: a later rising edge closes the
+/// previous observation window. This avoids crediting the same recall tick to
+/// two return events when horizons overlap. The legacy API retains overlapping
+/// windows for backward compatibility.
+pub fn rank_gate_return_disjoint_recall(
+    candidates: &[Subcircuit],
+    snapshots: &[BooleanState],
+    annotations: &[Option<u32>],
+    region: u32,
+    minimum_region_active: usize,
+    minimum_circuit_active: usize,
+    horizon: usize,
+    minimum_sustained_ticks: usize,
+) -> Result<Vec<GateReturnScore>, GateReturnError> {
+    rank_gate_return_with_window_policy(
+        candidates, snapshots, annotations, region, minimum_region_active,
+        minimum_circuit_active, horizon, minimum_sustained_ticks, true,
+    )
+}
+
+fn rank_gate_return_with_window_policy(
+    candidates: &[Subcircuit],
+    snapshots: &[BooleanState],
+    annotations: &[Option<u32>],
+    region: u32,
+    minimum_region_active: usize,
+    minimum_circuit_active: usize,
+    horizon: usize,
+    minimum_sustained_ticks: usize,
+    disjoint: bool,
+) -> Result<Vec<GateReturnScore>, GateReturnError> {
     if minimum_sustained_ticks == 0 || minimum_sustained_ticks > horizon {
         return Err(GateReturnError::InvalidBudget);
     }
@@ -111,8 +148,13 @@ pub fn rank_gate_return_sustained_recall(
             recall_ticks: 0,
             activation_cost: 0,
         };
-        for &start in &returns {
-            let end = start.saturating_add(horizon).min(snapshots.len());
+        for (event_index, &start) in returns.iter().enumerate() {
+            let mut end = start.saturating_add(horizon).min(snapshots.len());
+            if disjoint {
+                if let Some(&next_return) = returns.get(event_index + 1) {
+                    end = end.min(next_return);
+                }
+            }
             let mut recovered = false;
             let mut streak = 0usize;
             let mut sustained = false;
@@ -170,6 +212,41 @@ mod tests {
         state
     }
 
+
+    #[test]
+    fn disjoint_windows_do_not_double_credit_recall() {
+        let circuit = Subcircuit::new(4, vec![1]).unwrap();
+        let history = [
+            state(&[]), state(&[0]), state(&[]),
+            state(&[0, 1]), state(&[0, 1]),
+        ];
+        let annotations = [Some(7), None, None, None];
+        let overlapping = rank_gate_return_sustained_recall(
+            &[circuit.clone()], &history, &annotations, 7, 1, 1, 4, 2,
+        ).unwrap();
+        let disjoint = rank_gate_return_disjoint_recall(
+            &[circuit], &history, &annotations, 7, 1, 1, 4, 2,
+        ).unwrap();
+        assert_eq!(overlapping[0].recall_ticks, 4);
+        assert_eq!(disjoint[0].recall_ticks, 2);
+        assert_eq!(disjoint[0].return_events, 2);
+        assert_eq!(disjoint[0].sustained_recovered_events, 1);
+    }
+
+    #[test]
+    fn disjoint_policy_preserves_nonoverlapping_results() {
+        let circuit = Subcircuit::new(4, vec![1]).unwrap();
+        let history = [state(&[]), state(&[0, 1]), state(&[0, 1])];
+        let annotations = [Some(7), None, None, None];
+        assert_eq!(
+            rank_gate_return_disjoint_recall(
+                &[circuit.clone()], &history, &annotations, 7, 1, 1, 2, 2,
+            ),
+            rank_gate_return_sustained_recall(
+                &[circuit], &history, &annotations, 7, 1, 1, 2, 2,
+            )
+        );
+    }
 
     #[test]
     fn sustained_recovery_requires_consecutive_recall_after_each_return() {
