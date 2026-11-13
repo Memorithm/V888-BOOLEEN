@@ -83,11 +83,11 @@ pub enum LeafRouting {
     SeededShuffle(u64),
 }
 
-#[derive(Clone, Debug)]
 /// Observable five-bit presynaptic words and corresponding Boolean outputs
 /// for every layer of a frozen or experimentally adapted hierarchy.
 pub type HierarchyLayerTrace = Vec<(Vec<u8>, Vec<bool>)>;
 
+#[derive(Clone, Debug)]
 pub struct FiveCircleHierarchy {
     depth: usize,
     routing: Vec<u16>,
