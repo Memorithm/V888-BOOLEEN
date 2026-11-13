@@ -84,6 +84,7 @@ pub fn select_by_validation(
     }
     let mut winner: Option<SelectedCredit> = None;
     for &seed in seeds {
+        rows[64] = rows[0].clone();
         let config = CreditConfig { seed, ..template };
         let result = fit_final_loss(base, train, config)?;
         let validation_score = evaluate(&result.model, validation)?;
