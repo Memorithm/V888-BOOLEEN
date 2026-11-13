@@ -176,6 +176,22 @@ impl RecurrentFiveCircle {
         self.wiring_fingerprint
     }
 
+    /// Replace the shared initialization rule with one learned neuron model
+    /// per node while retaining all ten existing directed sources per node.
+    /// This operation is atomic with respect to invalid population size.
+    pub fn install_local_models(
+        &mut self,
+        models: &[GatedFiveCircle],
+    ) -> Result<(), RecurrentError> {
+        self.layer.install_models(models)?;
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn neuron_model(&self, index: usize) -> Option<GatedFiveCircle> {
+        self.layer.model_at(index)
+    }
+
     #[must_use]
     pub fn state(&self) -> &BooleanState {
         &self.state
