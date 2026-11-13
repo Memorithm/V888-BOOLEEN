@@ -4,9 +4,7 @@
 //! Fourier phases, masks and persistent radii remain fixed. The supervision
 //! is synthetic, not a measured BANC signal or evidence of neural memory.
 use crate::fourier5::{FiveCircle, CIRCLES};
-use crate::fourier5_dynamic::{
-    train_context_gates, GatedFiveCircle, ModulationError, RadiusGate,
-};
+use crate::fourier5_dynamic::{train_context_gates, GatedFiveCircle, ModulationError, RadiusGate};
 use crate::fourier5_recurrent::{MAX_NETWORK_NODES, MIN_NETWORK_NODES};
 
 pub const LOCAL_EXAMPLES: usize = 64;
@@ -77,7 +75,12 @@ fn target(input: u8, context: u8, bit: usize) -> bool {
 /// Each context appears with one odd and one even parity word. For TEST,
 /// two input bits are flipped, preserving parity but changing each pair.
 /// The generated pairs are disjoint from that neuron's TRAIN pairs.
-fn examples(seed: u64, neuron: usize, task: LocalTask, test: bool) -> [(u8, u8, bool); LOCAL_EXAMPLES] {
+fn examples(
+    seed: u64,
+    neuron: usize,
+    task: LocalTask,
+    test: bool,
+) -> [(u8, u8, bool); LOCAL_EXAMPLES] {
     let bit = task_bit(seed, neuron, task);
     std::array::from_fn(|index| {
         let context = (index / 2) as u8;
@@ -125,10 +128,8 @@ impl LocalPopulation {
         let mut hash = 0xcbf2_9ce4_8422_2325_u64;
         for model in &self.models {
             for gate in model.gates() {
-                hash = (hash ^ u64::from(gate.boost))
-                    .wrapping_mul(0x0000_0100_0000_01b3);
-                hash = (hash ^ u64::from(gate.context_mask))
-                    .wrapping_mul(0x0000_0100_0000_01b3);
+                hash = (hash ^ u64::from(gate.boost)).wrapping_mul(0x0000_0100_0000_01b3);
+                hash = (hash ^ u64::from(gate.context_mask)).wrapping_mul(0x0000_0100_0000_01b3);
             }
         }
         hash
@@ -226,8 +227,14 @@ mod tests {
                 assert_eq!(a[k].1, t[k].1);
                 assert_eq!(a[k].0.count_ones() % 2, t[k].0.count_ones() % 2);
                 assert_ne!(a[k].0, t[k].0);
-                assert_eq!(target(a[k].0, a[k].1, task_bit(27, i, LocalTask::A)), a[k].2);
-                assert_eq!(target(t[k].0, t[k].1, task_bit(27, i, LocalTask::A)), t[k].2);
+                assert_eq!(
+                    target(a[k].0, a[k].1, task_bit(27, i, LocalTask::A)),
+                    a[k].2
+                );
+                assert_eq!(
+                    target(t[k].0, t[k].1, task_bit(27, i, LocalTask::A)),
+                    t[k].2
+                );
             }
         }
     }
@@ -245,8 +252,17 @@ mod tests {
         assert_eq!(after.correct, after.examples);
         assert_eq!(after.perfect_neurons, 128);
         assert_ne!(before, population.gain_fingerprint());
-        assert_eq!(population.teacher_bit_histogram(LocalTask::A).iter().sum::<usize>(), 128);
-        assert!(population.models().windows(2).any(|pair| pair[0] != pair[1]));
+        assert_eq!(
+            population
+                .teacher_bit_histogram(LocalTask::A)
+                .iter()
+                .sum::<usize>(),
+            128
+        );
+        assert!(population
+            .models()
+            .windows(2)
+            .any(|pair| pair[0] != pair[1]));
     }
 
     #[test]
@@ -275,7 +291,10 @@ mod tests {
         let mut one = LocalPopulation::new(64, 17, parity_base()).unwrap();
         let mut two = LocalPopulation::new(64, 17, parity_base()).unwrap();
         let mut three = LocalPopulation::new(64, 18, parity_base()).unwrap();
-        assert_eq!(one.train(LocalTask::A, 8).unwrap(), two.train(LocalTask::A, 8).unwrap());
+        assert_eq!(
+            one.train(LocalTask::A, 8).unwrap(),
+            two.train(LocalTask::A, 8).unwrap()
+        );
         three.train(LocalTask::A, 8).unwrap();
         assert_eq!(one.gain_fingerprint(), two.gain_fingerprint());
         assert_ne!(one.gain_fingerprint(), three.gain_fingerprint());
