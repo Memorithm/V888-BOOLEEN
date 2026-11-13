@@ -79,20 +79,20 @@ pub fn candidate_swaps(
     if limit == 0 || limit > MAX_SWAP_CANDIDATES {
         return Err(RoutingSelectionError::InvalidCandidateBudget);
     }
-    if input_bits < 25 || input_bits > 625 || input_bits % 5 != 0 {
+    if !matches!(input_bits, 25 | 125 | 625) {
         return Err(RoutingSelectionError::InvalidWidth);
     }
     let mut rng = Xorshift64::new(seed);
     let mut swaps = Vec::with_capacity(limit);
-    // For the 25-bit case there are 250 distinct across-group pairs,
-    // enough for the bounded 64 candidate budget.
+    // All proposed leaf swaps cross a top-level five-way subtree boundary;
+    // the 25-bit case alone has 250 such pairs, enough for 64 candidates.
     for _ in 0..(limit * 256) {
         if swaps.len() == limit {
             break;
         }
         let mut a = (rng.next() % input_bits as u64) as usize;
         let mut b = (rng.next() % input_bits as u64) as usize;
-        if a / 5 == b / 5 {
+        if a / (input_bits / 5) == b / (input_bits / 5) {
             continue;
         }
         if a > b {
@@ -143,7 +143,7 @@ fn pack_train(
 ) -> Result<Vec<PackedTrain>, RoutingSelectionError> {
     if train.is_empty()
         || train.len() > MAX_ROUTING_TRAIN
-        || !train.len().is_multiple_of(BITSLICE_LANES)
+        || train.len() % BITSLICE_LANES != 0
     {
         return Err(RoutingSelectionError::InvalidTraining);
     }
@@ -259,7 +259,7 @@ mod tests {
             let mut seen = BTreeSet::new();
             for [a, b] in first {
                 assert!(a < b && b < width);
-                assert_ne!(a / 5, b / 5);
+                assert_ne!(a / (width / 5), b / (width / 5));
                 assert!(seen.insert((a, b)));
             }
         }
