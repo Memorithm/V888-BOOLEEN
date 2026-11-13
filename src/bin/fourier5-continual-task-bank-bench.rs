@@ -161,7 +161,6 @@ fn untrained_baseline() -> FiveCircle {
 }
 
 struct TaskRecord {
-    train: Vec<TaskBatch>,
     valid: Vec<TaskBatch>,
     test: Vec<TaskBatch>,
     ood: Vec<TaskBatch>,
@@ -264,7 +263,7 @@ fn experiment(tree: &WideFiveTree, seed: u64, count: usize) -> Result<(), String
             return Err("too few supervised or combinatorially unseen examples".into());
         }
         let record = TaskRecord {
-            train, valid, test, ood, previous_test: test_score,
+            valid, test, ood, previous_test: test_score,
         };
         records.push(record);
         // Replay every earlier task's independent TEST after EVERY new task.
