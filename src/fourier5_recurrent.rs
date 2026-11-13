@@ -3,9 +3,7 @@
 //! Each node has exactly five data sources and five contextual sources (ten
 //! directed contacts). All nodes update from one immutable, bit-packed
 //! snapshot. No anatomical edges or neural physiology are inferred.
-use crate::fourier5_dynamic::{
-    FiveCircleLayer, GatedFiveCircle, ModulationError, WiredNeuron,
-};
+use crate::fourier5_dynamic::{FiveCircleLayer, GatedFiveCircle, ModulationError, WiredNeuron};
 use crate::BooleanState;
 
 pub const MIN_NETWORK_NODES: usize = 64;
@@ -122,10 +120,7 @@ impl RecurrentFiveCircle {
     /// Construct a synthetic recurrent network, bounded to 250k neurons.
     /// A single previously trained GatedFiveCircle is shared by value;
     /// this does NOT train each node separately.
-    pub fn seeded(
-        config: NetworkConfig,
-        model: GatedFiveCircle,
-    ) -> Result<Self, RecurrentError> {
+    pub fn seeded(config: NetworkConfig, model: GatedFiveCircle) -> Result<Self, RecurrentError> {
         if !(MIN_NETWORK_NODES..=MAX_NETWORK_NODES).contains(&config.nodes) {
             return Err(RecurrentError::InvalidSize);
         }
@@ -153,7 +148,9 @@ impl RecurrentFiveCircle {
         for index in 0..config.nodes {
             let initial = (rng.next() & 255) < u64::from(config.initial_activity_per_256);
             if initial {
-                state.set(index, true).map_err(|_| RecurrentError::InvalidContact)?;
+                state
+                    .set(index, true)
+                    .map_err(|_| RecurrentError::InvalidContact)?;
             }
         }
         Ok(Self {
@@ -281,18 +278,14 @@ mod tests {
 
     #[test]
     fn seeded_random_and_ring_are_reproducible_and_distinct() {
-        let mut random = RecurrentFiveCircle::seeded(
-            config(SyntheticTopology::SeededPseudorandom),
-            model(),
-        )
-        .unwrap();
-        let mut clone = RecurrentFiveCircle::seeded(
-            config(SyntheticTopology::SeededPseudorandom),
-            model(),
-        )
-        .unwrap();
-        let ring = RecurrentFiveCircle::seeded(config(SyntheticTopology::LocalRing), model())
-            .unwrap();
+        let mut random =
+            RecurrentFiveCircle::seeded(config(SyntheticTopology::SeededPseudorandom), model())
+                .unwrap();
+        let mut clone =
+            RecurrentFiveCircle::seeded(config(SyntheticTopology::SeededPseudorandom), model())
+                .unwrap();
+        let ring =
+            RecurrentFiveCircle::seeded(config(SyntheticTopology::LocalRing), model()).unwrap();
         assert_eq!(random.contact_count(), 2_570);
         assert_eq!(random.wiring_fingerprint(), clone.wiring_fingerprint());
         assert_ne!(random.wiring_fingerprint(), ring.wiring_fingerprint());
