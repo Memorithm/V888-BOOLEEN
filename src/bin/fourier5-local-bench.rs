@@ -21,7 +21,7 @@ fn parity_base() -> FiveCircle {
 
 fn untrained_model() -> GatedFiveCircle {
     let gates = std::array::from_fn(|i| RadiusGate {
-        context_mask: 1_u8 << i,
+        context_mask: if i == 0 { 0 } else { 1_u8 << (i - 1) },
         boost: 0,
     });
     GatedFiveCircle::new(parity_base(), gates).expect("synthetic gates are valid")
@@ -271,7 +271,7 @@ mod tests {
     fn untrained_model_has_five_explicit_singleton_context_gates() {
         let model = untrained_model();
         for (i, gate) in model.gates().iter().enumerate() {
-            assert_eq!(gate.context_mask, 1 << i);
+            assert_eq!(gate.context_mask, if i == 0 { 0 } else { 1 << (i - 1) });
             assert_eq!(gate.boost, 0);
         }
     }
