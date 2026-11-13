@@ -4,6 +4,7 @@
 //! Includes model initialization and full cache rebuild after every FULL
 //! accepted edit; excludes teacher/source generation and heldout scoring.
 //! This is NOT a hardware energy or DRAM traffic experiment.
+use std::io::{self, Write};
 use std::time::Instant;
 
 use v888_booleen::fourier5::FiveCircle;
@@ -234,7 +235,131 @@ fn experiment(width: usize, seed: u64, passes: usize, proposals: usize) -> Resul
     Ok(())
 }
 
+fn power_marker(label: &str) -> Result<(), String> {
+    println!("V888_TRAIN_MARKER={label}");
+    io::stdout().flush().map_err(|e| e.to_string())
+}
+
+/// Dedicated physical host-observer protocol. Build synthetic data and
+/// teacher BEFORE the observed windows. Each phase starts from identical
+/// parameters and evaluates identical proposals. Energy includes model
+/// initialization, acceptance/rebuilds and the complete TRAIN loop, but
+/// excludes teacher generation and VALID/TEST scoring (same in both arms).
+struct EnergyExpected {
+    decisions: Vec<(u64, bool)>,
+    valid: u32,
+    test: u32,
+}
+
+fn energy_experiment(width: usize, seed: u64) -> Result<(), String> {
+    let tree = WideFiveTree::new(width).map_err(|e| format!("{e:?}"))?;
+    let train = words(width, seed ^ 0x1111_2222_3333_4444);
+    let valid = words(width, seed ^ 0x1357_9bdf_2468_ace0);
+    let test = words(width, seed ^ 0x0f0f_f0f0_5a5a_a5a5);
+    let options = choices();
+    let mut teacher = WidePlasticCircuit::new(&tree, &train).map_err(|e| format!("{e:?}"))?;
+    teacher.install_models(|layer, neuron| {
+        let bucket = hash(layer, neuron, seed) % 10;
+        if layer == 0 {
+            options[match bucket {
+                0 => 2,
+                1 => 3,
+                2..=5 => 0,
+                _ => 1,
+            }]
+        } else if bucket % 2 == 0 {
+            options[1]
+        } else {
+            options[4]
+        }
+    });
+    let target = teacher.output();
+    let valid_target = teacher
+        .evaluate_trace(&valid)
+        .map_err(|e| format!("{e:?}"))?
+        .last()
+        .unwrap()[0];
+    let test_target = teacher
+        .evaluate_trace(&test)
+        .map_err(|e| format!("{e:?}"))?
+        .last()
+        .unwrap()[0];
+    drop(teacher);
+    if [target, valid_target, test_target]
+        .iter()
+        .any(|x| !(16..=48).contains(&x.count_ones()))
+    {
+        return Err("unbalanced labels in power experiment".into());
+    }
+    let mut rng = Rng(seed ^ 0xfeed_ba12_8888_0001);
+    let proposals: Vec<_> = (0..PASS_COUNT * PROPOSALS_PER_PASS)
+        .map(|_| {
+            let layer = rng.next() as usize % tree.depth();
+            let neuron = rng.next() as usize % tree.level_widths()[layer];
+            let model = options[rng.next() as usize % options.len()];
+            (layer, neuron, model)
+        })
+        .collect();
+    let order = if seed & 1 == 0 {
+        ["FULL", "CACHED"]
+    } else {
+        ["CACHED", "FULL"]
+    };
+    let mut expected: Option<EnergyExpected> = None;
+    for arm in order {
+        let phase = format!("S{seed}_{arm}");
+        power_marker(&format!("{phase}_BEGIN"))?;
+        let started = Instant::now();
+        let mut circuit = WidePlasticCircuit::new(&tree, &train).map_err(|e| format!("{e:?}"))?;
+        let mut decisions = Vec::with_capacity(proposals.len());
+        let mut accepted = 0;
+        for &(layer, neuron, model) in &proposals {
+            let current = circuit.model(layer, neuron).map_err(|e| format!("{e:?}"))?;
+            let changed = if model == current {
+                false
+            } else if arm == "FULL" {
+                full_attempt(&mut circuit, layer, neuron, model, target)?.1
+            } else {
+                cached_attempt(&mut circuit, layer, neuron, model, target)?.1
+            };
+            accepted += usize::from(changed);
+            decisions.push((circuit.output(), changed));
+        }
+        let elapsed_us = started.elapsed().as_micros();
+        power_marker(&format!("{phase}_END"))?;
+        let valid_score = valid_hits(&circuit, &valid, valid_target)?;
+        let test_score = valid_hits(&circuit, &test, test_target)?;
+        let train_score = hits(circuit.output(), target);
+        if let Some(reference) = &expected {
+            if decisions != reference.decisions
+                || valid_score != reference.valid
+                || test_score != reference.test
+            {
+                return Err("full/cache physical energy arms diverged".into());
+            }
+        } else {
+            expected = Some(EnergyExpected {
+                decisions,
+                valid: valid_score,
+                test: test_score,
+            });
+        }
+        println!(
+            "V888_TRAIN_ENERGY_RESULT phase={phase} seed={seed} arm={arm}              proposals={} accepted={accepted} train={train_score}/64              valid={valid_score}/64 test={test_score}/64 elapsed_us={elapsed_us}              matched_all_decisions=true",
+            proposals.len()
+        );
+    }
+    Ok(())
+}
+
 fn main() -> Result<(), String> {
+    if std::env::var_os("V888_TRAIN_POWER_OBSERVER").is_some() {
+        for seed in SEEDS {
+            energy_experiment(SIX_MILLION_INPUTS, seed)?;
+        }
+        println!("V888_TRAIN_ENERGY_COMPLETE=true");
+        return Ok(());
+    }
     for seed in SEEDS {
         experiment(SIX_MILLION_INPUTS, seed, PASS_COUNT, PROPOSALS_PER_PASS)?;
     }
