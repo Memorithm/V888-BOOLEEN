@@ -98,7 +98,15 @@ struct SplitSpec {
 
 fn split(circuit: &WidePlasticCircuit<'_>, spec: SplitSpec) -> Result<Vec<TaskBatch>, String> {
     let SplitSpec {
-        size, layer, seed, task, salt, batches, training, ood, target,
+        size,
+        layer,
+        seed,
+        task,
+        salt,
+        batches,
+        training,
+        ood,
+        target,
     } = spec;
     let mut result = Vec::new();
     for i in 0..batches {
@@ -160,16 +168,34 @@ fn suite(
             };
             Ok(Task {
                 train: split(circuit, base)?,
-                valid: split(circuit, SplitSpec {
-                    salt: 0x2222_0002, batches: 2, training: false, ..base
-                })?,
-                test: split(circuit, SplitSpec {
-                    salt: 0x3333_0003, batches: 2, training: false, ..base
-                })?,
-                ood: split(circuit, SplitSpec {
-                    salt: 0x4444_0004, batches: 2,
-                    training: false, ood: true, ..base
-                })?,
+                valid: split(
+                    circuit,
+                    SplitSpec {
+                        salt: 0x2222_0002,
+                        batches: 2,
+                        training: false,
+                        ..base
+                    },
+                )?,
+                test: split(
+                    circuit,
+                    SplitSpec {
+                        salt: 0x3333_0003,
+                        batches: 2,
+                        training: false,
+                        ..base
+                    },
+                )?,
+                ood: split(
+                    circuit,
+                    SplitSpec {
+                        salt: 0x4444_0004,
+                        batches: 2,
+                        training: false,
+                        ood: true,
+                        ..base
+                    },
+                )?,
             })
         })
         .collect()
