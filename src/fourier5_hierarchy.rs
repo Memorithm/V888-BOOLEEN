@@ -129,7 +129,7 @@ fn routed_indices(count: usize, topology: LeafRouting) -> Vec<u16> {
     routing
 }
 
-fn compiled_truth_table(model: FiveCircle) -> u32 {
+pub(crate) fn compiled_truth_table(model: FiveCircle) -> u32 {
     let mut truth = 0_u32;
     for input in 0..TABLE_SIZE {
         if model.predict(input as u8) == Ok(true) {
@@ -150,7 +150,7 @@ fn gather_five(values: &[bool], first: usize) -> u8 {
 /// Compile one five-variable truth table to 31 bitwise Shannon multiplexers.
 /// Each operand is a bit-plane holding 64 independent evaluation lanes.
 /// The truth table itself is independently compiled from FiveCircle.predict.
-fn shannon_64(truth: u32, input: [u64; CIRCLES]) -> u64 {
+pub(crate) fn shannon_64(truth: u32, input: [u64; CIRCLES]) -> u64 {
     let mut terms = [0_u64; TABLE_SIZE];
     for (row, term) in terms.iter_mut().enumerate() {
         *term = if truth & (1_u32 << row) != 0 {
@@ -298,6 +298,16 @@ impl FiveCircleHierarchy {
     #[must_use]
     pub fn output_model(&self) -> FiveCircle {
         self.layers.last().expect("nonempty hierarchy")[0]
+    }
+
+    /// The exact compiled 32-bit truth table of one already-validated
+    /// Fourier neuron. Internal use for incremental bit-sliced inference.
+    pub(crate) fn gate_truth(&self, layer: usize, neuron: usize) -> Result<u32, HierarchyError> {
+        self.truth_tables
+            .get(layer)
+            .and_then(|values| values.get(neuron))
+            .copied()
+            .ok_or(HierarchyError::InvalidLayerShape)
     }
 
     /// Inspect one fitted or frozen Fourier neuron by its layer index.
