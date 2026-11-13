@@ -34,6 +34,13 @@ pub enum CreditPolicy {
     Blind,
 }
 
+/// Inference paths evaluated under identical interventions and randomness.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CreditEvaluationMode {
+    Incremental,
+    Full,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CreditConfig {
     pub scope: CreditScope,
@@ -77,6 +84,10 @@ pub struct CreditResult {
     /// Gate calls that full-model reevaluation of every candidate would need.
     /// Counts 64-lane gates, NOT wall time or scalar Boolean predictions.
     pub full_recompute_gate_evaluations: usize,
+    /// Real gate evaluations of the chosen evaluation mode, ignoring
+    /// input transposition and model construction in both modes.
+    pub actual_gate_evaluations: usize,
+    pub evaluation_mode: CreditEvaluationMode,
 }
 
 #[derive(Clone, Copy)]
@@ -236,6 +247,18 @@ pub fn fit_final_loss(
     train: &[RoutingSample],
     config: CreditConfig,
 ) -> Result<CreditResult, CreditError> {
+    fit_final_loss_with_evaluator(base, train, config, CreditEvaluationMode::Incremental)
+}
+
+/// Reference mode uses the existing full model evaluator with the same
+/// proposal stream, accepted moves and scoring. It is deliberately retained
+/// to compare measured end-to-end runtimes, not only nominal gate counts.
+pub fn fit_final_loss_with_evaluator(
+    base: &FiveCircleHierarchy,
+    train: &[RoutingSample],
+    config: CreditConfig,
+    evaluation_mode: CreditEvaluationMode,
+) -> Result<CreditResult, CreditError> {
     if base.depth() < 2
         || !(1..=MAX_CREDIT_ROUNDS).contains(&config.rounds)
         || !(1..=MAX_CREDIT_PROPOSALS_PER_ROUND).contains(&config.proposals_per_round)
@@ -256,20 +279,25 @@ pub fn fit_final_loss(
     for _ in 0..config.rounds {
         // One full 64-lane baseline traversal per batch per round.
         // Interventions then evaluate *only* gates inside changed cones.
-        let caches: Vec<_> = batches
-            .iter()
-            .map(|batch| FiveCircleIncrementalCache::new(&model, &batch.planes))
-            .collect::<Result<_, _>>()?;
-        cache_build_gate_evaluations += caches
-            .iter()
-            .map(FiveCircleIncrementalCache::build_gate_evaluations)
-            .sum::<usize>();
-        debug_assert_eq!(
-            caches.iter().zip(&batches).map(|(cache, batch)| {
-                (BITSLICE_LANES as u32 - (cache.baseline_output() ^ batch.labels).count_ones()) as usize
-            }).sum::<usize>(),
-            hits
-        );
+        let caches = if evaluation_mode == CreditEvaluationMode::Incremental {
+            let cached: Vec<_> = batches
+                .iter()
+                .map(|batch| FiveCircleIncrementalCache::new(&model, &batch.planes))
+                .collect::<Result<_, _>>()?;
+            cache_build_gate_evaluations += cached
+                .iter()
+                .map(FiveCircleIncrementalCache::build_gate_evaluations)
+                .sum::<usize>();
+            debug_assert_eq!(
+                cached.iter().zip(&batches).map(|(cache, batch)| {
+                    (BITSLICE_LANES as u32 - (cache.baseline_output() ^ batch.labels).count_ones()) as usize
+                }).sum::<usize>(),
+                hits
+            );
+            Some(cached)
+        } else {
+            None
+        };
         let blind_index = (rng.next() % config.proposals_per_round as u64) as usize;
         let mut winning_model: Option<FiveCircleHierarchy> = None;
         let mut winning_hits = hits;
@@ -285,13 +313,18 @@ pub fn fit_final_loss(
             } else {
                 perturb_parameter(&model, config.scope, &mut rng)?
             };
-            let mut candidate_hits = 0;
-            for (cache, batch) in caches.iter().zip(&batches) {
-                let evaluation = cache.evaluate(delta)?;
-                delta_gate_evaluations += evaluation.gate_evaluations;
-                candidate_hits += (BITSLICE_LANES as u32
-                    - (evaluation.output ^ batch.labels).count_ones()) as usize;
-            }
+            let candidate_hits = if let Some(ref cached) = caches {
+                let mut correct_count = 0;
+                for (cache, batch) in cached.iter().zip(&batches) {
+                    let evaluation = cache.evaluate(delta)?;
+                    delta_gate_evaluations += evaluation.gate_evaluations;
+                    correct_count += (BITSLICE_LANES as u32
+                        - (evaluation.output ^ batch.labels).count_ones()) as usize;
+                }
+                correct_count
+            } else {
+                correct(&proposal, &batches)?
+            };
             let chosen = match config.policy {
                 CreditPolicy::Greedy => candidate_hits > winning_hits,
                 CreditPolicy::Blind => index == blind_index,
@@ -318,6 +351,14 @@ pub fn fit_final_loss(
         }
     }
     let evaluations = config.rounds * config.proposals_per_round;
+    let full_recompute_gate_evaluations = (evaluations + 1)
+        * batches.len()
+        * base.neuron_count();
+    let actual_gate_evaluations = if evaluation_mode == CreditEvaluationMode::Incremental {
+        cache_build_gate_evaluations + delta_gate_evaluations
+    } else {
+        full_recompute_gate_evaluations
+    };
     Ok(CreditResult {
         model,
         initial_train_correct: initial,
@@ -331,9 +372,9 @@ pub fn fit_final_loss(
         rounds_run: config.rounds,
         cache_build_gate_evaluations,
         delta_gate_evaluations,
-        full_recompute_gate_evaluations: (evaluations + 1)
-            * batches.len()
-            * base.neuron_count(),
+        full_recompute_gate_evaluations,
+        actual_gate_evaluations,
+        evaluation_mode,
     })
 }
 
