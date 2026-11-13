@@ -2,9 +2,7 @@
 //!
 //! Both models learn discrete interaction masks, signed integer radii and bias
 //! from the SAME 16 training labels. No test label is supplied to the trainer.
-use v888_booleen::fourier5_mask_learning::{
-    learn_five_masks, FeatureFamily, MaskSample,
-};
+use v888_booleen::fourier5_mask_learning::{learn_five_masks, FeatureFamily, MaskSample};
 
 type Target = fn(u8) -> bool;
 
@@ -76,7 +74,11 @@ mod tests {
 
     #[test]
     fn tasks_are_independent_of_fifth_heldout_bit() {
-        for target in [parity_four as Target, and_four as Target, majority_four as Target] {
+        for target in [
+            parity_four as Target,
+            and_four as Target,
+            majority_four as Target,
+        ] {
             for input in 0..16 {
                 assert_eq!(target(input), target(input + 16));
             }
