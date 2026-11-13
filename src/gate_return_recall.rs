@@ -23,6 +23,10 @@ pub struct GateReturnScore {
     pub worst_recovery_delay: Option<usize>,
     /// Return events with no recall in their bounded observation window.
     pub unrecovered_events: usize,
+    /// Full-horizon episodes with no recall: observed failures, not censored.
+    pub confirmed_unrecovered_events: usize,
+    /// Episodes with no recall whose observation window ended prematurely.
+    pub censored_unrecovered_events: usize,
     /// Episodes ending before the requested horizon (next return or history end).
     /// Such episodes are right-censored, not proof of failed long-term recall.
     pub truncated_events: usize,
@@ -154,6 +158,8 @@ fn rank_gate_return_with_window_policy(
             first_recovery_delay: None,
             worst_recovery_delay: None,
             unrecovered_events: 0,
+            confirmed_unrecovered_events: 0,
+            censored_unrecovered_events: 0,
             truncated_events: 0,
             recall_ticks: 0,
             activation_cost: 0,
@@ -204,6 +210,11 @@ fn rank_gate_return_with_window_policy(
             }
             if !recovered {
                 score.unrecovered_events += 1;
+                if end - start < horizon {
+                    score.censored_unrecovered_events += 1;
+                } else {
+                    score.confirmed_unrecovered_events += 1;
+                }
             }
         }
         scores.push(score);
@@ -212,7 +223,8 @@ fn rank_gate_return_with_window_policy(
         b.sustained_recovered_events
             .cmp(&a.sustained_recovered_events)
             .then_with(|| b.recovered_events.cmp(&a.recovered_events))
-            .then_with(|| a.unrecovered_events.cmp(&b.unrecovered_events))
+            .then_with(|| a.confirmed_unrecovered_events.cmp(&b.confirmed_unrecovered_events))
+            .then_with(|| a.censored_unrecovered_events.cmp(&b.censored_unrecovered_events))
             .then_with(|| a.worst_recovery_delay.cmp(&b.worst_recovery_delay))
             .then_with(|| b.recall_ticks.cmp(&a.recall_ticks))
             .then_with(|| a.activation_cost.cmp(&b.activation_cost))
@@ -233,6 +245,24 @@ mod tests {
         state
     }
 
+
+    #[test]
+    fn full_horizon_failure_is_distinct_from_censored_non_recovery() {
+        let circuit = Subcircuit::new(4, vec![1]).unwrap();
+        let history = [
+            state(&[]), state(&[0]), state(&[]), state(&[]),
+            state(&[]), state(&[0]),
+        ];
+        let scores = rank_gate_return_disjoint_recall(
+            &[circuit], &history, &[Some(7), None, None, None],
+            7, 1, 1, 3, 1,
+        ).unwrap();
+        assert_eq!(scores[0].return_events, 2);
+        assert_eq!(scores[0].unrecovered_events, 2);
+        assert_eq!(scores[0].confirmed_unrecovered_events, 1);
+        assert_eq!(scores[0].censored_unrecovered_events, 1);
+        assert_eq!(scores[0].truncated_events, 1);
+    }
 
     #[test]
     fn truncated_horizons_are_explicitly_counted() {
