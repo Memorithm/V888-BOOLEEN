@@ -96,3 +96,44 @@ actual run, sample accuracies, hardware time, graph size and SHA before
 merging. Only tested implementation moves to main. A separate further
 PR is needed for per-neuron local learning, more complex task topology,
 matched algorithmic budgets and measured peak RSS/CPU/energy.
+
+## First physical qualification — observed measurements, 2026-11-13
+
+Source: [RemoteOps run 43440365624, successful final attempt](https://github.com/Memorithm/RemoteOps/actions/runs/43440365624),
+V888 verified source SHA `6319da1ca9d543333e88247de744180a2e45f370`.
+These data describe the original code revision, not a prospective new code SHA
+after appending this report. The revised documentation-only HEAD must also
+be qualified before merge.
+
+Rust 1.89 offline: format PASS; Clippy -D warnings PASS; 164 library tests,
+2 Fourier contextual benchmark tests, 1 large-benchmark test, and additional
+existing tests all PASS; three previous Fourier benches and CLI smoke PASS.
+
+| Target | TRAIN | TEST | Context-blind | Fixed singleton | Learned mask |
+|---|---:|---:|---:|---:|---:|
+| seed 1471000737 | 512 | 512 | 436/512 | 512/512 | 512/512 |
+| seed 2693534191 | 512 | 512 | 448/512 | 512/512 | 512/512 |
+
+Both learned models selected gate mask 5, gain 3, one gate. Each search
+evaluated 32 candidate fits, made 385,536 reported example visits, and
+ran in 159 ms / 148 ms (wall clock at 1 ms resolution); the
+fixed-singleton learner needed 11 / 5 update events, with reported
+wall clock rounded to 0 ms. There is **no observed accuracy advantage**
+over the fixed-singleton control. Search is far more expensive, so
+a speedup claim is not justified.
+
+| Neurons | Contacts | Steps | Topology | Build ms | Three-trajectory simulation ms | Logical bytes per replica | Contextual final active | Static final active | Final one-bit perturbation Hamming |
+|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|
+| 8,192 | 81,920 | 32 | ring | 21 | 957 | 1,377,280 | 3,377 | 4,090 | 441 |
+| 65,536 | 655,360 | 16 | pseudorandom | 405 | 3,876 | 11,018,240 | 27,131 | 32,762 | 31,737 |
+| 188,508 | 1,885,080 | 8 | pseudorandom | 1,170 | 5,684 | 31,692,912 | 78,222 | 94,155 | 78,139 |
+
+Transitions from the contextual replica: rising/falling totals
+63,020/63,809 (8k); 251,915/257,735 (65k);
+359,069/374,792 (188k). The random topologies display rapid
+propagation of a single-bit state difference under this synthetic
+parity rule. That does not establish useful memory, biological
+chaos, robustness or computational superiority. Timing includes
+the three comparison trajectories, excludes compilation and training,
+and is specific to this bounded Dell session. Logical bytes exclude
+peak RSS, allocator overhead and temporary state buffers.
