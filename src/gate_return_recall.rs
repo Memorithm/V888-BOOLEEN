@@ -16,6 +16,8 @@ pub struct GateReturnScore {
     pub candidate: usize,
     pub return_events: usize,
     pub recovered_events: usize,
+    /// Return events with at least `minimum_sustained_ticks` consecutive recall ticks.
+    pub sustained_recovered_events: usize,
     pub first_recovery_delay: Option<usize>,
     pub recall_ticks: usize,
     pub activation_cost: u64,
@@ -34,6 +36,28 @@ pub fn rank_gate_return_recall(
     minimum_circuit_active: usize,
     horizon: usize,
 ) -> Result<Vec<GateReturnScore>, GateReturnError> {
+    rank_gate_return_sustained_recall(
+        candidates, snapshots, annotations, region, minimum_region_active,
+        minimum_circuit_active, horizon, 1,
+    )
+}
+
+/// Rank frozen subcircuits by recovery sustained for consecutive ticks after
+/// each observed inactive-to-active region transition. No learning or edges
+/// are inferred from the temporal association.
+pub fn rank_gate_return_sustained_recall(
+    candidates: &[Subcircuit],
+    snapshots: &[BooleanState],
+    annotations: &[Option<u32>],
+    region: u32,
+    minimum_region_active: usize,
+    minimum_circuit_active: usize,
+    horizon: usize,
+    minimum_sustained_ticks: usize,
+) -> Result<Vec<GateReturnScore>, GateReturnError> {
+    if minimum_sustained_ticks == 0 || minimum_sustained_ticks > horizon {
+        return Err(GateReturnError::InvalidBudget);
+    }
     if candidates.is_empty()
         || candidates.len() > 256
         || snapshots.len() > 1000
@@ -82,6 +106,7 @@ pub fn rank_gate_return_recall(
             candidate,
             return_events: returns.len(),
             recovered_events: 0,
+            sustained_recovered_events: 0,
             first_recovery_delay: None,
             recall_ticks: 0,
             activation_cost: 0,
@@ -89,6 +114,8 @@ pub fn rank_gate_return_recall(
         for &start in &returns {
             let end = start.saturating_add(horizon).min(snapshots.len());
             let mut recovered = false;
+            let mut streak = 0usize;
+            let mut sustained = false;
             for (delay, state) in snapshots[start..end].iter().enumerate() {
                 let active = circuit
                     .members()
@@ -100,6 +127,11 @@ pub fn rank_gate_return_recall(
                     .recall(state, minimum_circuit_active)
                     .map_err(GateReturnError::Recall)?
                 {
+                    streak += 1;
+                    if streak >= minimum_sustained_ticks && !sustained {
+                        score.sustained_recovered_events += 1;
+                        sustained = true;
+                    }
                     score.recall_ticks += 1;
                     if !recovered {
                         score.recovered_events += 1;
@@ -108,14 +140,17 @@ pub fn rank_gate_return_recall(
                         );
                         recovered = true;
                     }
+                } else {
+                    streak = 0;
                 }
             }
         }
         scores.push(score);
     }
     scores.sort_by(|a, b| {
-        b.recovered_events
-            .cmp(&a.recovered_events)
+        b.sustained_recovered_events
+            .cmp(&a.sustained_recovered_events)
+            .then_with(|| b.recovered_events.cmp(&a.recovered_events))
             .then_with(|| b.recall_ticks.cmp(&a.recall_ticks))
             .then_with(|| a.activation_cost.cmp(&b.activation_cost))
             .then_with(|| a.candidate.cmp(&b.candidate))
@@ -133,6 +168,41 @@ mod tests {
             state.set(bit, true).unwrap();
         }
         state
+    }
+
+
+    #[test]
+    fn sustained_recovery_requires_consecutive_recall_after_each_return() {
+        let circuits = [
+            Subcircuit::new(4, vec![1]).unwrap(),
+            Subcircuit::new(4, vec![2]).unwrap(),
+        ];
+        let history = [
+            state(&[]),
+            state(&[0, 1, 2]),
+            state(&[0, 2]),
+            state(&[0, 1, 2]),
+            state(&[]),
+            state(&[0, 1, 2]),
+            state(&[0, 1, 2]),
+        ];
+        let scores = rank_gate_return_sustained_recall(
+            &circuits, &history, &[Some(7), None, None, None],
+            7, 1, 1, 3, 2,
+        ).unwrap();
+        assert_eq!(scores[0].candidate, 1);
+        assert_eq!(scores[0].sustained_recovered_events, 2);
+        assert_eq!(scores[1].sustained_recovered_events, 1);
+        assert_eq!(scores[1].recovered_events, 2);
+    }
+
+    #[test]
+    fn sustained_window_must_fit_horizon() {
+        let circuit = Subcircuit::new(4, vec![1]).unwrap();
+        assert_eq!(rank_gate_return_sustained_recall(
+            &[circuit], &[state(&[])], &[Some(7), None, None, None],
+            7, 1, 1, 2, 3,
+        ), Err(GateReturnError::InvalidBudget));
     }
 
     #[test]
