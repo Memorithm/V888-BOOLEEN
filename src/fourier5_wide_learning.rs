@@ -389,7 +389,9 @@ mod tests {
         let second = planes(125, 456);
         let mut circuit = WidePlasticCircuit::new(&tree, &first).unwrap();
         let chosen = GateKind::And.five_circle();
-        circuit.accept(circuit.propose(0, 0, chosen).unwrap()).unwrap();
+        circuit
+            .accept(circuit.propose(0, 0, chosen).unwrap())
+            .unwrap();
         let stale = circuit.propose(0, 1, GateKind::Or.five_circle()).unwrap();
         let previous_commits = circuit.commits();
         circuit.rebind_sources(&second).unwrap();
@@ -400,7 +402,10 @@ mod tests {
             circuit.output(),
             circuit.evaluate_trace(&second).unwrap().last().unwrap()[0]
         );
-        assert_eq!(circuit.rebind_sources(&first[..124]), Err(WideError::InvalidInput));
+        assert_eq!(
+            circuit.rebind_sources(&first[..124]),
+            Err(WideError::InvalidInput)
+        );
         assert_eq!(
             circuit.output(),
             circuit.evaluate_trace(&second).unwrap().last().unwrap()[0]
