@@ -1,5 +1,5 @@
 //! Controlled cue -> recurrent delay -> delayed feedback -> cued recall.
-//! 
+//!
 //! A seeded teacher labels each neuron's original cue AFTER the delay. Three
 //! matched arms: eligibility (correct past cue), no-trace reward-time input,
 //! frozen parameters. TRAIN/TEST pair collisions are explicitly excluded.
@@ -9,9 +9,7 @@ use std::time::Instant;
 use v888_booleen::fourier5::{Circle, FiveCircle, CIRCLES};
 use v888_booleen::fourier5_dynamic::{GatedFiveCircle, RadiusGate};
 use v888_booleen::fourier5_population_eligibility::EligibilityBank;
-use v888_booleen::fourier5_recurrent::{
-    NetworkConfig, RecurrentFiveCircle, SyntheticTopology,
-};
+use v888_booleen::fourier5_recurrent::{NetworkConfig, RecurrentFiveCircle, SyntheticTopology};
 use v888_booleen::BooleanState;
 
 const EVAL_EPISODES: usize = 24;
@@ -138,7 +136,9 @@ fn evaluate(
     for ep in 0..EVAL_EPISODES {
         let cue = stimulus(nodes, seed ^ 0x81ee_4023_fad0_5b18, ep as u64);
         network.replace_state(cue).map_err(|e| format!("{e:?}"))?;
-        let pairs = network.capture_local_signals().map_err(|e| format!("{e:?}"))?;
+        let pairs = network
+            .capture_local_signals()
+            .map_err(|e| format!("{e:?}"))?;
         let mut goals = vec![false; nodes];
         let mut novel = vec![false; nodes];
         for (index, &(input, context)) in pairs.iter().enumerate() {
@@ -146,7 +146,8 @@ fn evaluate(
             if !seen.has(index, input, context) {
                 novel[index] = true;
                 result.novel += 1;
-                let prediction = network.neuron_model(index)
+                let prediction = network
+                    .neuron_model(index)
                     .ok_or("missing local model")?
                     .predict(input, context)
                     .map_err(|e| format!("{e:?}"))?;
@@ -191,11 +192,21 @@ fn run(nodes: usize, delay: usize, seed: u64) -> Result<(), String> {
                 seed ^ (task_index as u64).wrapping_mul(0x63ac_f129_1fc0_e3d5),
                 episode as u64,
             );
-            trace_network.replace_state(cue.clone()).map_err(|e| format!("{e:?}"))?;
-            stale_network.replace_state(cue).map_err(|e| format!("{e:?}"))?;
+            trace_network
+                .replace_state(cue.clone())
+                .map_err(|e| format!("{e:?}"))?;
+            stale_network
+                .replace_state(cue)
+                .map_err(|e| format!("{e:?}"))?;
             bank.capture(&trace_network).map_err(|e| format!("{e:?}"))?;
-            let pairs = trace_network.capture_local_signals().map_err(|e| format!("{e:?}"))?;
-            if pairs != stale_network.capture_local_signals().map_err(|e| format!("{e:?}"))? {
+            let pairs = trace_network
+                .capture_local_signals()
+                .map_err(|e| format!("{e:?}"))?;
+            if pairs
+                != stale_network
+                    .capture_local_signals()
+                    .map_err(|e| format!("{e:?}"))?
+            {
                 return Err("different training cue in paired models".into());
             }
             let mut labels = Vec::with_capacity(nodes);
@@ -205,15 +216,20 @@ fn run(nodes: usize, delay: usize, seed: u64) -> Result<(), String> {
             }
             // Neither model has seen a teacher signal at cue time.
             for _ in 0..delay {
-                bank.tick(&mut trace_network).map_err(|e| format!("{e:?}"))?;
+                bank.tick(&mut trace_network)
+                    .map_err(|e| format!("{e:?}"))?;
                 stale_network.step().map_err(|e| format!("{e:?}"))?;
             }
-            let report = bank.reinforce(&mut trace_network, &labels).map_err(|e| format!("{e:?}"))?;
+            let report = bank
+                .reinforce(&mut trace_network, &labels)
+                .map_err(|e| format!("{e:?}"))?;
             if report.age != delay || report.supervised_neurons != nodes {
                 return Err("delayed feedback age or node count mismatch".into());
             }
             updated_trace[task_index] += report.updated_neurons;
-            let stale_pairs = stale_network.capture_local_signals().map_err(|e| format!("{e:?}"))?;
+            let stale_pairs = stale_network
+                .capture_local_signals()
+                .map_err(|e| format!("{e:?}"))?;
             updated_stale[task_index] += stale_network
                 .apply_delayed_feedback(&stale_pairs, &labels)
                 .map_err(|e| format!("{e:?}"))?;
