@@ -60,7 +60,7 @@ impl<'a> WidePlasticCircuit<'a> {
         }
         let mut models = Vec::with_capacity(tree.depth());
         let mut truths = Vec::with_capacity(tree.depth());
-        let mut stages = Vec::with_capacity(tree.depth());
+        let mut stages: Vec<Vec<u64>> = Vec::with_capacity(tree.depth());
         for (layer, &width) in tree.level_widths().iter().enumerate() {
             let model = if layer == 0 {
                 GateKind::Majority.five_circle()
@@ -164,7 +164,7 @@ impl<'a> WidePlasticCircuit<'a> {
         if sources.len() != self.tree.input_bits() {
             return Err(WideError::InvalidInput);
         }
-        let mut trace = Vec::with_capacity(self.tree.depth());
+        let mut trace: Vec<Vec<u64>> = Vec::with_capacity(self.tree.depth());
         for (layer, truths) in self.truths.iter().enumerate() {
             let previous = if layer == 0 {
                 sources
