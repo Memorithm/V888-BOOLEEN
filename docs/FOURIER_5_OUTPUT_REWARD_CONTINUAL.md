@@ -27,13 +27,16 @@ participent ni aux propositions ni au choix de leurs acceptations.
 - Entraîner les deux modèles sur TRAIN-B pendant 3 passages supplémentaires,
   avec la même suite de propositions par passage.
 - Le comparateur accepte chaque amélioration strictement positive de
-  l'exactitude TRAIN-B ; la variante protégée rejette aussi une
-  modification si elle réduit la précision précédemment acquise sur
-  TRAIN-A. Ce garde-fou est un **rejeu de TRAIN** : il est attendu qu'il
+  l'exactitude TRAIN-B ; la variante protégée utilise **un second cache
+  incrémental** sur TRAIN-A pour tester l'effet contrefactuel avant
+  acceptation. Elle rejette toute proposition qui dégraderait le niveau
+  acquis sur TRAIN-A, sans rescanner les 1,56 million de neurones.
+  Les deux caches n'intègrent que les mêmes modifications acceptées. Ce garde-fou est un **rejeu de TRAIN** : il est attendu qu'il
   préserve cet objectif. Il ne garantit **aucune** conservation sur VALID/TEST.
 - Émettre les mesures individuelles par graine, passage et modèle, y compris
-  propositions acceptées, retours arrière, évaluations de portes du
-  cache, lectures logiques, durées et performances de généralisation.
+  propositions acceptées, propositions rejetées par le garde-fou,
+  évaluations de portes des deux caches, lectures logiques, durées et
+  performances de généralisation.
 
 ### Attribution locale du mérite
 
@@ -70,3 +73,9 @@ coût du recalcul complet.
 Qualification à SHA exact dans le conteneur isolé RemoteOps, Rust 1.89,
 `cargo fmt`, Clippy strict et tests ; ne pas fusionner avant preuve.
 Ne pas utiliser les runners privilégiés pour du code PR non qualifié.
+
+Le protocole initial sur un seul cache a été exécuté et a mis en évidence
+un coût très élevé du garde-fou lorsque celui-ci rescannait intégralement
+TRAIN-A à chaque proposition gagnante. La révision à **deux caches** vise
+précisément ce goulet d'étranglement ; les mesures initiales ne doivent
+pas être présentées comme celles de la nouvelle version avant qualification.
