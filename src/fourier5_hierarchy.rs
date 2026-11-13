@@ -298,8 +298,11 @@ impl FiveCircleHierarchy {
 
     /// Inspect one fitted or frozen Fourier neuron by its layer index.
     pub fn layer_model(&self, layer: usize, neuron: usize) -> Result<FiveCircle, HierarchyError> {
-        self.layers.get(layer).and_then(|items| items.get(neuron))
-            .copied().ok_or(HierarchyError::InvalidLayerShape)
+        self.layers
+            .get(layer)
+            .and_then(|items| items.get(neuron))
+            .copied()
+            .ok_or(HierarchyError::InvalidLayerShape)
     }
 
     /// Replace one neuron in an existing hierarchy, preserving ALL five
@@ -311,7 +314,10 @@ impl FiveCircleHierarchy {
         index: usize,
         model: FiveCircle,
     ) -> Result<Self, HierarchyError> {
-        let original = self.layers.get(layer).and_then(|items| items.get(index))
+        let original = self
+            .layers
+            .get(layer)
+            .and_then(|items| items.get(index))
             .ok_or(HierarchyError::InvalidLayerShape)?;
         for i in 0..CIRCLES {
             if original.circles()[i].mask != model.circles()[i].mask {
@@ -335,9 +341,11 @@ impl FiveCircleHierarchy {
         if state.len() != self.input_bits() {
             return Err(HierarchyError::InvalidInput);
         }
-        let mut current: Vec<bool> = self.routing.iter().map(|&source| {
-            state.get(usize::from(source)).expect("validated routing")
-        }).collect();
+        let mut current: Vec<bool> = self
+            .routing
+            .iter()
+            .map(|&source| state.get(usize::from(source)).expect("validated routing"))
+            .collect();
         let mut trace = Vec::with_capacity(self.depth);
         for layer in &self.truth_tables {
             let mut inputs = Vec::with_capacity(layer.len());
