@@ -75,3 +75,61 @@ requires an explicit adapter and separate performance qualification.
 
 Scientific background: standard Walsh-Fourier analysis of Boolean
 functions; the transform itself is not an original invention.
+
+## Context-gated, transient radii (second implementation)
+
+Module `src/fourier5_dynamic.rs` implements a *separate* computational
+hypothesis: each of the five existing Walsh circles can optionally respond
+to the activity of five contextual neurons. Gate mask `g_k` is a conjunction
+over these five context bits. Zero mask disables its gate. At one evaluation,
+
+`r_eff,k(x,c) = r_base,k + boost_k * [g_k != 0 AND (c & g_k) == g_k]`
+
+and the score sums the original signed Walsh characters with these effective
+radii and the original bias. The persistent radius, mask and phase remain
+unaltered. This strictly **increases model input and parameter capacity**:
+the contextual variant reads ten bits (five data + five context), while the
+original five-circle model reads five. Comparisons must account for this.
+
+`GatedFiveCircle` exposes validated, exact-integer scoring and ephemeral
+radius inspection. `FiveCircleLayer` wires an explicit five-source/five-context
+set to each neuron in a packed `BooleanState` and performs a synchronous,
+read-only transition into a new packed state. No anatomical edge or
+nonexistent BANC annotation is fabricated. Source dimension, output count,
+indices, masks, gains and training budgets are bounded.
+
+`train_context_gates` implements a deterministic, capped online update on
+the **context gains only** for supervised triples `(x,c,y)`. A misclassified
+example adjusts each active gate by one unit in the direction that reduces
+its margin error, saturating in the range 0..65535. Masks, base radii, phases,
+bias and explicit wiring are frozen. Training is not guaranteed to converge
+for arbitrary examples. This is a supervised rule, not evidence of biological
+Hebbian plasticity.
+
+### Reproducible falsifiable control
+
+`cargo run --offline --bin fourier5-bench` evaluates an artificial task:
+`y=(x_0 AND c_0)`. Training includes all 16 input patterns with input bit
+`x_4=0` paired with context 0/1 (32 samples), and the evaluation includes
+the other 16 patterns `x_4=1` (32 samples). A deterministic context-blind
+classifier must assign the same answer to each identical `x` under both
+contexts, so its test ceiling is **24/32**. A fixed base model predicts
+negative for all 32 test samples and therefore scores 24/32. A radius
+gate with a trained boost of two has an algebraic 32/32 solution.
+These numbers are **mathematically expected outputs**, not hardware benchmark
+results until Rust tests and executable have actually run.
+
+This setup demonstrates *representational capacity with an extra context
+input*, not model superiority at matched parameter budgets, memory performance,
+or out-of-distribution generalization. The held-out bit is an irrelevant
+feature by construction. More difficult controls must compare alternative
+context-aware Boolean models of comparable complexity, with held-out contexts,
+noisy inputs, different topology, memory and latency metrics.
+
+### Exact-head qualification additions
+
+Besides the original Rust 1.89 fmt / Clippy / all-targets tests / info smoke,
+run `cargo run --offline --bin fourier5-bench` and verify the synthetic
+control's 24/32 vs 32/32 scores in the trusted SHA-pinned RemoteOps container.
+No unrestricted hardware execution, secrets, background workload or local
+host modification is required.
