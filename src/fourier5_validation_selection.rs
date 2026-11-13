@@ -66,7 +66,7 @@ pub fn select_by_validation(
     template: CreditConfig,
     seeds: &[u64],
 ) -> Result<SelectedCredit, CreditError> {
-    if seeds.is_empty() || seeds.len() > 32 || validation.is_empty() {
+    if seeds.is_empty() || seeds.len() > 32 || train.is_empty() || validation.is_empty() {
         return Err(CreditError::InvalidBudget);
     }
     let mut seen = BTreeSet::new();
@@ -83,10 +83,13 @@ pub fn select_by_validation(
         return Err(CreditError::InvalidInput);
     }
     let mut winner: Option<SelectedCredit> = None;
+    let mut total_candidate_evaluations = 0_usize;
     for &seed in seeds {
-        rows[64] = rows[0].clone();
         let config = CreditConfig { seed, ..template };
         let result = fit_final_loss(base, train, config)?;
+        total_candidate_evaluations = total_candidate_evaluations
+            .checked_add(result.candidate_evaluations)
+            .ok_or(CreditError::InvalidBudget)?;
         let validation_score = evaluate(&result.model, validation)?;
         let replace = match &winner {
             None => true,
@@ -113,8 +116,7 @@ pub fn select_by_validation(
         }
     }
     let mut selected = winner.expect("nonempty seed list");
-    selected.candidate_evaluations =
-        selected.result.candidate_evaluations * seeds.len();
+    selected.candidate_evaluations = total_candidate_evaluations;
     Ok(selected)
 }
 
@@ -124,6 +126,30 @@ mod tests {
     use crate::fourier5_counterfactual_credit::{CreditPolicy, CreditScope};
     use crate::fourier5_hierarchy::{GateKind, LeafRouting};
     use crate::BooleanState;
+
+    #[test]
+    fn empty_training_split_is_rejected_before_fitting() {
+        let model = FiveCircleHierarchy::from_modes(
+            &[GateKind::Majority], LeafRouting::Contiguous
+        ).unwrap();
+        let mut state = BooleanState::new(5);
+        state.set(0, true).unwrap();
+        let validation = [
+            RoutingSample { state: state.clone(), label: true },
+            RoutingSample { state: BooleanState::new(5), label: false },
+        ];
+        let config = CreditConfig {
+            scope: CreditScope::OutputParameters,
+            policy: CreditPolicy::Greedy,
+            rounds: 1,
+            proposals_per_round: 2,
+            seed: 1,
+        };
+        assert!(matches!(
+            select_by_validation(&model, &[], &validation, config, &[1]),
+            Err(CreditError::InvalidBudget)
+        ));
+    }
 
     #[test]
     fn independent_balanced_score_and_disjoint_validation() {
