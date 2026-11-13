@@ -268,7 +268,7 @@ mod tests {
         assert_eq!(fit.model.masks[0], 15);
         assert_eq!(fit.selected, 1);
         let neuron = fit.model.as_five_circle().unwrap();
-        for x in 0..32 {
+        for x in 0_u8..32 {
             let expected = (x & 15).count_ones() % 2 != 0;
             assert_eq!(fit.model.predict(x), Ok(expected));
             assert_eq!(neuron.predict(x), Ok(expected));
