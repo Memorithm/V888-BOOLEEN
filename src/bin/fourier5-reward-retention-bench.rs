@@ -80,38 +80,43 @@ fn score(circuit: &WidePlasticCircuit<'_>, sample: &[u64], label: u64) -> Result
 
 struct PassStats {
     net_accepts: usize,
-    replay_rollbacks: usize,
+    replay_rejections: usize,
     evaluations: usize,
     child_reads: usize,
+    replay_evaluations: usize,
+    replay_child_reads: usize,
     elapsed_us: u128,
 }
 
-/// Reward is the observed improvement of 64 final-output labels on TRAIN.
-/// The output impact of each proposed neuron change is its exact
-/// counterfactual credit. The optional replay constraint uses TRAIN-A only.
-/// Structural source-connection plasticity is NOT implemented here.
+/// Reward is the improvement of 64 final-output labels on TRAIN.
+/// Counterfactual credit is assigned only to the proposed neuron.
+/// A second exact cache bound to TRAIN-A checks retention BEFORE mutation.
+/// No teacher hidden activations, TRAIN-A full rescans or rollback loops.
+/// Structural source-connection plasticity is not implemented here.
 fn train_pass(
     circuit: &mut WidePlasticCircuit<'_>,
     widths: &[usize],
     target: u64,
     seed: u64,
     options: &[FiveCircle; 5],
-    replay: Option<(&[u64], u64, u32)>,
+    mut replay: Option<(&mut WidePlasticCircuit<'_>, u64, u32)>,
     trials: usize,
 ) -> Result<PassStats, String> {
     let start = Instant::now();
     let mut rng = Rng(seed);
     let mut best = correct(circuit.output(), target);
     let mut net_accepts = 0;
-    let mut replay_rollbacks = 0;
+    let mut replay_rejections = 0;
     let mut evaluations = 0;
     let mut child_reads = 0;
+    let mut replay_evaluations = 0;
+    let mut replay_child_reads = 0;
     for _ in 0..trials {
         let layer = rng.next() as usize % widths.len();
         let neuron = rng.next() as usize % widths[layer];
         let model = options[rng.next() as usize % options.len()];
-        let before_model = circuit.model(layer, neuron).map_err(|e| format!("{e:?}"))?;
-        if model == before_model {
+        let old_model = circuit.model(layer, neuron).map_err(|e| format!("{e:?}"))?;
+        if model == old_model {
             continue;
         }
         let proposal = circuit
@@ -123,36 +128,41 @@ fn train_pass(
         if candidate <= best {
             continue;
         }
-        circuit.accept(proposal).map_err(|e| format!("{e:?}"))?;
-        let preserved = if let Some((old_sources, old_target, old_floor)) = replay {
-            score(circuit, old_sources, old_target)? >= old_floor
-        } else {
-            true
-        };
-        if preserved {
-            best = candidate;
-            net_accepts += 1;
-        } else {
-            let undo = circuit
-                .propose(layer, neuron, before_model)
+        if let Some((shadow, old_label, retained_floor)) = replay.as_mut() {
+            let replay_proposal = shadow
+                .propose(layer, neuron, model)
                 .map_err(|e| format!("{e:?}"))?;
-            circuit.accept(undo).map_err(|e| format!("{e:?}"))?;
-            replay_rollbacks += 1;
+            replay_evaluations += replay_proposal.gate_evaluations;
+            replay_child_reads += replay_proposal.child_word_reads;
+            if correct(replay_proposal.output, *old_label) < *retained_floor {
+                replay_rejections += 1;
+                continue;
+            }
+            circuit.accept(proposal).map_err(|e| format!("{e:?}"))?;
+            shadow
+                .accept(replay_proposal)
+                .map_err(|e| format!("{e:?}"))?;
+        } else {
+            circuit.accept(proposal).map_err(|e| format!("{e:?}"))?;
         }
+        best = candidate;
+        net_accepts += 1;
     }
     if correct(circuit.output(), target) != best {
         return Err("TRAIN reward drift after persistent commits".into());
     }
-    if let Some((old_sources, old_target, old_floor)) = replay {
-        if score(circuit, old_sources, old_target)? < old_floor {
-            return Err("TRAIN-A retention invariant violated".into());
+    if let Some((shadow, old_label, retained_floor)) = replay {
+        if correct(shadow.output(), old_label) < retained_floor {
+            return Err("TRAIN-A shadow retention invariant violated".into());
         }
     }
     Ok(PassStats {
         net_accepts,
-        replay_rollbacks,
+        replay_rejections,
         evaluations,
         child_reads,
+        replay_evaluations,
+        replay_child_reads,
         elapsed_us: start.elapsed().as_micros(),
     })
 }
@@ -184,11 +194,13 @@ fn report(
     let score_valid = score(model, set.valid, set.label_valid)?;
     let score_test = score(model, set.test, set.label_test)?;
     println!(
-        "REWARD_PASS seed={seed} phase={phase} pass={pass} arm={arm} train_a={score_a}/64 train_b={score_b}/64 valid={score_valid}/64 test={score_test}/64 accepted={} replay_rollbacks={} cached_gate_evals={} cached_child_reads={} elapsed_us={} persistent_commits={}",
+        "REWARD_PASS seed={seed} phase={phase} pass={pass} arm={arm} train_a={score_a}/64 train_b={score_b}/64 valid={score_valid}/64 test={score_test}/64 accepted={} replay_rejections={} cached_gate_evals={} cached_child_reads={} replay_gate_evals={} replay_child_reads={} elapsed_us={} persistent_commits={}",
         stats.net_accepts,
-        stats.replay_rollbacks,
+        stats.replay_rejections,
         stats.evaluations,
         stats.child_reads,
+        stats.replay_evaluations,
+        stats.replay_child_reads,
         stats.elapsed_us,
         model.commits()
     );
@@ -262,9 +274,11 @@ fn experiment(width: usize, seed: u64, trials: usize, passes: usize) -> Result<(
     let mut guarded = WidePlasticCircuit::new(&tree, &a).map_err(|e| format!("{e:?}"))?;
     let empty = PassStats {
         net_accepts: 0,
-        replay_rollbacks: 0,
+        replay_rejections: 0,
         evaluations: 0,
         child_reads: 0,
+        replay_evaluations: 0,
+        replay_child_reads: 0,
         elapsed_us: 0,
     };
     report(&set, "A", 0, "replay_guard", &guarded, &empty)?;
@@ -287,6 +301,13 @@ fn experiment(width: usize, seed: u64, trials: usize, passes: usize) -> Result<(
     if unguarded.output() != guarded.output() {
         return Err("control does not match the A-trained source model".into());
     }
+    // A third circuit is the exact persistent TRAIN-A replay shadow.
+    // Its 64-lane cache avoids a 1.56M-neuron rescan per candidate on B.
+    let mut replay_shadow = WidePlasticCircuit::new(&tree, &a).map_err(|e| format!("{e:?}"))?;
+    replay_shadow.install_models(|layer, neuron| guarded.model(layer, neuron).unwrap());
+    if replay_shadow.output() != guarded.output() {
+        return Err("TRAIN-A replay shadow disagrees before B".into());
+    }
     let rebuild_start = Instant::now();
     guarded.rebind_sources(&b).map_err(|e| format!("{e:?}"))?;
     let guarded_rebuild_us = rebuild_start.elapsed().as_micros();
@@ -304,7 +325,7 @@ fn experiment(width: usize, seed: u64, trials: usize, passes: usize) -> Result<(
             label_b,
             proposal_seed,
             &options,
-            Some((&a, label_a, retained_floor)),
+            Some((&mut replay_shadow, label_a, retained_floor)),
             trials,
         )?;
         let unguarded_stats = train_pass(
@@ -318,6 +339,11 @@ fn experiment(width: usize, seed: u64, trials: usize, passes: usize) -> Result<(
         )?;
         report(&set, "B", pass, "replay_guard", &guarded, &guarded_stats)?;
         report(&set, "B", pass, "no_replay", &unguarded, &unguarded_stats)?;
+    }
+    if score(&guarded, &a, label_a)?
+        != correct(replay_shadow.output(), label_a)
+    {
+        return Err("TRAIN-A replay shadow and full evaluator diverged".into());
     }
     if score(&guarded, &a, label_a)? < retained_floor {
         return Err("loss of retained TRAIN-A output accuracy".into());
