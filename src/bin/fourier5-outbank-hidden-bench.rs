@@ -27,7 +27,11 @@ const SHIFT: usize = 256;
 struct Xorshift(u64);
 impl Xorshift {
     fn new(seed: u64) -> Self {
-        Self(if seed == 0 { 0x9e37_79b9_7f4a_7c15 } else { seed })
+        Self(if seed == 0 {
+            0x9e37_79b9_7f4a_7c15
+        } else {
+            seed
+        })
     }
     fn next(&mut self) -> u64 {
         let mut x = self.0;
@@ -70,18 +74,24 @@ fn generate(
 ) -> Result<Vec<RoutingSample>, String> {
     let mut output = Vec::with_capacity(count);
     for _ in 0..count * 32 {
-        if output.len() == count { break; }
+        if output.len() == count {
+            break;
+        }
         let mut state = BooleanState::new(width);
         for bit in 0..width {
             if ((rng.next() >> 32) & 255) < density {
                 state.set(bit, true).expect("valid bit");
             }
         }
-        if !unique.insert(state.words().to_vec()) { continue; }
+        if !unique.insert(state.words().to_vec()) {
+            continue;
+        }
         let label = oracle(&state, truth_route, truth_modes);
         output.push(RoutingSample { state, label });
     }
-    if output.len() != count { return Err("unique input generation budget exhausted".into()); }
+    if output.len() != count {
+        return Err("unique input generation budget exhausted".into());
+    }
     Ok(output)
 }
 
@@ -90,26 +100,46 @@ fn in_candidate_bank(
     swaps: &[[usize; 2]],
     teacher: &FiveCircleHierarchy,
 ) -> Result<bool, String> {
-    if base.routing() == teacher.routing() { return Ok(true); }
+    if base.routing() == teacher.routing() {
+        return Ok(true);
+    }
     for i in 0..swaps.len() {
         for j in i..swaps.len() {
             for k in j..swaps.len() {
-                let positions: Vec<usize> = [i,j,k].into_iter()
-                    .filter(|n| *n != swaps.len()).collect();
+                let positions: Vec<usize> = [i, j, k]
+                    .into_iter()
+                    .filter(|n| *n != swaps.len())
+                    .collect();
                 if i == j && j == k {
-                    if multiswap_model(base, swaps, &[i]).map_err(|e| format!("{e:?}"))?.routing() == teacher.routing() {
+                    if multiswap_model(base, swaps, &[i])
+                        .map_err(|e| format!("{e:?}"))?
+                        .routing()
+                        == teacher.routing()
+                    {
                         return Ok(true);
                     }
                 } else if i == j && j != k {
-                    if multiswap_model(base, swaps, &[i,k]).map_err(|e| format!("{e:?}"))?.routing() == teacher.routing() {
+                    if multiswap_model(base, swaps, &[i, k])
+                        .map_err(|e| format!("{e:?}"))?
+                        .routing()
+                        == teacher.routing()
+                    {
                         return Ok(true);
                     }
                 } else if i < j && j == k {
-                    if multiswap_model(base, swaps, &[i,j]).map_err(|e| format!("{e:?}"))?.routing() == teacher.routing() {
+                    if multiswap_model(base, swaps, &[i, j])
+                        .map_err(|e| format!("{e:?}"))?
+                        .routing()
+                        == teacher.routing()
+                    {
                         return Ok(true);
                     }
                 } else if i < j && j < k {
-                    if multiswap_model(base, swaps, &positions).map_err(|e| format!("{e:?}"))?.routing() == teacher.routing() {
+                    if multiswap_model(base, swaps, &positions)
+                        .map_err(|e| format!("{e:?}"))?
+                        .routing()
+                        == teacher.routing()
+                    {
                         return Ok(true);
                     }
                 }
@@ -128,9 +158,17 @@ struct Score {
     true_negatives: usize,
 }
 fn score(model: &FiveCircleHierarchy, rows: &[RoutingSample]) -> Result<Score, String> {
-    let mut hits = Score { correct: 0, positives: 0, true_positives: 0, negatives: 0, true_negatives: 0 };
+    let mut hits = Score {
+        correct: 0,
+        positives: 0,
+        true_positives: 0,
+        negatives: 0,
+        true_negatives: 0,
+    };
     for row in rows {
-        let response = model.infer_scalar(&row.state).map_err(|e| format!("{e:?}"))?;
+        let response = model
+            .infer_scalar(&row.state)
+            .map_err(|e| format!("{e:?}"))?;
         hits.correct += usize::from(response == row.label);
         if row.label {
             hits.positives += 1;
@@ -160,21 +198,55 @@ fn profile(seed: u64, teacher_modes: &[GateKind]) -> Result<(), String> {
 
     let proposal_seed = seed ^ 0x5229_1133;
     let proposal = candidate_swaps(width, proposal_seed, BANK).map_err(|e| format!("{e:?}"))?;
-    let teacher_swaps = candidate_swaps(width, seed ^ 0x0dd0_7788, BANK)
-        .map_err(|e| format!("{e:?}"))?;
-    let teacher = multiswap_model(&teacher_base, &teacher_swaps, &[0,3,6])
-        .map_err(|e| format!("{e:?}"))?;
+    let teacher_swaps =
+        candidate_swaps(width, seed ^ 0x0dd0_7788, BANK).map_err(|e| format!("{e:?}"))?;
+    let teacher =
+        multiswap_model(&teacher_base, &teacher_swaps, &[0, 3, 6]).map_err(|e| format!("{e:?}"))?;
     if in_candidate_bank(&base, &proposal, &teacher)? {
         return Err("teacher routing unexpectedly belongs to learner bank".into());
     }
 
     let mut random = Xorshift::new(seed ^ 0x39e1_861d);
     let mut unique = BTreeSet::new();
-    let train = generate(&mut random, &mut unique, TRAIN, width, 128, teacher.routing(), teacher_modes)?;
-    let valid = generate(&mut random, &mut unique, VALID, width, 128, teacher.routing(), teacher_modes)?;
-    let test = generate(&mut random, &mut unique, TEST, width, 128, teacher.routing(), teacher_modes)?;
-    let shift = generate(&mut random, &mut unique, SHIFT, width, 64, teacher.routing(), teacher_modes)?;
-    if unique.len() != TRAIN+VALID+TEST+SHIFT { return Err("cross-split duplicate input".into()); }
+    let train = generate(
+        &mut random,
+        &mut unique,
+        TRAIN,
+        width,
+        128,
+        teacher.routing(),
+        teacher_modes,
+    )?;
+    let valid = generate(
+        &mut random,
+        &mut unique,
+        VALID,
+        width,
+        128,
+        teacher.routing(),
+        teacher_modes,
+    )?;
+    let test = generate(
+        &mut random,
+        &mut unique,
+        TEST,
+        width,
+        128,
+        teacher.routing(),
+        teacher_modes,
+    )?;
+    let shift = generate(
+        &mut random,
+        &mut unique,
+        SHIFT,
+        width,
+        64,
+        teacher.routing(),
+        teacher_modes,
+    )?;
+    if unique.len() != TRAIN + VALID + TEST + SHIFT {
+        return Err("cross-split duplicate input".into());
+    }
     // The teacher's labels were produced from a separate Boolean oracle.
     for row in train.iter().chain(&valid).chain(&test).chain(&shift) {
         if teacher.infer_scalar(&row.state) != Ok(row.label) {
@@ -219,13 +291,17 @@ fn profile(seed: u64, teacher_modes: &[GateKind]) -> Result<(), String> {
             shift_hits.correct, SHIFT, shift_hits.true_positives, shift_hits.positives,
             shift_hits.true_negatives, shift_hits.negatives
         );
-        if name == "oracle" && (train_hits.correct != TRAIN
-            || valid_hits.correct != VALID
-            || test_hits.correct != TEST || shift_hits.correct != SHIFT) {
+        if name == "oracle"
+            && (train_hits.correct != TRAIN
+                || valid_hits.correct != VALID
+                || test_hits.correct != TEST
+                || shift_hits.correct != SHIFT)
+        {
             return Err("reference accuracy mismatch".into());
         }
         if model.neuron_count() != base.neuron_count()
-            || model.directed_contacts() != base.directed_contacts() {
+            || model.directed_contacts() != base.directed_contacts()
+        {
             return Err("capacity/contact mismatch".into());
         }
     }
@@ -247,10 +323,21 @@ fn profile(seed: u64, teacher_modes: &[GateKind]) -> Result<(), String> {
 }
 
 fn main() -> Result<(), String> {
-    for seed in [0x5890_0101_u64,0x5890_0202,0x5890_0303] {
-        profile(seed, &[GateKind::Majority,GateKind::Majority])?;
-        profile(seed, &[GateKind::Majority,GateKind::Parity,GateKind::Majority])?;
-        profile(seed, &[GateKind::Majority,GateKind::Parity,GateKind::Majority,GateKind::Majority])?;
+    for seed in [0x5890_0101_u64, 0x5890_0202, 0x5890_0303] {
+        profile(seed, &[GateKind::Majority, GateKind::Majority])?;
+        profile(
+            seed,
+            &[GateKind::Majority, GateKind::Parity, GateKind::Majority],
+        )?;
+        profile(
+            seed,
+            &[
+                GateKind::Majority,
+                GateKind::Parity,
+                GateKind::Majority,
+                GateKind::Majority,
+            ],
+        )?;
     }
     println!("FOURIER5_OUT_OF_BANK_HIDDEN_PLASTICITY_SYNTHETIC_PASS");
     Ok(())
@@ -263,21 +350,25 @@ mod tests {
     #[test]
     fn out_of_bank_teacher_is_not_candidate_at_25_bits() {
         let base = FiveCircleHierarchy::from_modes(
-            &[GateKind::And,GateKind::And],LeafRouting::Contiguous
-        ).unwrap();
+            &[GateKind::And, GateKind::And],
+            LeafRouting::Contiguous,
+        )
+        .unwrap();
         let pool = candidate_swaps(25, 11, BANK).unwrap();
         let alt = candidate_swaps(25, 99, BANK).unwrap();
-        let teacher = multiswap_model(&base,&alt,&[0,3,6]).unwrap();
-        assert!(!in_candidate_bank(&base,&pool,&teacher).unwrap());
+        let teacher = multiswap_model(&base, &alt, &[0, 3, 6]).unwrap();
+        assert!(!in_candidate_bank(&base, &pool, &teacher).unwrap());
     }
 
     #[test]
     fn oracle_agrees_on_25_bit_models() {
-        let modes = [GateKind::Majority,GateKind::Majority];
-        let tree = FiveCircleHierarchy::from_modes(&modes,LeafRouting::SeededShuffle(17)).unwrap();
+        let modes = [GateKind::Majority, GateKind::Majority];
+        let tree = FiveCircleHierarchy::from_modes(&modes, LeafRouting::SeededShuffle(17)).unwrap();
         let mut rng = Xorshift::new(29);
         let mut seen = BTreeSet::new();
-        let samples = generate(&mut rng,&mut seen,64,25,128,tree.routing(),&modes).unwrap();
-        for row in samples { assert_eq!(tree.infer_scalar(&row.state),Ok(row.label)); }
+        let samples = generate(&mut rng, &mut seen, 64, 25, 128, tree.routing(), &modes).unwrap();
+        for row in samples {
+            assert_eq!(tree.infer_scalar(&row.state), Ok(row.label));
+        }
     }
 }
