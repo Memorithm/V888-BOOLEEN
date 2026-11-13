@@ -39,9 +39,7 @@ fn words(count: usize, seed: u64) -> Vec<u64> {
 }
 
 fn hash(layer: usize, neuron: usize, seed: u64) -> u64 {
-    let mut x = (neuron as u64)
-        ^ ((layer as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15))
-        ^ seed;
+    let mut x = (neuron as u64) ^ ((layer as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15)) ^ seed;
     x ^= x >> 30;
     x = x.wrapping_mul(0xbf58_476d_1ce4_e5b9);
     x ^= x >> 27;
@@ -72,12 +70,10 @@ fn hits(output: u64, label: u64) -> u32 {
     64 - (output ^ label).count_ones()
 }
 
-fn valid_hits(
-    circuit: &WidePlasticCircuit<'_>,
-    input: &[u64],
-    label: u64,
-) -> Result<u32, String> {
-    let trace = circuit.evaluate_trace(input).map_err(|e| format!("{e:?}"))?;
+fn valid_hits(circuit: &WidePlasticCircuit<'_>, input: &[u64], label: u64) -> Result<u32, String> {
+    let trace = circuit
+        .evaluate_trace(input)
+        .map_err(|e| format!("{e:?}"))?;
     Ok(hits(trace.last().expect("nonempty trace")[0], label))
 }
 
@@ -95,7 +91,9 @@ fn full_attempt(
     let accepted = hits(candidate, label) > hits(circuit.output(), label);
     if accepted {
         // Must rebuild all hidden activations, not apply a cached delta.
-        circuit.accept_full(layer, neuron, model).map_err(|e| format!("{e:?}"))?;
+        circuit
+            .accept_full(layer, neuron, model)
+            .map_err(|e| format!("{e:?}"))?;
         if circuit.output() != candidate {
             return Err("full training acceptance changed the predicted output".into());
         }
@@ -111,7 +109,9 @@ fn cached_attempt(
     label: u64,
 ) -> Result<(u128, bool, usize, usize), String> {
     let start = Instant::now();
-    let proposal = circuit.propose(layer, neuron, model).map_err(|e| format!("{e:?}"))?;
+    let proposal = circuit
+        .propose(layer, neuron, model)
+        .map_err(|e| format!("{e:?}"))?;
     let (gates, reads) = (proposal.gate_evaluations, proposal.child_word_reads);
     let accepted = hits(proposal.output, label) > hits(circuit.output(), label);
     if accepted {
@@ -144,8 +144,16 @@ fn experiment(width: usize, seed: u64, passes: usize, proposals: usize) -> Resul
     });
     // Only ROOT outputs are given to the learner; VALID/TEST stay held out.
     let target = teacher.output();
-    let valid_target = teacher.evaluate_trace(&valid).map_err(|e| format!("{e:?}"))?.last().unwrap()[0];
-    let test_target = teacher.evaluate_trace(&test).map_err(|e| format!("{e:?}"))?.last().unwrap()[0];
+    let valid_target = teacher
+        .evaluate_trace(&valid)
+        .map_err(|e| format!("{e:?}"))?
+        .last()
+        .unwrap()[0];
+    let test_target = teacher
+        .evaluate_trace(&test)
+        .map_err(|e| format!("{e:?}"))?
+        .last()
+        .unwrap()[0];
     drop(teacher);
     if [target, valid_target, test_target]
         .iter()
