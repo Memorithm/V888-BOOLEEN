@@ -178,6 +178,27 @@ impl FiveCircleLayer {
         self.neurons.len()
     }
 
+    /// Install one independently learned model per existing neuron.
+    /// The source indices and topology remain immutable. A wrong-length
+    /// collection is rejected before any model can be changed.
+    pub fn install_models(
+        &mut self,
+        models: &[GatedFiveCircle],
+    ) -> Result<(), ModulationError> {
+        if models.len() != self.neurons.len() {
+            return Err(ModulationError::MismatchedState);
+        }
+        for (neuron, &model) in self.neurons.iter_mut().zip(models.iter()) {
+            neuron.model = model;
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn model_at(&self, index: usize) -> Option<GatedFiveCircle> {
+        self.neurons.get(index).map(|neuron| neuron.model)
+    }
+
     /// Synchronous evaluation from one immutable snapshot, producing bit-packed
     /// outputs in neuron order. No implicit recurrent edges are introduced.
     pub fn step(&self, state: &BooleanState) -> Result<BooleanState, ModulationError> {
