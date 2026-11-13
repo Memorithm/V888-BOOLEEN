@@ -18,7 +18,7 @@ proposition obsolète après un commit. Rejet = modèle inchangé.
 
 **A — Supervision locale privilégiée (capacité fonctionnelle, pas end-to-end).**
 Un enseignant synthétique reçoit, pour chaque neurone, une fonction déterministe
-tirée de quatre familles Fourier : majorité, parité, ET et OU. Ce modèle de
+tirée de cinq variantes Fourier : majorité, parité, ET, OU et\ncomplément de la parité (phase de Walsh inversée). Les étages\nsupérieurs utilisent parité/complement pour éviter l'effondrement\nvers une sortie constante. L'étiquette cible de sortie doit\ncomporter de 16 à 48 positifs sur les 64 voies de chaque split. Ce modèle de
 référence produit les sorties cachées de chaque couche sur **64 motifs TRAIN**.
 L'élève ajuste indépendamment les 1 562 501 neurones : pour chaque noeud,
 il choisit les paramètres correspondant à la fonction candidate qui minimise
@@ -43,7 +43,7 @@ exactitude TRAIN avant/après, exactitude VALID avant/après, propositions,
 commits et latence. Ne pas masquer les stagnations et régressions VALID.
 
 Ces expériences n'optimisent pas encore les connexions synaptiques ni une
-récompense différée. Les quatre classes Fourier candidates ne constituent
+récompense différée. Les cinq variantes Fourier candidates ne constituent
 pas une recherche libre de tous les paramètres entiers possibles.
 
 ## Comparateur de performance après apprentissage
