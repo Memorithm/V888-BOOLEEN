@@ -9,6 +9,7 @@ pub mod eligibility_trace;
 pub mod engine;
 pub mod fourier5;
 pub mod fourier5_context_search;
+pub mod fourier5_counterfactual_credit;
 pub mod fourier5_dynamic;
 pub mod fourier5_eligibility;
 pub mod fourier5_hidden_teacher;
