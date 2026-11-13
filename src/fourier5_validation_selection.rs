@@ -120,12 +120,95 @@ pub fn select_by_validation(
     Ok(selected)
 }
 
+/// Decision with a frozen, equal-size control eligible for deployment.
+/// The control is never fitted or modified, and TEST/OOD are not inspected.
+#[derive(Clone, Debug)]
+pub enum GuardedSelection {
+    Frozen {
+        validation: Confusion,
+        fitted_candidates: usize,
+        candidate_evaluations: usize,
+    },
+    Trained(SelectedCredit),
+}
+
+/// Train the same fixed-budget candidates as `select_by_validation`, but
+/// reject the winner when it does not strictly beat the frozen circuit on
+/// independent VALID balanced accuracy. Ties favor the zero-intervention
+/// control, avoiding needless changes to a circuit with equal VALID score.
+pub fn select_or_keep_frozen(
+    base: &FiveCircleHierarchy,
+    train: &[RoutingSample],
+    validation: &[RoutingSample],
+    template: CreditConfig,
+    seeds: &[u64],
+) -> Result<GuardedSelection, CreditError> {
+    // The selector performs split disjointness, class, width and budget checks.
+    let selected = select_by_validation(base, train, validation, template, seeds)?;
+    let frozen = evaluate(base, validation)?;
+    if strictly_better_balanced(&selected.validation, &frozen) {
+        Ok(GuardedSelection::Trained(selected))
+    } else {
+        Ok(GuardedSelection::Frozen {
+            validation: frozen,
+            fitted_candidates: selected.fitted_candidates,
+            candidate_evaluations: selected.candidate_evaluations,
+        })
+    }
+}
+
+fn strictly_better_balanced(candidate: &Confusion, reference: &Confusion) -> bool {
+    let (a, b) = candidate.score();
+    let (c, d) = reference.score();
+    a * d > c * b
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::fourier5_counterfactual_credit::{CreditPolicy, CreditScope};
     use crate::fourier5_hierarchy::{GateKind, LeafRouting};
     use crate::BooleanState;
+
+    #[test]
+    fn frozen_control_wins_ties_and_loses_to_better_balanced_model() {
+        let frozen = Confusion { tp: 2, tn: 2, fp: 2, fn_: 2 };
+        let equal = Confusion { tp: 2, tn: 2, fp: 2, fn_: 2 };
+        let better = Confusion { tp: 3, tn: 3, fp: 1, fn_: 1 };
+        assert!(!strictly_better_balanced(&equal, &frozen));
+        assert!(strictly_better_balanced(&better, &frozen));
+        assert!(!strictly_better_balanced(&frozen, &better));
+    }
+
+    #[test]
+    fn frozen_guard_preserves_base_when_training_cannot_improve_validation() {
+        let base = FiveCircleHierarchy::from_modes(
+            &[GateKind::Majority, GateKind::Parity], LeafRouting::Contiguous
+        ).unwrap();
+        let mut train = Vec::new();
+        let mut validation = Vec::new();
+        for n in 0..128_usize {
+            let mut state = BooleanState::new(25);
+            for bit in 0..25 {
+                state.set(bit, (n >> bit) & 1 != 0).unwrap();
+            }
+            let label = base.infer_scalar(&state).unwrap();
+            let row = RoutingSample { state, label };
+            if n < 64 { train.push(row); } else { validation.push(row); }
+        }
+        // The oracle labels are the frozen circuit itself: no trained
+        // candidate can strictly improve its perfect VALID accuracy.
+        let config = CreditConfig {
+            scope: CreditScope::OutputParameters,
+            policy: CreditPolicy::Greedy,
+            rounds: 1,
+            proposals_per_round: 2,
+            seed: 7,
+        };
+        // A parity output over binary-count patterns contains both classes.
+        let choice = select_or_keep_frozen(&base, &train, &validation, config, &[7]).unwrap();
+        assert!(matches!(choice, GuardedSelection::Frozen { .. }));
+    }
 
     #[test]
     fn empty_training_split_is_rejected_before_fitting() {
