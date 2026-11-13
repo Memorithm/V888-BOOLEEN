@@ -90,10 +90,12 @@ impl OnlineRecall {
             return Err(Error::new(ErrorKind::InvalidInput, "invalid recall budget"));
         }
         graph.validate()?;
-        if engine.active.len() != graph.ids.len()
-            || self.circuit.universe_len() != graph.ids.len()
+        if engine.active.len() != graph.ids.len() || self.circuit.universe_len() != graph.ids.len()
         {
-            return Err(Error::new(ErrorKind::InvalidInput, "graph/state size mismatch"));
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "graph/state size mismatch",
+            ));
         }
         // Validate the recall threshold before any engine mutation.
         self.circuit
@@ -268,11 +270,8 @@ impl OnlineRecall {
         if minimum_active == 0 {
             return Err(RecallError::ZeroBudget);
         }
-        let selected = self.select_region_subcircuit(
-            annotations,
-            minimum_member_ticks,
-            maximum_members,
-        )?;
+        let selected =
+            self.select_region_subcircuit(annotations, minimum_member_ticks, maximum_members)?;
         let recalled = selected.recall(&engine.active, minimum_active)?;
         Ok((selected.members().to_vec(), recalled))
     }
@@ -343,8 +342,6 @@ mod tests {
             Err(RecallError::ZeroBudget)
         );
     }
-
-
 
     #[test]
     fn streams_without_retaining_history_and_preserves_member_order() {
@@ -559,12 +556,20 @@ mod tests {
         let mut engine = BooleanEngine::new(&graph, 1).unwrap();
         let mut tracker = OnlineRecall::new(Subcircuit::new(3, vec![1, 2]).unwrap());
         engine.stimulate(&graph, 10).unwrap();
-        assert!(tracker.observe_engine_steps(&mut engine, &graph, 1, 0).is_err());
-        assert!(tracker.observe_engine_steps(&mut engine, &graph, 1, 1001).is_err());
-        assert!(tracker.observe_engine_steps(&mut engine, &graph, 0, 1).is_err());
+        assert!(tracker
+            .observe_engine_steps(&mut engine, &graph, 1, 0)
+            .is_err());
+        assert!(tracker
+            .observe_engine_steps(&mut engine, &graph, 1, 1001)
+            .is_err());
+        assert!(tracker
+            .observe_engine_steps(&mut engine, &graph, 0, 1)
+            .is_err());
         assert_eq!(tracker.ticks(), 0);
         assert_eq!(
-            tracker.observe_engine_steps(&mut engine, &graph, 1, 3).unwrap(),
+            tracker
+                .observe_engine_steps(&mut engine, &graph, 1, 3)
+                .unwrap(),
             vec![true, true, false]
         );
         assert_eq!(tracker.ticks(), 3);
