@@ -340,9 +340,7 @@ fn experiment(width: usize, seed: u64, trials: usize, passes: usize) -> Result<(
         report(&set, "B", pass, "replay_guard", &guarded, &guarded_stats)?;
         report(&set, "B", pass, "no_replay", &unguarded, &unguarded_stats)?;
     }
-    if score(&guarded, &a, label_a)?
-        != correct(replay_shadow.output(), label_a)
-    {
+    if score(&guarded, &a, label_a)? != correct(replay_shadow.output(), label_a) {
         return Err("TRAIN-A replay shadow and full evaluator diverged".into());
     }
     if score(&guarded, &a, label_a)? < retained_floor {
