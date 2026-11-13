@@ -505,6 +505,60 @@ mod tests {
     }
 
     #[test]
+    fn cached_and_full_credit_proposals_select_the_exact_same_models() {
+        let teacher = FiveCircleHierarchy::from_modes(
+            &[GateKind::Majority, GateKind::Parity, GateKind::Parity],
+            LeafRouting::SeededShuffle(77),
+        ).unwrap();
+        let frozen = FiveCircleHierarchy::from_modes(
+            &[GateKind::Majority, GateKind::Parity, GateKind::Parity],
+            LeafRouting::Contiguous,
+        ).unwrap();
+        let student = frozen
+            .with_neuron_parameters(0, 0, GateKind::And.five_circle())
+            .unwrap();
+        let train = sample(&teacher, 128);
+        for scope in [
+            CreditScope::HiddenParameters,
+            CreditScope::OutputParameters,
+            CreditScope::LeafRouting,
+            CreditScope::JointHiddenAndRouting,
+        ] {
+            for policy in [CreditPolicy::Greedy, CreditPolicy::Blind] {
+                let settings = CreditConfig {
+                    scope, policy,
+                    rounds: 3,
+                    proposals_per_round: 32,
+                    seed: 9913,
+                };
+                let fast = fit_final_loss_with_evaluator(
+                    &student, &train, settings, CreditEvaluationMode::Incremental
+                ).unwrap();
+                let full = fit_final_loss_with_evaluator(
+                    &student, &train, settings, CreditEvaluationMode::Full
+                ).unwrap();
+                assert_eq!(fast.final_train_correct, full.final_train_correct);
+                assert_eq!(fast.initial_train_correct, full.initial_train_correct);
+                assert_eq!(fast.model.routing(), full.model.routing());
+                assert_eq!(fast.accepted_parameter_moves, full.accepted_parameter_moves);
+                assert_eq!(fast.accepted_routing_moves, full.accepted_routing_moves);
+                assert_eq!(fast.full_model_train_inferences, full.full_model_train_inferences);
+                assert_eq!(fast.full_recompute_gate_evaluations, full.actual_gate_evaluations);
+                assert!(fast.actual_gate_evaluations < full.actual_gate_evaluations);
+                for layer in 0..student.depth() {
+                    let nodes = student.input_bits() / CIRCLES.pow((layer + 1) as u32);
+                    for node in 0..nodes {
+                        assert_eq!(
+                            fast.model.layer_model(layer, node),
+                            full.model.layer_model(layer, node),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn rejects_bad_budget_duplicate_and_wrong_width_before_mutation() {
         let base = FiveCircleHierarchy::from_modes(
             &[GateKind::Majority, GateKind::Parity],
