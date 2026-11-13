@@ -9,6 +9,9 @@ use crate::fourier5_recurrent::{MAX_NETWORK_NODES, MIN_NETWORK_NODES};
 
 pub const LOCAL_EXAMPLES: usize = 64;
 pub const MAX_LOCAL_EPOCHS: usize = 16;
+/// Mode 0 is reserved for parity; four remaining circles carry positive
+/// inhibitory context gains. The fifth context bit is a distractor.
+pub const TRAINABLE_CONTEXT_BITS: usize = CIRCLES - 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LocalTask {
@@ -61,10 +64,11 @@ fn mix64(mut x: u64) -> u64 {
 }
 
 fn task_bit(seed: u64, neuron: usize, task: LocalTask) -> usize {
-    let first = (mix64(seed ^ (neuron as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)) % 5) as usize;
+    let first = (mix64(seed ^ (neuron as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15))
+        % TRAINABLE_CONTEXT_BITS as u64) as usize;
     match task {
         LocalTask::A => first,
-        LocalTask::B => (first + 1) % CIRCLES,
+        LocalTask::B => (first + 1) % TRAINABLE_CONTEXT_BITS,
     }
 }
 
@@ -101,7 +105,7 @@ impl LocalPopulation {
             return Err(LocalLearningError::InvalidPopulation);
         }
         let gates = std::array::from_fn(|i| RadiusGate {
-            context_mask: 1_u8 << i,
+            context_mask: if i == 0 { 0 } else { 1_u8 << (i - 1) },
             boost: 0,
         });
         let model = GatedFiveCircle::new(base, gates)?;
@@ -194,8 +198,8 @@ impl LocalPopulation {
     /// Exact task-label distribution, computed from explicit deterministic
     /// synthetic target selection. Useful for checking neuron diversity.
     #[must_use]
-    pub fn teacher_bit_histogram(&self, task: LocalTask) -> [usize; CIRCLES] {
-        let mut bins = [0; CIRCLES];
+    pub fn teacher_bit_histogram(&self, task: LocalTask) -> [usize; TRAINABLE_CONTEXT_BITS] {
+        let mut bins = [0; TRAINABLE_CONTEXT_BITS];
         for i in 0..self.node_count() {
             bins[task_bit(self.seed, i, task)] += 1;
         }
