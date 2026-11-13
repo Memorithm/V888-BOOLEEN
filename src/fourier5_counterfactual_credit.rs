@@ -74,7 +74,11 @@ pub struct CreditResult {
 struct Xorshift(u64);
 impl Xorshift {
     fn new(seed: u64) -> Self {
-        Self(if seed == 0 { 0x9e37_79b9_7f4a_7c15 } else { seed })
+        Self(if seed == 0 {
+            0x9e37_79b9_7f4a_7c15
+        } else {
+            seed
+        })
     }
 
     fn next(&mut self) -> u64 {
@@ -93,10 +97,7 @@ struct Packed {
     labels: u64,
 }
 
-fn pack(
-    base: &FiveCircleHierarchy,
-    train: &[RoutingSample],
-) -> Result<Vec<Packed>, CreditError> {
+fn pack(base: &FiveCircleHierarchy, train: &[RoutingSample]) -> Result<Vec<Packed>, CreditError> {
     if train.len() < BITSLICE_LANES
         || train.len() > MAX_ROUTING_TRAIN
         || train.len() % BITSLICE_LANES != 0
@@ -125,10 +126,7 @@ fn pack(
     Ok(batches)
 }
 
-fn correct(
-    model: &FiveCircleHierarchy,
-    batches: &[Packed],
-) -> Result<usize, CreditError> {
+fn correct(model: &FiveCircleHierarchy, batches: &[Packed]) -> Result<usize, CreditError> {
     let mut count = 0;
     for batch in batches {
         let result = model.infer_bitplanes(&batch.planes)?;
@@ -139,7 +137,11 @@ fn correct(
 
 fn signed(circle: Circle) -> i32 {
     let radius = circle.radius.min(MAX_CREDIT_WEIGHT as u32) as i32;
-    if circle.phase_pi { -radius } else { radius }
+    if circle.phase_pi {
+        -radius
+    } else {
+        radius
+    }
 }
 
 /// One parameter move only: no mask replacements, no hidden supervision,
@@ -183,8 +185,8 @@ fn perturb_parameter(
     if coordinate == CIRCLES {
         bias = (bias + delta).clamp(-MAX_CREDIT_WEIGHT, MAX_CREDIT_WEIGHT);
     } else {
-        let value = (signed(circles[coordinate]) + delta)
-            .clamp(-MAX_CREDIT_WEIGHT, MAX_CREDIT_WEIGHT);
+        let value =
+            (signed(circles[coordinate]) + delta).clamp(-MAX_CREDIT_WEIGHT, MAX_CREDIT_WEIGHT);
         circles[coordinate].radius = value.unsigned_abs();
         circles[coordinate].phase_pi = value < 0;
     }
@@ -332,23 +334,42 @@ mod tests {
         let teacher = FiveCircleHierarchy::from_modes(
             &[GateKind::Majority, GateKind::Parity],
             LeafRouting::Contiguous,
-        ).unwrap();
+        )
+        .unwrap();
         let mut student = teacher.clone();
-        student = student.with_neuron_parameters(
-            0, 0, GateKind::And.five_circle()
-        ).unwrap();
+        student = student
+            .with_neuron_parameters(0, 0, GateKind::And.five_circle())
+            .unwrap();
         let train = sample(&teacher, 256);
-        let greedy = fit_final_loss(&student, &train,
-            config(CreditScope::HiddenParameters, CreditPolicy::Greedy)).unwrap();
-        let blind = fit_final_loss(&student, &train,
-            config(CreditScope::HiddenParameters, CreditPolicy::Blind)).unwrap();
+        let greedy = fit_final_loss(
+            &student,
+            &train,
+            config(CreditScope::HiddenParameters, CreditPolicy::Greedy),
+        )
+        .unwrap();
+        let blind = fit_final_loss(
+            &student,
+            &train,
+            config(CreditScope::HiddenParameters, CreditPolicy::Blind),
+        )
+        .unwrap();
         assert!(greedy.final_train_correct >= greedy.initial_train_correct);
-        assert_eq!(greedy.full_model_train_inferences, blind.full_model_train_inferences);
+        assert_eq!(
+            greedy.full_model_train_inferences,
+            blind.full_model_train_inferences
+        );
         assert_eq!(greedy.candidate_evaluations, 256);
         assert_eq!(greedy.model.routing(), student.routing());
-        assert_eq!(greedy.model.directed_contacts(), student.directed_contacts());
-        let copy = fit_final_loss(&student, &train,
-            config(CreditScope::HiddenParameters, CreditPolicy::Greedy)).unwrap();
+        assert_eq!(
+            greedy.model.directed_contacts(),
+            student.directed_contacts()
+        );
+        let copy = fit_final_loss(
+            &student,
+            &train,
+            config(CreditScope::HiddenParameters, CreditPolicy::Greedy),
+        )
+        .unwrap();
         assert_eq!(greedy.final_train_correct, copy.final_train_correct);
         for l in 0..student.depth() {
             let count = if l == 0 { 5 } else { 1 };
@@ -365,21 +386,33 @@ mod tests {
     #[test]
     fn routing_never_changes_neurons_and_output_scope_never_changes_hidden() {
         let base = FiveCircleHierarchy::from_modes(
-            &[GateKind::And, GateKind::Parity], LeafRouting::Contiguous
-        ).unwrap();
+            &[GateKind::And, GateKind::Parity],
+            LeafRouting::Contiguous,
+        )
+        .unwrap();
         let teacher = FiveCircleHierarchy::from_modes(
-            &[GateKind::Majority, GateKind::Parity], LeafRouting::Contiguous
-        ).unwrap();
+            &[GateKind::Majority, GateKind::Parity],
+            LeafRouting::Contiguous,
+        )
+        .unwrap();
         let train = sample(&teacher, 128);
-        let route = fit_final_loss(&base, &train,
-            config(CreditScope::LeafRouting, CreditPolicy::Greedy)).unwrap();
+        let route = fit_final_loss(
+            &base,
+            &train,
+            config(CreditScope::LeafRouting, CreditPolicy::Greedy),
+        )
+        .unwrap();
         for l in 0..2 {
             for i in 0..if l == 0 { 5 } else { 1 } {
                 assert_eq!(route.model.layer_model(l, i), base.layer_model(l, i));
             }
         }
-        let output = fit_final_loss(&base, &train,
-            config(CreditScope::OutputParameters, CreditPolicy::Greedy)).unwrap();
+        let output = fit_final_loss(
+            &base,
+            &train,
+            config(CreditScope::OutputParameters, CreditPolicy::Greedy),
+        )
+        .unwrap();
         assert_eq!(output.model.routing(), base.routing());
         for i in 0..5 {
             assert_eq!(output.model.layer_model(0, i), base.layer_model(0, i));
@@ -389,27 +422,39 @@ mod tests {
     #[test]
     fn rejects_bad_budget_duplicate_and_wrong_width_before_mutation() {
         let base = FiveCircleHierarchy::from_modes(
-            &[GateKind::Majority, GateKind::Parity], LeafRouting::Contiguous
-        ).unwrap();
+            &[GateKind::Majority, GateKind::Parity],
+            LeafRouting::Contiguous,
+        )
+        .unwrap();
         let train = sample(&base, 128);
         let mut invalid = config(CreditScope::JointHiddenAndRouting, CreditPolicy::Greedy);
         invalid.rounds = 0;
-        assert!(matches!(fit_final_loss(&base, &train, invalid),
-            Err(CreditError::InvalidBudget)));
+        assert!(matches!(
+            fit_final_loss(&base, &train, invalid),
+            Err(CreditError::InvalidBudget)
+        ));
         let good = config(CreditScope::JointHiddenAndRouting, CreditPolicy::Greedy);
-        assert!(matches!(fit_final_loss(&base, &train[..63], good),
-            Err(CreditError::InvalidInput)));
+        assert!(matches!(
+            fit_final_loss(&base, &train[..63], good),
+            Err(CreditError::InvalidInput)
+        ));
         let mut dup = train.clone();
         dup[1] = dup[0].clone();
-        assert!(matches!(fit_final_loss(&base, &dup, good),
-            Err(CreditError::DuplicateInput)));
+        assert!(matches!(
+            fit_final_loss(&base, &dup, good),
+            Err(CreditError::DuplicateInput)
+        ));
         let mut wrong = train.clone();
         wrong[1].state = BooleanState::new(24);
-        assert!(matches!(fit_final_loss(&base, &wrong, good),
-            Err(CreditError::InvalidInput)));
+        assert!(matches!(
+            fit_final_loss(&base, &wrong, good),
+            Err(CreditError::InvalidInput)
+        ));
         invalid = good;
         invalid.proposals_per_round = MAX_CREDIT_PROPOSALS_PER_ROUND + 1;
-        assert!(matches!(fit_final_loss(&base, &train, invalid),
-            Err(CreditError::InvalidBudget)));
+        assert!(matches!(
+            fit_final_loss(&base, &train, invalid),
+            Err(CreditError::InvalidBudget)
+        ));
     }
 }
