@@ -276,8 +276,18 @@ impl FiveCircleHierarchy {
     #[must_use]
     pub fn with_output_model(&self, model: FiveCircle) -> Self {
         let mut updated = self.clone();
-        *updated.layers.last_mut().expect("nonempty hierarchy").first_mut().expect("one output neuron") = model;
-        *updated.truth_tables.last_mut().expect("nonempty hierarchy").first_mut().expect("one output truth table") = compiled_truth_table(model);
+        *updated
+            .layers
+            .last_mut()
+            .expect("nonempty hierarchy")
+            .first_mut()
+            .expect("one output neuron") = model;
+        *updated
+            .truth_tables
+            .last_mut()
+            .expect("nonempty hierarchy")
+            .first_mut()
+            .expect("one output truth table") = compiled_truth_table(model);
         updated
     }
 
