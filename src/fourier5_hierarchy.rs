@@ -296,6 +296,57 @@ impl FiveCircleHierarchy {
         self.layers.last().expect("nonempty hierarchy")[0]
     }
 
+    /// Replace one neuron in an existing hierarchy, preserving ALL five
+    /// Walsh mask identities, routing and the total number of contacts.
+    /// This is opt-in parameter plasticity, including hidden-layer nodes.
+    pub fn with_neuron_parameters(
+        &self,
+        layer: usize,
+        index: usize,
+        model: FiveCircle,
+    ) -> Result<Self, HierarchyError> {
+        let original = self.layers.get(layer).and_then(|items| items.get(index))
+            .ok_or(HierarchyError::InvalidLayerShape)?;
+        for i in 0..CIRCLES {
+            if original.circles()[i].mask != model.circles()[i].mask {
+                return Err(HierarchyError::InvalidLayerShape);
+            }
+        }
+        let mut updated = self.clone();
+        updated.layers[layer][index] = model;
+        updated.truth_tables[layer][index] = compiled_truth_table(model);
+        Ok(updated)
+    }
+
+    /// Scalar trace of the actual five-bit inputs and Boolean outputs at
+    /// EVERY level. No labels, optimization or neuron mutation occurs here.
+    /// Synthetic teacher traces may be used to supervise hidden neurons on
+    /// TRAIN only, but are not available in a real uninstrumented network.
+    pub fn layer_trace(
+        &self,
+        state: &BooleanState,
+    ) -> Result<Vec<(Vec<u8>, Vec<bool>)>, HierarchyError> {
+        if state.len() != self.input_bits() {
+            return Err(HierarchyError::InvalidInput);
+        }
+        let mut current: Vec<bool> = self.routing.iter().map(|&source| {
+            state.get(usize::from(source)).expect("validated routing")
+        }).collect();
+        let mut trace = Vec::with_capacity(self.depth);
+        for layer in &self.truth_tables {
+            let mut inputs = Vec::with_capacity(layer.len());
+            let mut outputs = Vec::with_capacity(layer.len());
+            for (index, &truth) in layer.iter().enumerate() {
+                let word = gather_five(&current, index * CIRCLES);
+                inputs.push(word);
+                outputs.push((truth >> word) & 1 != 0);
+            }
+            current = outputs.clone();
+            trace.push((inputs, outputs));
+        }
+        Ok(trace)
+    }
+
     /// Five presynaptic bits observed at the final neuron's inputs.
     /// Used to fit ONLY that readout's parameters, never intermediate gates.
     /// Labels and test sets have no influence on this observation.
