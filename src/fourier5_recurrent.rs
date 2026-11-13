@@ -192,6 +192,51 @@ impl RecurrentFiveCircle {
         self.layer.model_at(index)
     }
 
+    /// Replace one learned model while retaining all its existing contacts.
+    pub fn update_neuron_model(
+        &mut self,
+        index: usize,
+        model: GatedFiveCircle,
+    ) -> Result<(), RecurrentError> {
+        self.layer.replace_model_at(index, model)?;
+        Ok(())
+    }
+
+    /// Observe five data and five contextual presynaptic bits from the
+    /// current recurrent snapshot, without changing weights or state.
+    pub fn sample_neuron_sources(&self, index: usize) -> Result<(u8, u8), RecurrentError> {
+        Ok(self.layer.snapshot_at(index, &self.state)?)
+    }
+
+    /// Controlled synthetic stimulus: write only the ten existing source
+    /// bits of one neuron. This is NOT a biological stimulation interface.
+    /// All arguments and source indices are validated before mutation.
+    pub fn drive_neuron_sources(
+        &mut self,
+        index: usize,
+        input: u8,
+        context: u8,
+    ) -> Result<(), RecurrentError> {
+        if input & !31 != 0 || context & !31 != 0 {
+            return Err(RecurrentError::InvalidContact);
+        }
+        let (inputs, contexts) = self
+            .layer
+            .sources_at(index)
+            .ok_or(RecurrentError::InvalidContact)?;
+        for (bit, &source) in inputs.iter().enumerate() {
+            self.state
+                .set(source, input & (1 << bit) != 0)
+                .map_err(|_| RecurrentError::InvalidContact)?;
+        }
+        for (bit, &source) in contexts.iter().enumerate() {
+            self.state
+                .set(source, context & (1 << bit) != 0)
+                .map_err(|_| RecurrentError::InvalidContact)?;
+        }
+        Ok(())
+    }
+
     #[must_use]
     pub fn state(&self) -> &BooleanState {
         &self.state

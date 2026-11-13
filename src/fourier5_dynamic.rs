@@ -196,6 +196,48 @@ impl FiveCircleLayer {
         self.neurons.get(index).map(|neuron| neuron.model)
     }
 
+    /// Opt-in single-neuron plasticity. This changes only the local model;
+    /// the ten fixed source indices and all other models remain unchanged.
+    pub fn replace_model_at(
+        &mut self,
+        index: usize,
+        model: GatedFiveCircle,
+    ) -> Result<(), ModulationError> {
+        let neuron = self
+            .neurons
+            .get_mut(index)
+            .ok_or(ModulationError::InvalidWiring)?;
+        neuron.model = model;
+        Ok(())
+    }
+
+    /// Explicit source indices for a synthetic readout. No new edges.
+    #[must_use]
+    pub fn sources_at(&self, index: usize) -> Option<([usize; CIRCLES], [usize; CIRCLES])> {
+        self.neurons
+            .get(index)
+            .map(|neuron| (neuron.inputs, neuron.context))
+    }
+
+    /// Sample only the existing presynaptic bits at the current snapshot.
+    pub fn snapshot_at(
+        &self,
+        index: usize,
+        state: &BooleanState,
+    ) -> Result<(u8, u8), ModulationError> {
+        if state.len() != self.input_width {
+            return Err(ModulationError::MismatchedState);
+        }
+        let neuron = self
+            .neurons
+            .get(index)
+            .ok_or(ModulationError::InvalidWiring)?;
+        Ok((
+            gather_bits(state, &neuron.inputs)?,
+            gather_bits(state, &neuron.context)?,
+        ))
+    }
+
     /// Synchronous evaluation from one immutable snapshot, producing bit-packed
     /// outputs in neuron order. No implicit recurrent edges are introduced.
     pub fn step(&self, state: &BooleanState) -> Result<BooleanState, ModulationError> {
