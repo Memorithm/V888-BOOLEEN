@@ -61,17 +61,19 @@ pub fn rank_gate_return_recall(
         return Err(GateReturnError::MissingRegion);
     }
     let mut returns = Vec::new();
-    let mut previously_active = false;
+    // A rising edge requires an observed inactive predecessor. The initial
+    // sample has no predecessor and must not fabricate a return event.
+    let mut previously_active = None;
     for (tick, state) in snapshots.iter().enumerate() {
         let active = members
             .iter()
             .filter(|&&index| state.get(index) == Ok(true))
             .count()
             >= minimum_region_active;
-        if active && !previously_active {
+        if active && previously_active == Some(false) {
             returns.push(tick);
         }
-        previously_active = active;
+        previously_active = Some(active);
     }
 
     let mut scores = Vec::with_capacity(candidates.len());
@@ -164,6 +166,24 @@ mod tests {
         assert_eq!(scores[0].first_recovery_delay, Some(0));
         assert_eq!(scores[1].recovered_events, 1);
         assert_eq!(history, before);
+    }
+
+    #[test]
+    fn initial_active_sample_is_not_a_rising_edge() {
+        let circuit = Subcircuit::new(4, vec![1]).unwrap();
+        let scores = rank_gate_return_recall(
+            &[circuit],
+            &[state(&[0, 1]), state(&[0, 1]), state(&[]), state(&[0, 1])],
+            &[Some(7), None, None, None],
+            7,
+            1,
+            1,
+            1,
+        )
+        .unwrap();
+        assert_eq!(scores[0].return_events, 1);
+        assert_eq!(scores[0].recovered_events, 1);
+        assert_eq!(scores[0].recall_ticks, 1);
     }
 
     #[test]
