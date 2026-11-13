@@ -264,7 +264,6 @@ fn experiment(tree: &WideFiveTree, seed: u64, count: usize) -> Result<(), String
         if observed_codes & 0x1111_1111 != 0 {
             return Err("combinatorially held-out feature codes leaked into TRAIN".into());
         }
-        let snapshot = bank.checkpoint();
         let old_models: Vec<_> = (0..task)
             .map(|old| bank.model(old).expect("previous valid index"))
             .collect();
@@ -328,10 +327,10 @@ fn experiment(tree: &WideFiveTree, seed: u64, count: usize) -> Result<(), String
         let mut past_total = 0_u64;
         let mut overwrite_correct = 0_u64;
         let mut maximal_forgetting = 0_u64;
-        for previous in 0..=task {
-            let score = score_bank(&bank, previous, &records[previous].test)?;
-            let shared_last = score_model(head, &records[previous].test, false);
-            let initial = records[previous].previous_test;
+        for (previous, record) in records.iter().enumerate() {
+            let score = score_bank(&bank, previous, &record.test)?;
+            let shared_last = score_model(head, &record.test, false);
+            let initial = record.previous_test;
             maximal_forgetting = maximal_forgetting.max(initial.0.saturating_sub(score.0));
             past_correct += score.0;
             past_total += score.1;
@@ -343,8 +342,8 @@ fn experiment(tree: &WideFiveTree, seed: u64, count: usize) -> Result<(), String
             );
         }
         println!(
-            "TASK_LEARNING_PASS seed={seed} task={task} width={width}              train_seen={}/{} seen_codes={} valid={}/{} test={}/{}              novel_combinations={}/{} raw_source_ood={}/{}              frozen_baseline={}/{} shuffled_label_control={}/{}              accepted_head_revision={} fit_us={fit_us}              cumulative_test={past_correct}/{past_total}              single_overwrite_test={overwrite_correct}/{past_total}              max_test_forgetting={maximal_forgetting}              checkpoint_bytes={} checkpoint_exact=true no_hidden_teacher_labels=true",
-            fit.train_correct, fit.train_total, observed_codes.count_ones(),
+            "TASK_LEARNING_PASS seed={seed} task={task} width={width}              train_seen={}/{} train_all={}/{} seen_codes={} valid={}/{} test={}/{}              novel_combinations={}/{} raw_source_ood={}/{}              frozen_baseline={}/{} shuffled_label_control={}/{}              accepted_head_revision={} fit_us={fit_us}              cumulative_test={past_correct}/{past_total}              single_overwrite_test={overwrite_correct}/{past_total}              max_test_forgetting={maximal_forgetting}              checkpoint_bytes={} checkpoint_exact=true no_hidden_teacher_labels=true",
+            fit.train_correct, fit.train_total, train_score.0, train_score.1, observed_codes.count_ones(),
             valid_score.0, valid_score.1,
             test_score.0, test_score.1,
             novel_score.0, novel_score.1,
