@@ -181,10 +181,7 @@ impl FiveCircleLayer {
     /// Install one independently learned model per existing neuron.
     /// The source indices and topology remain immutable. A wrong-length
     /// collection is rejected before any model can be changed.
-    pub fn install_models(
-        &mut self,
-        models: &[GatedFiveCircle],
-    ) -> Result<(), ModulationError> {
+    pub fn install_models(&mut self, models: &[GatedFiveCircle]) -> Result<(), ModulationError> {
         if models.len() != self.neurons.len() {
             return Err(ModulationError::MismatchedState);
         }
