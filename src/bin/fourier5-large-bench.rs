@@ -10,9 +10,7 @@ use std::time::Instant;
 use v888_booleen::fourier5::{Circle, FiveCircle, CIRCLES};
 use v888_booleen::fourier5_context_search::{learn_context_masks, ContextSample};
 use v888_booleen::fourier5_dynamic::{train_context_gates, GatedFiveCircle, RadiusGate};
-use v888_booleen::fourier5_recurrent::{
-    NetworkConfig, RecurrentFiveCircle, SyntheticTopology,
-};
+use v888_booleen::fourier5_recurrent::{NetworkConfig, RecurrentFiveCircle, SyntheticTopology};
 
 fn base() -> FiveCircle {
     let mut circles = [Circle::default(); CIRCLES];
@@ -79,14 +77,15 @@ fn score_gated(model: &GatedFiveCircle, examples: &[ContextSample]) -> Result<us
         .iter()
         .map(|s| (s.input, s.context, s.fire))
         .collect();
-    model.correct_count(&cases).map_err(|err| format!("{err:?}"))
+    model
+        .correct_count(&cases)
+        .map_err(|err| format!("{err:?}"))
 }
 
 fn train_benchmark(seed: u64) -> Result<GatedFiveCircle, String> {
     let (training, held_out) = split(seed);
     let began = Instant::now();
-    let learned =
-        learn_context_masks(base(), &training, 32).map_err(|err| format!("{err:?}"))?;
+    let learned = learn_context_masks(base(), &training, 32).map_err(|err| format!("{err:?}"))?;
     let learned_time = began.elapsed();
 
     let singleton_gates = std::array::from_fn(|i| RadiusGate {
@@ -100,8 +99,8 @@ fn train_benchmark(seed: u64) -> Result<GatedFiveCircle, String> {
         .map(|s| (s.input, s.context, s.fire))
         .collect();
     let began = Instant::now();
-    let fixed = train_context_gates(fixed_model, &fixed_inputs, 32)
-        .map_err(|err| format!("{err:?}"))?;
+    let fixed =
+        train_context_gates(fixed_model, &fixed_inputs, 32).map_err(|err| format!("{err:?}"))?;
     let fixed_time = began.elapsed();
 
     let static_hits = score_base(&base(), &held_out);
@@ -123,10 +122,7 @@ fn train_benchmark(seed: u64) -> Result<GatedFiveCircle, String> {
         fixed.updates,
         fixed_time.as_millis()
     );
-    if training.len() != 512
-        || held_out.len() != 512
-        || learned.model.base() != &base()
-    {
+    if training.len() != 512 || held_out.len() != 512 || learned.model.base() != &base() {
         return Err("broken training protocol".into());
     }
     Ok(learned.model)
@@ -146,18 +142,23 @@ fn run_profile(
         initial_activity_per_256: 128,
     };
     let began = Instant::now();
-    let mut trained = RecurrentFiveCircle::seeded(config, model)
-        .map_err(|err| format!("{err:?}"))?;
+    let mut trained =
+        RecurrentFiveCircle::seeded(config, model).map_err(|err| format!("{err:?}"))?;
     let mut perturbed = trained.clone();
-    perturbed.flip(nodes / 2).map_err(|err| format!("{err:?}"))?;
+    perturbed
+        .flip(nodes / 2)
+        .map_err(|err| format!("{err:?}"))?;
     let no_context = GatedFiveCircle::new(base(), [RadiusGate::default(); CIRCLES])
         .map_err(|err| format!("{err:?}"))?;
-    let mut static_control = RecurrentFiveCircle::seeded(config, no_context)
-        .map_err(|err| format!("{err:?}"))?;
+    let mut static_control =
+        RecurrentFiveCircle::seeded(config, no_context).map_err(|err| format!("{err:?}"))?;
     let build_ms = began.elapsed().as_millis();
     if trained.wiring_fingerprint() != static_control.wiring_fingerprint()
         || trained.state() != static_control.state()
-        || trained.hamming_distance(&perturbed).map_err(|err| format!("{err:?}"))? != 1
+        || trained
+            .hamming_distance(&perturbed)
+            .map_err(|err| format!("{err:?}"))?
+            != 1
     {
         return Err("invalid paired initial condition".into());
     }
@@ -207,8 +208,20 @@ fn main() -> Result<(), String> {
     let _second_seed = train_benchmark(0xa08c_11ef)?;
 
     run_profile(8_192, 32, 0x0801, SyntheticTopology::LocalRing, shared)?;
-    run_profile(65_536, 16, 0x1fff_8081, SyntheticTopology::SeededPseudorandom, shared)?;
-    run_profile(188_508, 8, 0x88b2_2026, SyntheticTopology::SeededPseudorandom, shared)?;
+    run_profile(
+        65_536,
+        16,
+        0x1fff_8081,
+        SyntheticTopology::SeededPseudorandom,
+        shared,
+    )?;
+    run_profile(
+        188_508,
+        8,
+        0x88b2_2026,
+        SyntheticTopology::SeededPseudorandom,
+        shared,
+    )?;
     println!("FOURIER5_LARGE_RECURRENT_SYNTHETIC_BENCH_PASS");
     Ok(())
 }
