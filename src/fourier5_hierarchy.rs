@@ -270,6 +270,55 @@ impl FiveCircleHierarchy {
         Ok(updated)
     }
 
+    /// Frozen source routing is unchanged; only the five Walsh gains,
+    /// phase bits and threshold of the FINAL neuron may be replaced.
+    /// The equivalent Boolean truth table is recompiled exactly once.
+    #[must_use]
+    pub fn with_output_model(&self, model: FiveCircle) -> Self {
+        let mut updated = self.clone();
+        *updated
+            .layers
+            .last_mut()
+            .expect("nonempty hierarchy")
+            .first_mut()
+            .expect("one output neuron") = model;
+        *updated
+            .truth_tables
+            .last_mut()
+            .expect("nonempty hierarchy")
+            .first_mut()
+            .expect("one output truth table") = compiled_truth_table(model);
+        updated
+    }
+
+    #[must_use]
+    pub fn output_model(&self) -> FiveCircle {
+        self.layers.last().expect("nonempty hierarchy")[0]
+    }
+
+    /// Five presynaptic bits observed at the final neuron's inputs.
+    /// Used to fit ONLY that readout's parameters, never intermediate gates.
+    /// Labels and test sets have no influence on this observation.
+    pub fn output_input(&self, state: &BooleanState) -> Result<u8, HierarchyError> {
+        if state.len() != self.input_bits() {
+            return Err(HierarchyError::InvalidInput);
+        }
+        let mut current: Vec<bool> = self
+            .routing
+            .iter()
+            .map(|&source| state.get(usize::from(source)).expect("validated routing"))
+            .collect();
+        for layer in self.truth_tables.iter().take(self.depth - 1) {
+            let mut next = Vec::with_capacity(layer.len());
+            for (index, &truth) in layer.iter().enumerate() {
+                let word = gather_five(&current, index * CIRCLES);
+                next.push((truth >> word) & 1 != 0);
+            }
+            current = next;
+        }
+        Ok(gather_five(&current, 0))
+    }
+
     #[must_use]
     pub fn logical_wiring_and_model_bytes(&self) -> usize {
         std::mem::size_of_val(self.routing.as_slice())
