@@ -159,10 +159,12 @@ fn observer_phase(
     for _ in 0..repetitions {
         for (index, &(layer, neuron, model)) in edits.iter().enumerate() {
             let output = if full {
-                learner.evaluate_full_edit(layer, neuron, model)
+                learner
+                    .evaluate_full_edit(layer, neuron, model)
                     .map_err(|e| format!("{e:?}"))?
             } else {
-                learner.propose(layer, neuron, model)
+                learner
+                    .propose(layer, neuron, model)
                     .map_err(|e| format!("{e:?}"))?
                     .output
             };
