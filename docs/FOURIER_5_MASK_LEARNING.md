@@ -68,3 +68,35 @@ réseau booléen multicouche à budget paramétrique réellement apparié,
 latence, mémoire et sensibilité aux perturbations. Une intégration
 physiologique avec le connectome exige des hypothèses et des preuves
 distinctes.
+
+## Résultats après l'exécution du protocole
+
+La qualification physique de la première implémentation a réussi sur le SHA
+`ee2ef49db3b2f9cdc8afb254758f96c119d4cbe2` avec
+[RemoteOps run 43435506198, tentative 3](https://github.com/Memorithm/RemoteOps/actions/runs/43435506198).
+Les contrôles `fmt`, `clippy -D warnings`, `cargo test --all-targets`,
+l'ancien banc Fourier, le nouveau banc Fourier-masques et le smoke CLI sont
+passés. Les tests Rust incluent 154 tests de bibliothèque et deux tests du
+nouveau binaire ; aucun benchmark microarchitectural n'a été exécuté.
+
+| Cible | Famille | TRAIN | TEST | Modes actifs | Masques choisis | Updates du dernier refit |
+| --- | --- | ---: | ---: | ---: | --- | ---: |
+| parity4 | Walsh | 16/16 | 16/16 | 1 | [15] | 2 |
+| parity4 | Conjonction | 9/16 | 9/16 | 1 | [15] | 898 |
+| and4 | Walsh | 15/16 | 15/16 | 1 | [1] | 129 |
+| and4 | Conjonction | 16/16 | 16/16 | 1 | [15] | 2 |
+| majority4 | Walsh | 15/16 | 11/16 | 5 | [1,17,4,7,13] | 388 |
+| majority4 | Conjonction | 15/16 | 15/16 | 4 | [13,6,11,2] | 137 |
+
+Interprétation : H1 est confirmée *dans cette petite tâche synthétique*
+pour Walsh (un masque 15, 16/16), H2 observée (conjonction 16/16,
+Walsh 15/16), et H3 révèle un cas de généralisation dégradée
+pour Walsh sur majority4 (15/16 TRAIN et seulement 11/16 TEST).
+La sélection gloutonne est donc imparfaite, y compris sur des fonctions
+simples ; ce constat interdit toute conclusion de supériorité globale.
+Le nombre d'updates ne couvre que le refit final du sous-ensemble retenu
+et ne mesure pas le coût complet de recherche de masques. Les deux familles
+ont les mêmes budgets *maximaux* mais des coûts d'exécution différents.
+
+Les résultats s'appliquent uniquement à des tables synthétiques de
+cinq bits. Aucune hypothèse sur le connectome réel BANC n'a été validée.
