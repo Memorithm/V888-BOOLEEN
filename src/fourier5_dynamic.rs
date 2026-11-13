@@ -241,10 +241,7 @@ impl FiveCircleLayer {
     /// Read the current presynaptic data and context bits. This is a
     /// *read-only* snapshot; the returned pairs may be held across ticks as
     /// explicit eligibility traces, separate from the evolving state.
-    pub fn capture_signals(
-        &self,
-        state: &BooleanState,
-    ) -> Result<Vec<(u8, u8)>, ModulationError> {
+    pub fn capture_signals(&self, state: &BooleanState) -> Result<Vec<(u8, u8)>, ModulationError> {
         if state.len() != self.input_width {
             return Err(ModulationError::MismatchedState);
         }
