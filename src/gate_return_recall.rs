@@ -19,6 +19,10 @@ pub struct GateReturnScore {
     /// Return events with at least `minimum_sustained_ticks` consecutive recall ticks.
     pub sustained_recovered_events: usize,
     pub first_recovery_delay: Option<usize>,
+    /// Longest observed delay to the first recall among recovered return events.
+    pub worst_recovery_delay: Option<usize>,
+    /// Return events with no recall in their bounded observation window.
+    pub unrecovered_events: usize,
     pub recall_ticks: usize,
     pub activation_cost: u64,
 }
@@ -145,6 +149,8 @@ fn rank_gate_return_with_window_policy(
             recovered_events: 0,
             sustained_recovered_events: 0,
             first_recovery_delay: None,
+            worst_recovery_delay: None,
+            unrecovered_events: 0,
             recall_ticks: 0,
             activation_cost: 0,
         };
@@ -180,11 +186,17 @@ fn rank_gate_return_with_window_policy(
                         score.first_recovery_delay = Some(
                             score.first_recovery_delay.map_or(delay, |old| old.min(delay)),
                         );
+                        score.worst_recovery_delay = Some(
+                            score.worst_recovery_delay.map_or(delay, |old| old.max(delay)),
+                        );
                         recovered = true;
                     }
                 } else {
                     streak = 0;
                 }
+            }
+            if !recovered {
+                score.unrecovered_events += 1;
             }
         }
         scores.push(score);
@@ -193,6 +205,8 @@ fn rank_gate_return_with_window_policy(
         b.sustained_recovered_events
             .cmp(&a.sustained_recovered_events)
             .then_with(|| b.recovered_events.cmp(&a.recovered_events))
+            .then_with(|| a.unrecovered_events.cmp(&b.unrecovered_events))
+            .then_with(|| a.worst_recovery_delay.cmp(&b.worst_recovery_delay))
             .then_with(|| b.recall_ticks.cmp(&a.recall_ticks))
             .then_with(|| a.activation_cost.cmp(&b.activation_cost))
             .then_with(|| a.candidate.cmp(&b.candidate))
@@ -212,6 +226,24 @@ mod tests {
         state
     }
 
+
+    #[test]
+    fn censored_returns_and_worst_latency_are_recorded() {
+        let circuit = Subcircuit::new(4, vec![1]).unwrap();
+        let history = [
+            state(&[]), state(&[0, 1]), state(&[]),
+            state(&[0]), state(&[1]), state(&[]), state(&[0]),
+        ];
+        let scores = rank_gate_return_disjoint_recall(
+            &[circuit], &history, &[Some(7), None, None, None],
+            7, 1, 1, 2, 1,
+        ).unwrap();
+        assert_eq!(scores[0].return_events, 3);
+        assert_eq!(scores[0].recovered_events, 2);
+        assert_eq!(scores[0].unrecovered_events, 1);
+        assert_eq!(scores[0].first_recovery_delay, Some(0));
+        assert_eq!(scores[0].worst_recovery_delay, Some(1));
+    }
 
     #[test]
     fn disjoint_windows_do_not_double_credit_recall() {
