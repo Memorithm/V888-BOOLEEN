@@ -228,7 +228,10 @@ impl FiveCircleLayer {
         if state.len() != self.input_width {
             return Err(ModulationError::MismatchedState);
         }
-        let neuron = self.neurons.get(index).ok_or(ModulationError::InvalidWiring)?;
+        let neuron = self
+            .neurons
+            .get(index)
+            .ok_or(ModulationError::InvalidWiring)?;
         Ok((
             gather_bits(state, &neuron.inputs)?,
             gather_bits(state, &neuron.context)?,
