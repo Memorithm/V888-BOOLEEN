@@ -4,12 +4,13 @@
 //! these masks decide which five-bit contextual conjunction temporarily
 //! increases an existing circle's radius. The base neuron is immutable.
 //! Synthetic supervised examples are not anatomical evidence.
-use crate::fourier5::{FiveCircle, CIRCLES, MAX_EPOCHS};
+use crate::fourier5::{FiveCircle, CIRCLES};
 use crate::fourier5_dynamic::{
     train_context_gates, GatedFiveCircle, ModulationError, RadiusGate,
 };
 
 pub const MAX_CONTEXT_SAMPLES: usize = 512;
+pub const MAX_CONTEXT_EPOCHS: usize = 64;
 pub const CONTEXT_BITS: u8 = 31;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,7 +56,7 @@ fn validate(samples: &[ContextSample], epochs: usize) -> Result<(), ContextSearc
     if samples.len() > MAX_CONTEXT_SAMPLES {
         return Err(ContextSearchError::TooManySamples);
     }
-    if epochs == 0 || epochs > MAX_EPOCHS {
+    if epochs == 0 || epochs > MAX_CONTEXT_EPOCHS {
         return Err(ContextSearchError::InvalidEpochBudget);
     }
     let mut seen = [0_u64; 16]; // 32 data states x 32 context states.
@@ -296,7 +297,7 @@ mod tests {
             Err(ContextSearchError::InvalidEpochBudget)
         );
         assert_eq!(
-            learn_context_masks(base(), &[one], MAX_EPOCHS + 1),
+            learn_context_masks(base(), &[one], MAX_CONTEXT_EPOCHS + 1),
             Err(ContextSearchError::InvalidEpochBudget)
         );
         assert_eq!(
