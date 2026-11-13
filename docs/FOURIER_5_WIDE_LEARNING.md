@@ -60,8 +60,9 @@ Publier séparément :
 - `full_logical_child_words` et `cached_logical_child_words` : comptes
   déterministes des lectures logiques de mots `u64` du programme. Ce ne
   sont **ni** des transactions DRAM **ni** des compteurs cache matériels ;
-- `cached_changed_words` : écritures effectives de mots dans la simulation
-  des **propositions** ; celles-ci ne sont pas acceptées dans le sous-banc ;
+- `cached_changed_words` : nombre de mots de cache **qui changeraient** si
+  les propositions étaient acceptées ; aucune écriture n'est commise dans
+  ce sous-banc (ne pas confondre avec les écritures physiques du processeur) ;
 - `VmHWM` : pic RSS du processus complet, pas la consommation attribuable
   à un seul moteur ;
 - `LARGE_RAPL_PACKAGE_ENERGY` : lecture d'énergie du paquet CPU `energy_uj`
