@@ -317,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn Fourier_coupling_matches_64_lane_prediction_for_all_masks() {
+    fn fourier_coupling_matches_64_lane_prediction_for_all_masks() {
         use crate::fourier5_hierarchy::{compiled_truth_table, shannon_64};
         let lanes = [
             0xaaaa_aaaa_aaaa_aaaa,
