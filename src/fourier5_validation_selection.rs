@@ -181,6 +181,43 @@ pub fn select_or_keep_frozen_with_class_floor(
     }
 }
 
+/// Opt-in Pareto guard: retain a fitted circuit only when balanced VALID
+/// accuracy strictly improves and neither class recall decreases relative to
+/// the frozen equal-capacity circuit. This uses VALID only; TEST/OOD remain
+/// untouched. The frozen control is returned if either constraint fails.
+pub fn select_or_keep_frozen_pareto(
+    base: &FiveCircleHierarchy,
+    train: &[RoutingSample],
+    validation: &[RoutingSample],
+    template: CreditConfig,
+    seeds: &[u64],
+) -> Result<GuardedSelection, CreditError> {
+    let selected = select_by_validation(base, train, validation, template, seeds)?;
+    let frozen = evaluate(base, validation)?;
+    if strictly_better_balanced(&selected.validation, &frozen)
+        && nondecreasing_class_recall(&selected.validation, &frozen)
+    {
+        Ok(GuardedSelection::Trained(selected))
+    } else {
+        Ok(GuardedSelection::Frozen {
+            validation: frozen,
+            fitted_candidates: selected.fitted_candidates,
+            candidate_evaluations: selected.candidate_evaluations,
+        })
+    }
+}
+
+/// Compare each class recall as exact rational numbers, without floats.
+fn nondecreasing_class_recall(candidate: &Confusion, frozen: &Confusion) -> bool {
+    let cp = candidate.tp as u128 + candidate.fn_ as u128;
+    let cn = candidate.tn as u128 + candidate.fp as u128;
+    let fp = frozen.tp as u128 + frozen.fn_ as u128;
+    let fn_ = frozen.tn as u128 + frozen.fp as u128;
+    cp != 0 && cn != 0 && fp != 0 && fn_ != 0
+        && (candidate.tp as u128) * fp >= (frozen.tp as u128) * cp
+        && (candidate.tn as u128) * fn_ >= (frozen.tn as u128) * cn
+}
+
 fn strictly_better_balanced(candidate: &Confusion, reference: &Confusion) -> bool {
     let (a, b) = candidate.score();
     let (c, d) = reference.score();
@@ -204,6 +241,25 @@ mod tests {
     use crate::fourier5_counterfactual_credit::{CreditPolicy, CreditScope};
     use crate::fourier5_hierarchy::{GateKind, LeafRouting};
     use crate::BooleanState;
+
+    #[test]
+    fn pareto_guard_rejects_class_regression_despite_balanced_gain() {
+        // Candidate has better balanced accuracy (0.75 vs 0.70), but
+        // positive recall falls from 0.8 to 0.7.
+        let frozen = Confusion { tp: 8, fn_: 2, tn: 6, fp: 4 };
+        let candidate = Confusion { tp: 7, fn_: 3, tn: 8, fp: 2 };
+        assert!(strictly_better_balanced(&candidate, &frozen));
+        assert!(!nondecreasing_class_recall(&candidate, &frozen));
+        assert!(nondecreasing_class_recall(&frozen, &frozen));
+    }
+
+    #[test]
+    fn pareto_guard_accepts_nondecreasing_both_classes() {
+        let frozen = Confusion { tp: 6, fn_: 4, tn: 6, fp: 4 };
+        let candidate = Confusion { tp: 7, fn_: 3, tn: 8, fp: 2 };
+        assert!(strictly_better_balanced(&candidate, &frozen));
+        assert!(nondecreasing_class_recall(&candidate, &frozen));
+    }
 
     #[test]
     fn class_floor_blocks_single_class_collapse() {
