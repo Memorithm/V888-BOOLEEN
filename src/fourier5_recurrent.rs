@@ -242,6 +242,32 @@ impl RecurrentFiveCircle {
         &self.state
     }
 
+    /// Inject an explicit synthetic stimulus without changing the topology,
+    /// neuron parameters, or monotonically increasing tick counter.
+    pub fn replace_state(&mut self, state: BooleanState) -> Result<(), RecurrentError> {
+        if state.len() != self.node_count() {
+            return Err(RecurrentError::MismatchedNetwork);
+        }
+        self.state = state;
+        Ok(())
+    }
+
+    /// A local cue snapshot: exactly one (five data bits, five context bits)
+    /// pair per existing neuron in explicit wiring order.
+    pub fn capture_local_signals(&self) -> Result<Vec<(u8, u8)>, RecurrentError> {
+        Ok(self.layer.capture_signals(&self.state)?)
+    }
+
+    /// Apply scalar per-neuron supervised feedback to *past* cue signals,
+    /// after arbitrary bounded recurrent steps. No wires are mutated.
+    pub fn apply_delayed_feedback(
+        &mut self,
+        cue_signals: &[(u8, u8)],
+        labels: &[bool],
+    ) -> Result<usize, RecurrentError> {
+        Ok(self.layer.apply_delayed_feedback(cue_signals, labels)?)
+    }
+
     #[must_use]
     pub fn tick_count(&self) -> usize {
         self.ticks

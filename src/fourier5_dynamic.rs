@@ -238,6 +238,54 @@ impl FiveCircleLayer {
         ))
     }
 
+    /// Read the current presynaptic data and context bits. This is a
+    /// *read-only* snapshot; the returned pairs may be held across ticks as
+    /// explicit eligibility traces, separate from the evolving state.
+    pub fn capture_signals(&self, state: &BooleanState) -> Result<Vec<(u8, u8)>, ModulationError> {
+        if state.len() != self.input_width {
+            return Err(ModulationError::MismatchedState);
+        }
+        self.neurons
+            .iter()
+            .map(|node| {
+                Ok((
+                    gather_bits(state, &node.inputs)?,
+                    gather_bits(state, &node.context)?,
+                ))
+            })
+            .collect()
+    }
+
+    /// One bounded online supervised update per node. Validate the entire
+    /// episode before any mutation; no topology, base circle or state changes.
+    pub fn apply_delayed_feedback(
+        &mut self,
+        cue_signals: &[(u8, u8)],
+        labels: &[bool],
+    ) -> Result<usize, ModulationError> {
+        if cue_signals.len() != self.neurons.len() || labels.len() != self.neurons.len() {
+            return Err(ModulationError::MismatchedState);
+        }
+        if cue_signals
+            .iter()
+            .any(|&(input, context)| !valid_bits(input) || !valid_bits(context))
+        {
+            return Err(ModulationError::InvalidInput);
+        }
+        let mut updated = 0;
+        for ((neuron, &(input, context)), &label) in self
+            .neurons
+            .iter_mut()
+            .zip(cue_signals.iter())
+            .zip(labels.iter())
+        {
+            let report = train_context_gates(neuron.model, &[(input, context, label)], 1)?;
+            neuron.model = report.model;
+            updated += report.updates;
+        }
+        Ok(updated)
+    }
+
     /// Synchronous evaluation from one immutable snapshot, producing bit-packed
     /// outputs in neuron order. No implicit recurrent edges are introduced.
     pub fn step(&self, state: &BooleanState) -> Result<BooleanState, ModulationError> {
