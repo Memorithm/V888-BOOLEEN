@@ -296,6 +296,12 @@ impl FiveCircleHierarchy {
         self.layers.last().expect("nonempty hierarchy")[0]
     }
 
+    /// Inspect one fitted or frozen Fourier neuron by its layer index.
+    pub fn layer_model(&self, layer: usize, neuron: usize) -> Result<FiveCircle, HierarchyError> {
+        self.layers.get(layer).and_then(|items| items.get(neuron))
+            .copied().ok_or(HierarchyError::InvalidLayerShape)
+    }
+
     /// Replace one neuron in an existing hierarchy, preserving ALL five
     /// Walsh mask identities, routing and the total number of contacts.
     /// This is opt-in parameter plasticity, including hidden-layer nodes.
