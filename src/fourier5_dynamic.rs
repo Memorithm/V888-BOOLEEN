@@ -46,7 +46,11 @@ pub struct GatedFiveCircle {
 
 fn signed_character(circle: Circle, input: u8) -> i64 {
     let odd = ((input & circle.mask).count_ones() & 1) != 0;
-    if odd ^ circle.phase_pi { -1 } else { 1 }
+    if odd ^ circle.phase_pi {
+        -1
+    } else {
+        1
+    }
 }
 
 fn valid_bits(bits: u8) -> bool {
@@ -79,14 +83,16 @@ impl GatedFiveCircle {
         if !valid_bits(context) {
             return Err(ModulationError::InvalidInput);
         }
-        let gate = self.gates.get(circle).ok_or(ModulationError::InvalidWiring)?;
+        let gate = self
+            .gates
+            .get(circle)
+            .ok_or(ModulationError::InvalidWiring)?;
         let base = self
             .base
             .circles()
             .get(circle)
             .ok_or(ModulationError::InvalidWiring)?;
-        let enabled = gate.context_mask != 0
-            && context & gate.context_mask == gate.context_mask;
+        let enabled = gate.context_mask != 0 && context & gate.context_mask == gate.context_mask;
         Ok(u64::from(base.radius) + if enabled { u64::from(gate.boost) } else { 0 })
     }
 
@@ -97,9 +103,7 @@ impl GatedFiveCircle {
         }
         let mut response = self.base.score(input)?;
         for (circle, gate) in self.base.circles().iter().zip(self.gates.iter()) {
-            if gate.context_mask != 0
-                && context & gate.context_mask == gate.context_mask
-            {
+            if gate.context_mask != 0 && context & gate.context_mask == gate.context_mask {
                 response += signed_character(*circle, input) * i64::from(gate.boost);
             }
         }
@@ -139,7 +143,10 @@ pub struct FiveCircleLayer {
 fn gather_bits(state: &BooleanState, indices: &[usize; CIRCLES]) -> Result<u8, ModulationError> {
     let mut bits = 0_u8;
     for (bit, &index) in indices.iter().enumerate() {
-        if state.get(index).map_err(|_| ModulationError::InvalidWiring)? {
+        if state
+            .get(index)
+            .map_err(|_| ModulationError::InvalidWiring)?
+        {
             bits |= 1_u8 << bit;
         }
     }
@@ -182,7 +189,8 @@ impl FiveCircleLayer {
             let input = gather_bits(state, &neuron.inputs)?;
             let context = gather_bits(state, &neuron.context)?;
             if neuron.model.predict(input, context)? {
-                next.set(index, true).map_err(|_| ModulationError::InvalidWiring)?;
+                next.set(index, true)
+                    .map_err(|_| ModulationError::InvalidWiring)?;
             }
         }
         Ok(next)
@@ -234,9 +242,7 @@ pub fn train_context_gates(
             let mut changed = false;
             for index in 0..CIRCLES {
                 let gate = &mut model.gates[index];
-                if gate.context_mask == 0
-                    || context & gate.context_mask != gate.context_mask
-                {
+                if gate.context_mask == 0 || context & gate.context_mask != gate.context_mask {
                     continue;
                 }
                 let contribution_sign = signed_character(model.base.circles()[index], input);
@@ -370,7 +376,10 @@ mod tests {
         let model = gated(2);
         assert_eq!(model.predict(32, 1), Err(ModulationError::InvalidInput));
         assert_eq!(model.predict(0, 32), Err(ModulationError::InvalidInput));
-        assert_eq!(model.effective_radius(5, 0), Err(ModulationError::InvalidWiring));
+        assert_eq!(
+            model.effective_radius(5, 0),
+            Err(ModulationError::InvalidWiring)
+        );
         let node = WiredNeuron {
             inputs: [0, 1, 2, 3, 10],
             context: [5, 6, 7, 8, 9],
