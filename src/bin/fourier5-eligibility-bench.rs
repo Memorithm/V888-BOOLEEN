@@ -2,9 +2,7 @@
 //! The plasticity mechanism is opt-in and runs on synthetic fixed topology.
 use std::time::Instant;
 use v888_booleen::fourier5_eligibility::{associative_readout, DelayedEligibility};
-use v888_booleen::fourier5_recurrent::{
-    NetworkConfig, RecurrentFiveCircle, SyntheticTopology,
-};
+use v888_booleen::fourier5_recurrent::{NetworkConfig, RecurrentFiveCircle, SyntheticTopology};
 
 const NODES: usize = 128;
 const READOUT: usize = 19;
@@ -23,10 +21,7 @@ fn query(network: &RecurrentFiveCircle, cue: usize) -> Result<bool, String> {
         .drive_neuron_sources(READOUT, 0b0_0111, (1 << cue) | 0b1_0000)
         .map_err(|e| format!("{e:?}"))?;
     probe.step().map_err(|e| format!("{e:?}"))?;
-    probe
-        .state()
-        .get(READOUT)
-        .map_err(|e| format!("{e:?}"))
+    probe.state().get(READOUT).map_err(|e| format!("{e:?}"))
 }
 
 fn score(network: &RecurrentFiveCircle, seed: u64) -> Result<usize, String> {
@@ -45,8 +40,8 @@ fn run(seed: u64, delay: usize) -> Result<(), String> {
         initial_activity_per_256: 128,
     };
     let started = Instant::now();
-    let mut learned = RecurrentFiveCircle::seeded(config, associative_readout())
-        .map_err(|e| format!("{e:?}"))?;
+    let mut learned =
+        RecurrentFiveCircle::seeded(config, associative_readout()).map_err(|e| format!("{e:?}"))?;
     let frozen = learned.clone();
     let mut wrong_reward = learned.clone();
     let initial_fingerprint = learned.wiring_fingerprint();
