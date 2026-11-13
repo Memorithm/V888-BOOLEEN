@@ -10,6 +10,7 @@ pub mod engine;
 pub mod fourier5;
 pub mod fourier5_context_search;
 pub mod fourier5_dynamic;
+pub mod fourier5_local_learning;
 pub mod fourier5_mask_learning;
 pub mod fourier5_recurrent;
 pub mod full_synapse;
