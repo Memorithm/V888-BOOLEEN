@@ -43,15 +43,17 @@ pub struct FiveCircleIncrementalCache<'a> {
 }
 
 impl<'a> FiveCircleIncrementalCache<'a> {
-    pub fn new(
-        base: &'a FiveCircleHierarchy,
-        planes: &[u64],
-    ) -> Result<Self, HierarchyError> {
+    pub fn new(base: &'a FiveCircleHierarchy, planes: &[u64]) -> Result<Self, HierarchyError> {
         if planes.len() != base.input_bits() {
             return Err(HierarchyError::InvalidInput);
         }
         let mut stages: Vec<Vec<u64>> = Vec::with_capacity(base.depth() + 1);
-        stages.push(base.routing().iter().map(|&src| planes[usize::from(src)]).collect());
+        stages.push(
+            base.routing()
+                .iter()
+                .map(|&src| planes[usize::from(src)])
+                .collect(),
+        );
         let mut evaluations = 0;
         for layer in 0..base.depth() {
             let width = stages[layer].len() / CIRCLES;
@@ -72,7 +74,9 @@ impl<'a> FiveCircleIncrementalCache<'a> {
 
     #[must_use]
     pub fn baseline_output(&self) -> u64 {
-        self.stages.last().expect("hierarchy has at least one layer")[0]
+        self.stages
+            .last()
+            .expect("hierarchy has at least one layer")[0]
     }
 
     #[must_use]
@@ -150,7 +154,10 @@ impl<'a> FiveCircleIncrementalCache<'a> {
                         .copied()
                         .unwrap_or(self.stages[layer][child])
                 });
-                updated.insert(neuron, shannon_64(self.base.gate_truth(layer, neuron)?, input));
+                updated.insert(
+                    neuron,
+                    shannon_64(self.base.gate_truth(layer, neuron)?, input),
+                );
                 evaluated += 1;
             }
             changes = updated;
@@ -185,13 +192,22 @@ mod tests {
         for modes in [
             &[GateKind::Majority, GateKind::Parity][..],
             &[GateKind::Parity, GateKind::Majority, GateKind::Or][..],
-            &[GateKind::And, GateKind::Parity, GateKind::Majority, GateKind::Or][..],
+            &[
+                GateKind::And,
+                GateKind::Parity,
+                GateKind::Majority,
+                GateKind::Or,
+            ][..],
         ] {
-            let base = FiveCircleHierarchy::from_modes(modes, LeafRouting::SeededShuffle(43)).unwrap();
+            let base =
+                FiveCircleHierarchy::from_modes(modes, LeafRouting::SeededShuffle(43)).unwrap();
             for seed in [1, 202, 909] {
                 let planes = bitplanes(base.input_bits(), seed);
                 let cache = FiveCircleIncrementalCache::new(&base, &planes).unwrap();
-                assert_eq!(cache.baseline_output(), base.infer_bitplanes(&planes).unwrap());
+                assert_eq!(
+                    cache.baseline_output(),
+                    base.infer_bitplanes(&planes).unwrap()
+                );
                 assert_eq!(cache.build_gate_evaluations(), base.neuron_count());
                 for layer in 0..base.depth() {
                     let nodes = base.input_bits() / CIRCLES.pow((layer + 1) as u32);
@@ -202,11 +218,20 @@ mod tests {
                         circles[0].phase_pi = !circles[0].phase_pi;
                         let next = FiveCircle::new(circles, old.bias() - 2).unwrap();
                         let candidate = base.with_neuron_parameters(layer, index, next).unwrap();
-                        let result = cache.evaluate(PackedIntervention::Parameter {
-                            layer, neuron: index, model: next
-                        }).unwrap();
-                        assert_eq!(result.output, candidate.infer_bitplanes(&planes).unwrap(),
-                            "width={} seed={} layer={layer} index={index}", base.input_bits(), seed);
+                        let result = cache
+                            .evaluate(PackedIntervention::Parameter {
+                                layer,
+                                neuron: index,
+                                model: next,
+                            })
+                            .unwrap();
+                        assert_eq!(
+                            result.output,
+                            candidate.infer_bitplanes(&planes).unwrap(),
+                            "width={} seed={} layer={layer} index={index}",
+                            base.input_bits(),
+                            seed
+                        );
                         assert_eq!(result.gate_evaluations, base.depth() - layer);
                         assert!(result.gate_evaluations <= base.neuron_count());
                     }
@@ -220,9 +245,15 @@ mod tests {
         for modes in [
             &[GateKind::Majority, GateKind::Parity][..],
             &[GateKind::Parity, GateKind::And, GateKind::Majority][..],
-            &[GateKind::Or, GateKind::Parity, GateKind::Majority, GateKind::Parity][..],
+            &[
+                GateKind::Or,
+                GateKind::Parity,
+                GateKind::Majority,
+                GateKind::Parity,
+            ][..],
         ] {
-            let base = FiveCircleHierarchy::from_modes(modes, LeafRouting::SeededShuffle(88)).unwrap();
+            let base =
+                FiveCircleHierarchy::from_modes(modes, LeafRouting::SeededShuffle(88)).unwrap();
             for seed in [2, 194, 809] {
                 let planes = bitplanes(base.input_bits(), seed);
                 let cache = FiveCircleIncrementalCache::new(&base, &planes).unwrap();
@@ -235,9 +266,15 @@ mod tests {
                     let mut route = base.routing().to_vec();
                     route.swap(first, second);
                     let changed = base.rerouted(route).unwrap();
-                    let actual = cache.evaluate(PackedIntervention::LeafSwap { first, second }).unwrap();
-                    assert_eq!(actual.output, changed.infer_bitplanes(&planes).unwrap(),
-                        "width={} seed={seed} swapped={first},{second}", base.input_bits());
+                    let actual = cache
+                        .evaluate(PackedIntervention::LeafSwap { first, second })
+                        .unwrap();
+                    assert_eq!(
+                        actual.output,
+                        changed.infer_bitplanes(&planes).unwrap(),
+                        "width={} seed={seed} swapped={first},{second}",
+                        base.input_bits()
+                    );
                     assert!(actual.gate_evaluations <= 2 * base.depth());
                     assert!(actual.gate_evaluations < base.neuron_count());
                 }
@@ -250,11 +287,15 @@ mod tests {
         let model = FiveCircleHierarchy::from_modes(
             &[GateKind::Majority, GateKind::Parity],
             LeafRouting::Contiguous,
-        ).unwrap();
+        )
+        .unwrap();
         let planes = bitplanes(25, 42);
         let cache = FiveCircleIncrementalCache::new(&model, &planes).unwrap();
         assert!(matches!(
-            cache.evaluate(PackedIntervention::LeafSwap {first: 0, second: 25}),
+            cache.evaluate(PackedIntervention::LeafSwap {
+                first: 0,
+                second: 25
+            }),
             Err(HierarchyError::InvalidRouting)
         ));
         assert!(matches!(
@@ -263,9 +304,16 @@ mod tests {
         ));
         let wrong = GateKind::Parity.five_circle();
         assert!(matches!(
-            cache.evaluate(PackedIntervention::Parameter {layer: 0, neuron: 0, model: wrong}),
+            cache.evaluate(PackedIntervention::Parameter {
+                layer: 0,
+                neuron: 0,
+                model: wrong
+            }),
             Err(HierarchyError::InvalidLayerShape)
         ));
-        assert_eq!(cache.baseline_output(), model.infer_bitplanes(&planes).unwrap());
+        assert_eq!(
+            cache.baseline_output(),
+            model.infer_bitplanes(&planes).unwrap()
+        );
     }
 }
