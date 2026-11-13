@@ -16,6 +16,7 @@ pub mod fourier5_local_learning;
 pub mod fourier5_mask_learning;
 pub mod fourier5_population_eligibility;
 pub mod fourier5_recurrent;
+pub mod fourier5_routing_search;
 pub mod full_synapse;
 pub mod gates;
 pub mod generalization_bench;
