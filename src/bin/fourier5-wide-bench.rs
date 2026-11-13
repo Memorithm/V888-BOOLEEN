@@ -10,14 +10,16 @@
 use std::time::Instant;
 
 use v888_booleen::fourier5_hierarchy::GateKind;
-use v888_booleen::fourier5_wide::{
-    WideEdit, WideFiveCache, WideFiveTree, SIX_MILLION_INPUTS,
-};
+use v888_booleen::fourier5_wide::{WideEdit, WideFiveCache, WideFiveTree, SIX_MILLION_INPUTS};
 
 struct Xorshift(u64);
 impl Xorshift {
     fn new(seed: u64) -> Self {
-        Self(if seed == 0 { 0x9e37_79b9_7f4a_7c15 } else { seed })
+        Self(if seed == 0 {
+            0x9e37_79b9_7f4a_7c15
+        } else {
+            seed
+        })
     }
 
     fn next(&mut self) -> u64 {
@@ -55,15 +57,16 @@ fn profile(width: usize, seed: u64) -> Result<(), String> {
     let generate_us = started.elapsed().as_micros();
 
     let started = Instant::now();
-    let old_baseline = tree.evaluate_full(&planes, None)
+    let old_baseline = tree
+        .evaluate_full(&planes, None)
         .map_err(|err| format!("{err:?}"))?;
     let old_baseline_us = started.elapsed().as_micros();
     let started = Instant::now();
-    let cache = WideFiveCache::new(&tree, &planes)
-        .map_err(|err| format!("{err:?}"))?;
+    let cache = WideFiveCache::new(&tree, &planes).map_err(|err| format!("{err:?}"))?;
     let cache_build_us = started.elapsed().as_micros();
     let started = Instant::now();
-    let independent = tree.independent_reference(&planes)
+    let independent = tree
+        .independent_reference(&planes)
         .map_err(|err| format!("{err:?}"))?;
     let independent_oracle_us = started.elapsed().as_micros();
     if old_baseline.output != cache.output() || old_baseline.output != independent {
@@ -73,22 +76,37 @@ fn profile(width: usize, seed: u64) -> Result<(), String> {
     let middle = tree.depth() / 2;
     let last = tree.depth() - 1;
     let edits = [
-        ("bottom_walsh_gain_bias", WideEdit::Parameter {
-            layer: 0, neuron: 0,
-            model: GateKind::And.five_circle(),
-        }),
-        ("distant_source_swap", WideEdit::SourceSwap {
-            first: 0, second: width / 2,
-        }),
-        ("middle_phase_flip", WideEdit::Parameter {
-            layer: middle,
-            neuron: tree.level_widths()[middle] / 2,
-            model: flipped_parity(),
-        }),
-        ("root_phase_flip", WideEdit::Parameter {
-            layer: last, neuron: 0,
-            model: flipped_parity(),
-        }),
+        (
+            "bottom_walsh_gain_bias",
+            WideEdit::Parameter {
+                layer: 0,
+                neuron: 0,
+                model: GateKind::And.five_circle(),
+            },
+        ),
+        (
+            "distant_source_swap",
+            WideEdit::SourceSwap {
+                first: 0,
+                second: width / 2,
+            },
+        ),
+        (
+            "middle_phase_flip",
+            WideEdit::Parameter {
+                layer: middle,
+                neuron: tree.level_widths()[middle] / 2,
+                model: flipped_parity(),
+            },
+        ),
+        (
+            "root_phase_flip",
+            WideEdit::Parameter {
+                layer: last,
+                neuron: 0,
+                model: flipped_parity(),
+            },
+        ),
     ];
 
     let mut total_old_us = old_baseline_us;
@@ -99,21 +117,25 @@ fn profile(width: usize, seed: u64) -> Result<(), String> {
         let full_first = (number + (seed as usize & 1)) % 2 == 0;
         let (full, full_us, delta, delta_us) = if full_first {
             let start = Instant::now();
-            let previous = tree.evaluate_full(&planes, Some(edit))
+            let previous = tree
+                .evaluate_full(&planes, Some(edit))
                 .map_err(|err| format!("{err:?}"))?;
             let old_us = start.elapsed().as_micros();
             let start = Instant::now();
-            let current = cache.evaluate_delta(edit)
+            let current = cache
+                .evaluate_delta(edit)
                 .map_err(|err| format!("{err:?}"))?;
             let new_us = start.elapsed().as_micros();
             (previous, old_us, current, new_us)
         } else {
             let start = Instant::now();
-            let current = cache.evaluate_delta(edit)
+            let current = cache
+                .evaluate_delta(edit)
                 .map_err(|err| format!("{err:?}"))?;
             let new_us = start.elapsed().as_micros();
             let start = Instant::now();
-            let previous = tree.evaluate_full(&planes, Some(edit))
+            let previous = tree
+                .evaluate_full(&planes, Some(edit))
                 .map_err(|err| format!("{err:?}"))?;
             let old_us = start.elapsed().as_micros();
             (previous, old_us, current, new_us)
