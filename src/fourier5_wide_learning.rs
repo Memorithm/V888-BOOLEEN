@@ -321,14 +321,13 @@ impl<'a> WidePlasticCircuit<'a> {
             .collect();
         let mut report = WideLocalFit::default();
         for (layer, target_row) in targets.iter().enumerate() {
-            for neuron in 0..self.stages[layer].len() {
+            for (neuron, &label) in target_row.iter().enumerate() {
                 let previous = if layer == 0 {
                     self.sources
                 } else {
                     &self.stages[layer - 1]
                 };
                 let input = children(previous, neuron);
-                let label = target_row[neuron];
                 let mut best = (u32::MAX, self.models[layer][neuron], 0_u32, 0_u64);
                 for &(model, truth) in &options {
                     let prediction = shannon_64(truth, input);
