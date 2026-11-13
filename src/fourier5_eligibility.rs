@@ -79,8 +79,7 @@ fn valid_readout(model: &GatedFiveCircle) -> bool {
         && model.base().bias() == -1
         && model.gates()[0].context_mask == 0
         && (1..CIRCLES).all(|i| {
-            circles[i] == Circle::default()
-                && model.gates()[i].context_mask == 1_u8 << (i - 1)
+            circles[i] == Circle::default() && model.gates()[i].context_mask == 1_u8 << (i - 1)
         })
 }
 
@@ -146,10 +145,7 @@ impl DelayedEligibility {
             return Err(EligibilityError::EventBudget);
         }
         let (input, context) = network.sample_neuron_sources(neuron)?;
-        if input.count_ones() % 2 == 0
-            || context.count_ones() != 1
-            || context & 0b1_0000 != 0
-        {
+        if input.count_ones() % 2 == 0 || context.count_ones() != 1 || context & 0b1_0000 != 0 {
             return Err(EligibilityError::InvalidCue);
         }
         let model = network
@@ -331,15 +327,27 @@ mod tests {
         let mut net = network(99);
         let mut plastic = DelayedEligibility::new(8).unwrap();
         let before = net.neuron_model(READOUT);
-        assert_eq!(plastic.feedback(&mut net, false), Err(EligibilityError::NoCue));
+        assert_eq!(
+            plastic.feedback(&mut net, false),
+            Err(EligibilityError::NoCue)
+        );
         net.drive_neuron_sources(READOUT, 1, 1).unwrap();
         plastic.record(&net, READOUT).unwrap();
-        assert_eq!(plastic.record(&net, READOUT), Err(EligibilityError::PendingCue));
-        assert_eq!(plastic.feedback(&mut net, false), Err(EligibilityError::TooEarly));
+        assert_eq!(
+            plastic.record(&net, READOUT),
+            Err(EligibilityError::PendingCue)
+        );
+        assert_eq!(
+            plastic.feedback(&mut net, false),
+            Err(EligibilityError::TooEarly)
+        );
         for _ in 0..9 {
             net.step().unwrap();
         }
-        assert_eq!(plastic.feedback(&mut net, false), Err(EligibilityError::Expired));
+        assert_eq!(
+            plastic.feedback(&mut net, false),
+            Err(EligibilityError::Expired)
+        );
         assert_eq!(net.neuron_model(READOUT), before);
         assert!(!plastic.pending());
         assert_eq!(plastic.delivered(), 0);
@@ -348,7 +356,10 @@ mod tests {
 
     #[test]
     fn invalid_cues_and_budgets_fail_closed() {
-        assert_eq!(DelayedEligibility::new(0), Err(EligibilityError::InvalidBudget));
+        assert_eq!(
+            DelayedEligibility::new(0),
+            Err(EligibilityError::InvalidBudget)
+        );
         assert_eq!(
             DelayedEligibility::new(MAX_ELIGIBILITY_TICKS + 1),
             Err(EligibilityError::InvalidBudget)
@@ -358,15 +369,30 @@ mod tests {
         let model = net.neuron_model(READOUT);
         let state = net.state().clone();
         net.drive_neuron_sources(READOUT, 0, 1).unwrap();
-        assert_eq!(plastic.record(&net, READOUT), Err(EligibilityError::InvalidCue));
+        assert_eq!(
+            plastic.record(&net, READOUT),
+            Err(EligibilityError::InvalidCue)
+        );
         net.drive_neuron_sources(READOUT, 1, 3).unwrap();
-        assert_eq!(plastic.record(&net, READOUT), Err(EligibilityError::InvalidCue));
+        assert_eq!(
+            plastic.record(&net, READOUT),
+            Err(EligibilityError::InvalidCue)
+        );
         net.drive_neuron_sources(READOUT, 1, 16).unwrap();
-        assert_eq!(plastic.record(&net, READOUT), Err(EligibilityError::InvalidCue));
+        assert_eq!(
+            plastic.record(&net, READOUT),
+            Err(EligibilityError::InvalidCue)
+        );
         assert_eq!(net.neuron_model(READOUT), model);
         assert_eq!(plastic.updates(), 0);
-        assert_eq!(net.drive_neuron_sources(READOUT, 32, 1), Err(RecurrentError::InvalidContact));
-        assert_eq!(net.drive_neuron_sources(128, 1, 1), Err(RecurrentError::InvalidContact));
+        assert_eq!(
+            net.drive_neuron_sources(READOUT, 32, 1),
+            Err(RecurrentError::InvalidContact)
+        );
+        assert_eq!(
+            net.drive_neuron_sources(128, 1, 1),
+            Err(RecurrentError::InvalidContact)
+        );
         assert_ne!(net.state(), &state);
     }
 
