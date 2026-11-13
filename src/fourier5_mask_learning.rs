@@ -3,7 +3,7 @@
 //! Two matched hypothesis families (Walsh characters or Boolean conjunctions)
 //! share the same greedy subset-search procedure, data and update budget.
 //! This is not an anatomical or physiological model of BANC V888.
-use crate::fourier5::{Circle, FiveCircle, CIRCLES, INPUT_BITS, TABLE_SIZE};
+use crate::fourier5::{Circle, FiveCircle, CIRCLES, TABLE_SIZE};
 
 pub const MAX_MASK_EPOCHS: usize = 128;
 const VALID_BITS: u8 = (TABLE_SIZE - 1) as u8;
@@ -376,6 +376,6 @@ mod tests {
             assert!(fit.train_correct <= train.len());
             assert!(fit.model.masks.iter().all(|&mask| usize::from(mask) < TABLE_SIZE));
         }
-        assert_eq!(INPUT_BITS, 5);
+        assert_eq!(crate::fourier5::INPUT_BITS, 5);
     }
 }
