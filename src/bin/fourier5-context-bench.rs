@@ -33,10 +33,7 @@ fn correct_static(base: &FiveCircle, cases: &[ContextSample]) -> usize {
         .count()
 }
 
-fn correct_context(
-    model: &GatedFiveCircle,
-    cases: &[ContextSample],
-) -> Result<usize, String> {
+fn correct_context(model: &GatedFiveCircle, cases: &[ContextSample]) -> Result<usize, String> {
     model
         .correct_count(
             &cases
@@ -58,14 +55,14 @@ fn main() -> Result<(), String> {
         context_mask: 1 << i,
         boost: 0,
     });
-    let singleton = GatedFiveCircle::new(base(), singleton_gates)
-        .map_err(|err| format!("{err:?}"))?;
+    let singleton =
+        GatedFiveCircle::new(base(), singleton_gates).map_err(|err| format!("{err:?}"))?;
     let tuples = train
         .iter()
         .map(|s| (s.input, s.context, s.fire))
         .collect::<Vec<_>>();
-    let fixed_fit = train_context_gates(singleton, &tuples, 32)
-        .map_err(|err| format!("{err:?}"))?;
+    let fixed_fit =
+        train_context_gates(singleton, &tuples, 32).map_err(|err| format!("{err:?}"))?;
     let static_hits = correct_static(&base(), &test);
     let singleton_hits = correct_context(&fixed_fit.model, &test)?;
     let learned_hits = correct_context(&learned.model, &test)?;
