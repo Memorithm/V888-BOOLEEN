@@ -1,3 +1,4 @@
+pub mod fourier5_joint_audit;
 pub mod activity_atlas;
 pub mod activity_guided;
 pub mod circuit_explorer;
@@ -124,7 +125,6 @@ impl BooleanState {
             .filter(move |&index| index < self.len)
     }
 
-    /// Vue en lecture seule des mots, bit 0 = position 0.
     #[must_use]
     pub fn words(&self) -> &[u64] {
         &self.words
