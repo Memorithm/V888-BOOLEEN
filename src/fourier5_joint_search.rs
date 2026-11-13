@@ -318,6 +318,15 @@ pub fn optimize_joint(
         }
     }
 
+    // Plasticity is opt-in: the combined family also contains its
+    // no-plasticity member, preserving the best frozen-routing solution.
+    if route_only_correct > joint_correct {
+        joint = route_only.clone();
+        joint_correct = route_only_correct;
+        joint_swaps = route_only_swaps.clone();
+        joint_updates = 0;
+    }
+
     Ok(JointReport {
         route_only,
         route_only_correct,
