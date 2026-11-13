@@ -23,6 +23,9 @@ pub struct GateReturnScore {
     pub worst_recovery_delay: Option<usize>,
     /// Return events with no recall in their bounded observation window.
     pub unrecovered_events: usize,
+    /// Episodes ending before the requested horizon (next return or history end).
+    /// Such episodes are right-censored, not proof of failed long-term recall.
+    pub truncated_events: usize,
     pub recall_ticks: usize,
     pub activation_cost: u64,
 }
@@ -151,6 +154,7 @@ fn rank_gate_return_with_window_policy(
             first_recovery_delay: None,
             worst_recovery_delay: None,
             unrecovered_events: 0,
+            truncated_events: 0,
             recall_ticks: 0,
             activation_cost: 0,
         };
@@ -160,6 +164,9 @@ fn rank_gate_return_with_window_policy(
                 if let Some(&next_return) = returns.get(event_index + 1) {
                     end = end.min(next_return);
                 }
+            }
+            if end - start < horizon {
+                score.truncated_events += 1;
             }
             let mut recovered = false;
             let mut streak = 0usize;
@@ -226,6 +233,23 @@ mod tests {
         state
     }
 
+
+    #[test]
+    fn truncated_horizons_are_explicitly_counted() {
+        let circuit = Subcircuit::new(4, vec![1]).unwrap();
+        let history = [state(&[]), state(&[0]), state(&[]), state(&[0, 1])];
+        let scores = rank_gate_return_disjoint_recall(
+            &[circuit],
+            &history,
+            &[Some(7), None, None, None],
+            7, 1, 1, 3, 1,
+        )
+        .unwrap();
+        assert_eq!(scores[0].return_events, 2);
+        assert_eq!(scores[0].truncated_events, 2);
+        assert_eq!(scores[0].recovered_events, 1);
+        assert_eq!(scores[0].unrecovered_events, 1);
+    }
 
     #[test]
     fn censored_returns_and_worst_latency_are_recorded() {
