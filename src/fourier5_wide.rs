@@ -50,16 +50,10 @@ pub struct WideFiveTree {
 }
 
 fn group_input(source: &[u64], index: usize) -> [u64; CIRCLES] {
-    std::array::from_fn(|bit| {
-        source.get(index * CIRCLES + bit).copied().unwrap_or(0)
-    })
+    std::array::from_fn(|bit| source.get(index * CIRCLES + bit).copied().unwrap_or(0))
 }
 
-fn edited_source(
-    planes: &[u64],
-    position: usize,
-    swap: Option<(usize, usize)>,
-) -> u64 {
+fn edited_source(planes: &[u64], position: usize, swap: Option<(usize, usize)>) -> u64 {
     if position >= planes.len() {
         return 0;
     }
@@ -98,7 +92,11 @@ impl WideFiveTree {
                 }
             })
             .collect();
-        let base_tables = base_models.iter().copied().map(compiled_truth_table).collect();
+        let base_tables = base_models
+            .iter()
+            .copied()
+            .map(compiled_truth_table)
+            .collect();
         Ok(Self {
             input_bits,
             level_widths,
@@ -110,13 +108,19 @@ impl WideFiveTree {
     }
 
     #[must_use]
-    pub fn input_bits(&self) -> usize { self.input_bits }
+    pub fn input_bits(&self) -> usize {
+        self.input_bits
+    }
 
     #[must_use]
-    pub fn depth(&self) -> usize { self.level_widths.len() }
+    pub fn depth(&self) -> usize {
+        self.level_widths.len()
+    }
 
     #[must_use]
-    pub fn logical_neurons(&self) -> usize { self.logical_neurons }
+    pub fn logical_neurons(&self) -> usize {
+        self.logical_neurons
+    }
 
     #[must_use]
     pub fn real_contacts(&self) -> usize {
@@ -124,22 +128,37 @@ impl WideFiveTree {
     }
 
     #[must_use]
-    pub fn padding_slots(&self) -> usize { self.padding_slots }
+    pub fn padding_slots(&self) -> usize {
+        self.padding_slots
+    }
 
     #[must_use]
-    pub fn level_widths(&self) -> &[usize] { &self.level_widths }
+    pub fn level_widths(&self) -> &[usize] {
+        &self.level_widths
+    }
 
     /// Gate replacement is constrained to the exact same five Walsh masks.
     /// This is the same contract enforced by with_neuron_parameters in the
     /// 625-input public model. No new source or mask is invented.
     fn table_for_edit(&self, edit: WideEdit) -> Result<u32, WideError> {
         match edit {
-            WideEdit::Parameter { layer, neuron, model } => {
-                if self.level_widths.get(layer).is_none_or(|&count| neuron >= count) {
+            WideEdit::Parameter {
+                layer,
+                neuron,
+                model,
+            } => {
+                if self
+                    .level_widths
+                    .get(layer)
+                    .is_none_or(|&count| neuron >= count)
+                {
                     return Err(WideError::InvalidIntervention);
                 }
                 let original = self.base_models[layer];
-                if original.circles().iter().zip(model.circles())
+                if original
+                    .circles()
+                    .iter()
+                    .zip(model.circles())
                     .any(|(left, right)| left.mask != right.mask)
                 {
                     return Err(WideError::IncompatibleWalshMasks);
@@ -176,17 +195,18 @@ impl WideFiveTree {
             let mut next = Vec::with_capacity(count);
             for neuron in 0..count {
                 let input = if level == 0 {
-                    std::array::from_fn(|bit| {
-                        edited_source(planes, neuron * CIRCLES + bit, swap)
-                    })
+                    std::array::from_fn(|bit| edited_source(planes, neuron * CIRCLES + bit, swap))
                 } else {
                     group_input(&previous, neuron)
                 };
                 let truth = match edit {
-                    Some(WideEdit::Parameter { layer, neuron: target, .. })
-                        if level == layer && neuron == target => {
-                            parameter_table.expect("validated parameter truth")
-                        }
+                    Some(WideEdit::Parameter {
+                        layer,
+                        neuron: target,
+                        ..
+                    }) if level == layer && neuron == target => {
+                        parameter_table.expect("validated parameter truth")
+                    }
                     _ => self.base_tables[level],
                 };
                 next.push(shannon_64(truth, input));
@@ -297,11 +317,7 @@ impl<'a> WideFiveCache<'a> {
                 let mut changes = Vec::with_capacity(affected.len());
                 for neuron in affected {
                     let input = std::array::from_fn(|bit| {
-                        edited_source(
-                            self.planes,
-                            neuron * CIRCLES + bit,
-                            Some((first, second)),
-                        )
+                        edited_source(self.planes, neuron * CIRCLES + bit, Some((first, second)))
                     });
                     let updated = shannon_64(self.tree.base_tables[0], input);
                     evaluated += 1;
@@ -317,16 +333,16 @@ impl<'a> WideFiveCache<'a> {
             if changed.is_empty() {
                 break;
             }
-            let mut parents: Vec<usize> = changed.iter()
-                .map(|&(node, _)| node / CIRCLES)
-                .collect();
+            let mut parents: Vec<usize> = changed.iter().map(|&(node, _)| node / CIRCLES).collect();
             parents.sort_unstable();
             parents.dedup();
             let mut updated = Vec::with_capacity(parents.len());
             for neuron in parents {
                 let inputs = std::array::from_fn(|bit| {
                     let child = neuron * CIRCLES + bit;
-                    changed.iter().find(|&&(index, _)| index == child)
+                    changed
+                        .iter()
+                        .find(|&&(index, _)| index == child)
                         .map_or_else(
                             || self.baseline[level - 1].get(child).copied().unwrap_or(0),
                             |&(_, value)| value,
@@ -342,7 +358,8 @@ impl<'a> WideFiveCache<'a> {
         }
 
         Ok(WideEvaluation {
-            output: changed.first()
+            output: changed
+                .first()
                 .map_or_else(|| self.output(), |&(_, value)| value),
             gate_evaluations: evaluated,
         })
@@ -359,12 +376,14 @@ mod tests {
     use super::*;
 
     fn planes(width: usize, mut state: u64) -> Vec<u64> {
-        (0..width).map(|_| {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state
-        }).collect()
+        (0..width)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                state
+            })
+            .collect()
     }
 
     fn parameter(tree: &WideFiveTree, layer: usize, neuron: usize) -> WideEdit {
@@ -389,19 +408,39 @@ mod tests {
                 let full = tree.evaluate_full(&input, None).unwrap();
                 let cache = WideFiveCache::new(&tree, &input).unwrap();
                 assert_eq!(full.output, cache.output(), "size={size}");
-                assert_eq!(full.output, tree.independent_reference(&input).unwrap(), "size={size}");
+                assert_eq!(
+                    full.output,
+                    tree.independent_reference(&input).unwrap(),
+                    "size={size}"
+                );
                 let edits = [
                     parameter(&tree, 0, 0),
-                    parameter(&tree, tree.depth() / 2, tree.level_widths[tree.depth()/2] / 2),
+                    parameter(
+                        &tree,
+                        tree.depth() / 2,
+                        tree.level_widths[tree.depth() / 2] / 2,
+                    ),
                     parameter(&tree, tree.depth() - 1, 0),
-                    WideEdit::SourceSwap {first: 0, second: 1},
-                    WideEdit::SourceSwap {first: 0, second: size / 2},
-                    WideEdit::SourceSwap {first: size / 3, second: size - 1},
+                    WideEdit::SourceSwap {
+                        first: 0,
+                        second: 1,
+                    },
+                    WideEdit::SourceSwap {
+                        first: 0,
+                        second: size / 2,
+                    },
+                    WideEdit::SourceSwap {
+                        first: size / 3,
+                        second: size - 1,
+                    },
                 ];
                 for edit in edits {
                     let full = tree.evaluate_full(&input, Some(edit)).unwrap();
                     let cached = cache.evaluate_delta(edit).unwrap();
-                    assert_eq!(full.output, cached.output, "size={size} seed={seed} edit={edit:?}");
+                    assert_eq!(
+                        full.output, cached.output,
+                        "size={size} seed={seed} edit={edit:?}"
+                    );
                     assert!(cached.gate_evaluations <= 2 * tree.depth());
                 }
             }
@@ -412,10 +451,10 @@ mod tests {
     fn six_million_250k_geometry_and_memory_are_exact() {
         let tree = WideFiveTree::new(SIX_MILLION_INPUTS).unwrap();
         assert_eq!(tree.depth(), 10);
-        assert_eq!(tree.level_widths(), &[
-            1_250_000, 250_000, 50_000, 10_000, 2_000,
-            400, 80, 16, 4, 1,
-        ]);
+        assert_eq!(
+            tree.level_widths(),
+            &[1_250_000, 250_000, 50_000, 10_000, 2_000, 400, 80, 16, 4, 1,]
+        );
         assert_eq!(tree.logical_neurons(), 1_562_501);
         assert_eq!(tree.padding_slots(), 5);
         assert_eq!(tree.real_contacts(), 7_812_500);
@@ -428,25 +467,45 @@ mod tests {
         let tree = WideFiveTree::new(25).unwrap();
         let data = planes(25, 21);
         assert_eq!(WideFiveTree::new(4).err(), Some(WideError::InvalidWidth));
-        assert_eq!(WideFiveTree::new(SIX_MILLION_INPUTS + 1).err(), Some(WideError::InvalidWidth));
-        assert_eq!(tree.evaluate_full(&data[..24], None).err(), Some(WideError::InvalidInput));
-        assert!(matches!(WideFiveCache::new(&tree, &data[..24]), Err(WideError::InvalidInput)));
+        assert_eq!(
+            WideFiveTree::new(SIX_MILLION_INPUTS + 1).err(),
+            Some(WideError::InvalidWidth)
+        );
+        assert_eq!(
+            tree.evaluate_full(&data[..24], None).err(),
+            Some(WideError::InvalidInput)
+        );
+        assert!(matches!(
+            WideFiveCache::new(&tree, &data[..24]),
+            Err(WideError::InvalidInput)
+        ));
         let cache = WideFiveCache::new(&tree, &data).unwrap();
         for edit in [
-            WideEdit::SourceSwap {first: 0, second: 0},
-            WideEdit::SourceSwap {first: 25, second: 1},
+            WideEdit::SourceSwap {
+                first: 0,
+                second: 0,
+            },
+            WideEdit::SourceSwap {
+                first: 25,
+                second: 1,
+            },
             WideEdit::Parameter {
-                layer: tree.depth(), neuron: 0,
+                layer: tree.depth(),
+                neuron: 0,
                 model: GateKind::Parity.five_circle(),
             },
             WideEdit::Parameter {
-                layer: 0, neuron: 0,
+                layer: 0,
+                neuron: 0,
                 model: GateKind::Parity.five_circle(),
             },
         ] {
             assert!(tree.evaluate_full(&data, Some(edit)).is_err());
             assert!(cache.evaluate_delta(edit).is_err());
         }
-        assert_eq!(tree.evaluate_full(&data, None).unwrap().output, cache.output());
+        assert_eq!(
+            tree.evaluate_full(&data, None).unwrap().output,
+            cache.output()
+        );
     }
 }
