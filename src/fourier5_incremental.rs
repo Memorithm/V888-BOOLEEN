@@ -92,10 +92,9 @@ impl<'a> FiveCircleIncrementalCache<'a> {
         change: PackedIntervention,
     ) -> Result<IncrementalEvaluation, HierarchyError> {
         let mut changes: BTreeMap<usize, u64> = BTreeMap::new();
-        let start_layer;
         let mut evaluated = 0;
 
-        match change {
+        let start_layer = match change {
             PackedIntervention::Parameter {
                 layer,
                 neuron,
@@ -113,7 +112,7 @@ impl<'a> FiveCircleIncrementalCache<'a> {
                 let input = std::array::from_fn(|bit| self.stages[layer][neuron * CIRCLES + bit]);
                 changes.insert(neuron, shannon_64(compiled_truth_table(model), input));
                 evaluated += 1;
-                start_layer = layer;
+                layer
             }
             PackedIntervention::LeafSwap { first, second } => {
                 if first >= self.base.input_bits()
@@ -139,9 +138,9 @@ impl<'a> FiveCircleIncrementalCache<'a> {
                     changes.insert(neuron, shannon_64(self.base.gate_truth(0, neuron)?, input));
                     evaluated += 1;
                 }
-                start_layer = 0;
+                0
             }
-        }
+        };
 
         for layer in start_layer + 1..self.base.depth() {
             let parents: BTreeSet<usize> = changes.keys().map(|&index| index / CIRCLES).collect();
