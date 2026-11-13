@@ -8,6 +8,7 @@ pub mod consolidation_scale;
 pub mod eligibility_trace;
 pub mod engine;
 pub mod fourier5;
+pub mod fourier5_compact;
 pub mod fourier5_context_search;
 pub mod fourier5_dynamic;
 pub mod fourier5_eligibility;
