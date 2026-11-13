@@ -149,12 +149,7 @@ struct Candidate {
 }
 
 /// Refit all selected signed radii and bias from zero on TRAIN only.
-fn refit(
-    samples: &[MaskSample],
-    family: FeatureFamily,
-    chosen: &[u8],
-    epochs: usize,
-) -> Candidate {
+fn refit(samples: &[MaskSample], family: FeatureFamily, chosen: &[u8], epochs: usize) -> Candidate {
     let mut model = SparseMaskModel {
         family,
         masks: [0; CIRCLES],
@@ -173,8 +168,7 @@ fn refit(
             if target * score <= 0 {
                 model.bias += target as i32;
                 for (slot, &mask) in chosen.iter().enumerate() {
-                    model.signed_radii[slot] +=
-                        target as i32 * character(input, mask, family);
+                    model.signed_radii[slot] += target as i32 * character(input, mask, family);
                 }
                 mistakes += 1;
                 updates += 1;
@@ -230,8 +224,7 @@ pub fn learn_five_masks(
             let trial = refit(samples, family, &selected, epochs);
             selected.pop();
             let replace = best.as_ref().is_none_or(|(best_mask, previous)| {
-                (trial.errors, trial.hinge, mask) <
-                    (previous.errors, previous.hinge, *best_mask)
+                (trial.errors, trial.hinge, mask) < (previous.errors, previous.hinge, *best_mask)
             });
             if replace {
                 best = Some((mask, trial));
@@ -340,7 +333,9 @@ mod tests {
             learn_five_masks(&one, FeatureFamily::Walsh, MAX_MASK_EPOCHS + 1),
             Err(MaskSearchError::InvalidEpochBudget)
         );
-        let model = learn_five_masks(&one, FeatureFamily::Walsh, 2).unwrap().model;
+        let model = learn_five_masks(&one, FeatureFamily::Walsh, 2)
+            .unwrap()
+            .model;
         assert_eq!(model.predict(32), Err(MaskSearchError::InvalidInput));
     }
 
@@ -374,7 +369,11 @@ mod tests {
             let fit = learn_five_masks(&train, family, 64).unwrap();
             assert!(fit.selected <= CIRCLES);
             assert!(fit.train_correct <= train.len());
-            assert!(fit.model.masks.iter().all(|&mask| usize::from(mask) < TABLE_SIZE));
+            assert!(fit
+                .model
+                .masks
+                .iter()
+                .all(|&mask| usize::from(mask) < TABLE_SIZE));
         }
         assert_eq!(crate::fourier5::INPUT_BITS, 5);
     }
