@@ -157,29 +157,34 @@ fn train_pass(
     })
 }
 
-fn report(
+struct Assessment<'a> {
     seed: u64,
+    a: &'a [u64],
+    label_a: u64,
+    b: &'a [u64],
+    label_b: u64,
+    valid: &'a [u64],
+    label_valid: u64,
+    test: &'a [u64],
+    label_test: u64,
+}
+
+fn report(
+    set: &Assessment<'_>,
     phase: &str,
     pass: usize,
     arm: &str,
     model: &WidePlasticCircuit<'_>,
-    train_a: &[u64],
-    label_a: u64,
-    train_b: &[u64],
-    label_b: u64,
-    valid: &[u64],
-    label_valid: u64,
-    test: &[u64],
-    label_test: u64,
     stats: &PassStats,
 ) -> Result<(), String> {
     // No VALID or TEST labels are used by train_pass.
-    let score_a = score(model, train_a, label_a)?;
-    let score_b = score(model, train_b, label_b)?;
-    let score_valid = score(model, valid, label_valid)?;
-    let score_test = score(model, test, label_test)?;
+    let seed = set.seed;
+    let score_a = score(model, set.a, set.label_a)?;
+    let score_b = score(model, set.b, set.label_b)?;
+    let score_valid = score(model, set.valid, set.label_valid)?;
+    let score_test = score(model, set.test, set.label_test)?;
     println!(
-        "REWARD_PASS seed={seed} phase={phase} pass={pass} arm={arm}          train_a={score_a}/64 train_b={score_b}/64 valid={score_valid}/64          test={score_test}/64 accepted={} replay_rollbacks={}          cached_gate_evals={} cached_child_reads={} elapsed_us={} persistent_commits={}",
+        "REWARD_PASS seed={seed} phase={phase} pass={pass} arm={arm} train_a={score_a}/64 train_b={score_b}/64 valid={score_valid}/64 test={score_test}/64 accepted={} replay_rollbacks={} cached_gate_evals={} cached_child_reads={} elapsed_us={} persistent_commits={}",
         stats.net_accepts,
         stats.replay_rollbacks,
         stats.evaluations,
@@ -243,6 +248,17 @@ fn experiment(width: usize, seed: u64, trials: usize, passes: usize) -> Result<(
     {
         return Err("unbalanced final labels; refuse the experiment".into());
     }
+    let set = Assessment {
+        seed,
+        a: &a,
+        label_a,
+        b: &b,
+        label_b,
+        valid: &valid,
+        label_valid,
+        test: &test,
+        label_test,
+    };
     let mut guarded = WidePlasticCircuit::new(&tree, &a).map_err(|e| format!("{e:?}"))?;
     let empty = PassStats {
         net_accepts: 0,
@@ -251,22 +267,7 @@ fn experiment(width: usize, seed: u64, trials: usize, passes: usize) -> Result<(
         child_reads: 0,
         elapsed_us: 0,
     };
-    report(
-        seed,
-        "A",
-        0,
-        "replay_guard",
-        &guarded,
-        &a,
-        label_a,
-        &b,
-        label_b,
-        &valid,
-        label_valid,
-        &test,
-        label_test,
-        &empty,
-    )?;
+    report(&set, "A", 0, "replay_guard", &guarded, &empty)?;
     for pass in 1..=passes {
         let stats = train_pass(
             &mut guarded,
@@ -277,22 +278,7 @@ fn experiment(width: usize, seed: u64, trials: usize, passes: usize) -> Result<(
             None,
             trials,
         )?;
-        report(
-            seed,
-            "A",
-            pass,
-            "replay_guard",
-            &guarded,
-            &a,
-            label_a,
-            &b,
-            label_b,
-            &valid,
-            label_valid,
-            &test,
-            label_test,
-            &stats,
-        )?;
+        report(&set, "A", pass, "replay_guard", &guarded, &stats)?;
     }
     let retained_floor = correct(guarded.output(), label_a);
     // Construct matched comparator from EXACT A-trained independent models.
@@ -330,38 +316,8 @@ fn experiment(width: usize, seed: u64, trials: usize, passes: usize) -> Result<(
             None,
             trials,
         )?;
-        report(
-            seed,
-            "B",
-            pass,
-            "replay_guard",
-            &guarded,
-            &a,
-            label_a,
-            &b,
-            label_b,
-            &valid,
-            label_valid,
-            &test,
-            label_test,
-            &guarded_stats,
-        )?;
-        report(
-            seed,
-            "B",
-            pass,
-            "no_replay",
-            &unguarded,
-            &a,
-            label_a,
-            &b,
-            label_b,
-            &valid,
-            label_valid,
-            &test,
-            label_test,
-            &unguarded_stats,
-        )?;
+        report(&set, "B", pass, "replay_guard", &guarded, &guarded_stats)?;
+        report(&set, "B", pass, "no_replay", &unguarded, &unguarded_stats)?;
     }
     if score(&guarded, &a, label_a)? < retained_floor {
         return Err("loss of retained TRAIN-A output accuracy".into());
