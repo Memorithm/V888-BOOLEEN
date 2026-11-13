@@ -91,7 +91,10 @@ impl EligibilityBank {
 
     /// Recurrent dynamics continue while local presynaptic cues remain
     /// frozen. Enforces max_delay BEFORE doing another expensive tick.
-    pub fn tick(&mut self, network: &mut RecurrentFiveCircle) -> Result<TickStats, EligibilityError> {
+    pub fn tick(
+        &mut self,
+        network: &mut RecurrentFiveCircle,
+    ) -> Result<TickStats, EligibilityError> {
         if self.pending.is_none() {
             return Err(EligibilityError::NoCue);
         }
@@ -206,7 +209,10 @@ mod tests {
         assert_eq!(net.wiring_fingerprint(), fingerprint_before);
         assert_eq!(net.state(), &state_before);
         assert_eq!(bank.cue_age(), None);
-        assert_eq!(bank.reinforce(&mut net, &labels), Err(EligibilityError::NoCue));
+        assert_eq!(
+            bank.reinforce(&mut net, &labels),
+            Err(EligibilityError::NoCue)
+        );
     }
 
     #[test]
@@ -232,26 +238,44 @@ mod tests {
         let mut net = fixture(64);
         let mut bank = EligibilityBank::new(64, 3).unwrap();
         bank.capture(&net).unwrap();
-        assert_eq!(bank.reinforce(&mut net, &[false; 64]), Err(EligibilityError::NoElapsedTick));
+        assert_eq!(
+            bank.reinforce(&mut net, &[false; 64]),
+            Err(EligibilityError::NoElapsedTick)
+        );
         bank.tick(&mut net).unwrap();
         let before = net.neuron_model(0);
-        assert_eq!(bank.reinforce(&mut net, &[false; 63]), Err(EligibilityError::InvalidTargets));
+        assert_eq!(
+            bank.reinforce(&mut net, &[false; 63]),
+            Err(EligibilityError::InvalidTargets)
+        );
         assert_eq!(bank.cue_age(), Some(1));
         assert_eq!(net.neuron_model(0), before);
     }
 
     #[test]
     fn resource_and_population_guards_are_explicit() {
-        assert!(matches!(EligibilityBank::new(63, 1), Err(EligibilityError::InvalidPopulation)));
-        assert!(matches!(EligibilityBank::new(250_001, 1), Err(EligibilityError::InvalidPopulation)));
-        assert!(matches!(EligibilityBank::new(64, 0), Err(EligibilityError::InvalidDelay)));
+        assert!(matches!(
+            EligibilityBank::new(63, 1),
+            Err(EligibilityError::InvalidPopulation)
+        ));
+        assert!(matches!(
+            EligibilityBank::new(250_001, 1),
+            Err(EligibilityError::InvalidPopulation)
+        ));
+        assert!(matches!(
+            EligibilityBank::new(64, 0),
+            Err(EligibilityError::InvalidDelay)
+        ));
         assert!(matches!(
             EligibilityBank::new(64, MAX_TRACE_DELAY + 1),
             Err(EligibilityError::InvalidDelay)
         ));
         let mut net = fixture(64);
         let mut bank = EligibilityBank::new(65, 1).unwrap();
-        assert_eq!(bank.capture(&net), Err(EligibilityError::PopulationMismatch));
+        assert_eq!(
+            bank.capture(&net),
+            Err(EligibilityError::PopulationMismatch)
+        );
         assert_eq!(bank.tick(&mut net), Err(EligibilityError::NoCue));
     }
 
@@ -267,7 +291,10 @@ mod tests {
         assert_eq!(net.state(), &switched);
         assert_eq!(net.wiring_fingerprint(), fingerprint);
         assert_eq!(net.neuron_model(3), model);
-        assert_eq!(net.replace_state(crate::BooleanState::new(65)), Err(RecurrentError::MismatchedNetwork));
+        assert_eq!(
+            net.replace_state(crate::BooleanState::new(65)),
+            Err(RecurrentError::MismatchedNetwork)
+        );
         assert_eq!(net.state(), &switched);
     }
 }
