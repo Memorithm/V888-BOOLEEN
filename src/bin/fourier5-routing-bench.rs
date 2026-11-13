@@ -19,7 +19,11 @@ struct Random(u64);
 
 impl Random {
     fn new(seed: u64) -> Self {
-        Self(if seed == 0 { 0x9e37_79b9_7f4a_7c15 } else { seed })
+        Self(if seed == 0 {
+            0x9e37_79b9_7f4a_7c15
+        } else {
+            seed
+        })
     }
 
     fn next(&mut self) -> u64 {
@@ -93,7 +97,10 @@ fn score(model: &FiveCircleHierarchy, rows: &[RoutingSample]) -> Result<usize, S
     let mut hits = 0;
     for row in rows {
         hits += usize::from(
-            model.infer_scalar(&row.state).map_err(|err| format!("{err:?}"))? == row.label,
+            model
+                .infer_scalar(&row.state)
+                .map_err(|err| format!("{err:?}"))?
+                == row.label,
         );
     }
     Ok(hits)
@@ -112,19 +119,53 @@ fn profile(
     // The independent candidate bank uses NO input data and NO labels.
     let pairs = candidate_swaps(width, proposal_seed, MAX_SWAP_CANDIDATES)
         .map_err(|err| format!("{err:?}"))?;
-    let teacher = candidate_model(&base, &pairs, planted_index)
-        .map_err(|err| format!("{err:?}"))?;
+    let teacher =
+        candidate_model(&base, &pairs, planted_index).map_err(|err| format!("{err:?}"))?;
     let random_index = 1 + (seed as usize % MAX_SWAP_CANDIDATES);
-    let random_control = candidate_model(&base, &pairs, random_index)
-        .map_err(|err| format!("{err:?}"))?;
+    let random_control =
+        candidate_model(&base, &pairs, random_index).map_err(|err| format!("{err:?}"))?;
     let mut rng = Random::new(seed ^ 0x63f0_11a3);
     let mut seen = BTreeSet::new();
-    let train = make_samples(&mut rng, &mut seen, training, width, 128, teacher.routing(), modes)?;
-    let validation =
-        make_samples(&mut rng, &mut seen, 512, width, 128, teacher.routing(), modes)?;
-    let test = make_samples(&mut rng, &mut seen, 1_024, width, 128, teacher.routing(), modes)?;
-    let shifted = make_samples(&mut rng, &mut seen, 512, width, 64, teacher.routing(), modes)?;
-    assert_eq!(seen.len(), train.len() + validation.len() + test.len() + shifted.len());
+    let train = make_samples(
+        &mut rng,
+        &mut seen,
+        training,
+        width,
+        128,
+        teacher.routing(),
+        modes,
+    )?;
+    let validation = make_samples(
+        &mut rng,
+        &mut seen,
+        512,
+        width,
+        128,
+        teacher.routing(),
+        modes,
+    )?;
+    let test = make_samples(
+        &mut rng,
+        &mut seen,
+        1_024,
+        width,
+        128,
+        teacher.routing(),
+        modes,
+    )?;
+    let shifted = make_samples(
+        &mut rng,
+        &mut seen,
+        512,
+        width,
+        64,
+        teacher.routing(),
+        modes,
+    )?;
+    assert_eq!(
+        seen.len(),
+        train.len() + validation.len() + test.len() + shifted.len()
+    );
 
     let began = Instant::now();
     // No references to validation, test, shifted or teacher are passed.
@@ -198,7 +239,12 @@ fn main() -> Result<(), String> {
         (0xb888_0022, 31),
         (0xb888_0033, 53),
     ] {
-        profile(&[GateKind::Majority, GateKind::Parity], 512, seed, planted_index)?;
+        profile(
+            &[GateKind::Majority, GateKind::Parity],
+            512,
+            seed,
+            planted_index,
+        )?;
         profile(
             &[GateKind::Majority, GateKind::Parity, GateKind::Parity],
             512,
@@ -231,15 +277,17 @@ mod tests {
         let base = FiveCircleHierarchy::from_modes(&modes, LeafRouting::Contiguous).unwrap();
         let mut rng = Random::new(97);
         let mut seen = BTreeSet::new();
-        let train =
-            make_samples(&mut rng, &mut seen, 64, 25, 128, base.routing(), &modes).unwrap();
+        let train = make_samples(&mut rng, &mut seen, 64, 25, 128, base.routing(), &modes).unwrap();
         let validation =
             make_samples(&mut rng, &mut seen, 64, 25, 128, base.routing(), &modes).unwrap();
         let test = make_samples(&mut rng, &mut seen, 64, 25, 128, base.routing(), &modes).unwrap();
         let shifted =
             make_samples(&mut rng, &mut seen, 64, 25, 64, base.routing(), &modes).unwrap();
         assert_eq!(seen.len(), 256);
-        assert_eq!(train.len() + validation.len() + test.len() + shifted.len(), 256);
+        assert_eq!(
+            train.len() + validation.len() + test.len() + shifted.len(),
+            256
+        );
         for row in train.iter().chain(&validation).chain(&test).chain(&shifted) {
             assert_eq!(row.label, oracle(&row.state, base.routing(), &modes));
         }
