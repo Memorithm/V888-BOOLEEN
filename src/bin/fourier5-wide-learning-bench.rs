@@ -36,6 +36,16 @@ fn hash(layer: usize, neuron: usize) -> u64 {
     x ^ (x >> 31)
 }
 
+fn complemented_parity() -> v888_booleen::fourier5::FiveCircle {
+    let original = GateKind::Parity.five_circle();
+    let mut circles = *original.circles();
+    for circle in &mut circles {
+        circle.phase_pi = !circle.phase_pi;
+    }
+    v888_booleen::fourier5::FiveCircle::new(circles, -original.bias())
+        .expect("valid complemented Walsh parity")
+}
+
 fn matches(predicted: u64, expected: u64) -> u32 {
     64 - (predicted ^ expected).count_ones()
 }
@@ -126,6 +136,7 @@ fn main() -> Result<(), String> {
         GateKind::Parity.five_circle(),
         GateKind::And.five_circle(),
         GateKind::Or.five_circle(),
+        complemented_parity(),
     ];
 
     // Synthetic teacher has INDEPENDENT per-neuron Fourier functions.
@@ -135,9 +146,9 @@ fn main() -> Result<(), String> {
         WidePlasticCircuit::new(&tree, &train).map_err(|e| format!("teacher: {e:?}"))?;
     teacher.install_models(|layer, neuron| {
         let bucket = hash(layer, neuron) % 10;
-        // Keep upper-layer teacher signals balanced: repeated AND/OR
-        // gates can collapse the only output to a constant, making
-        // apparently perfect output-only learning scientifically vacuous.
+        // Use independent parity/complement-parity at every higher
+        // node. Repeated majority can amplify bias until the single
+        // target output is almost constant (a trivial learning task).
         let choice = if layer == 0 {
             match bucket {
                 0 => 2,
@@ -146,9 +157,9 @@ fn main() -> Result<(), String> {
                 _ => 1,
             }
         } else if bucket % 2 == 0 {
-            0
-        } else {
             1
+        } else {
+            4
         };
         options[choice]
     });
