@@ -4,9 +4,7 @@
 //! This is a deliberately small structural control, not a biological or
 //! broad out-of-distribution generalization benchmark.
 use v888_booleen::fourier5::{Circle, FiveCircle, CIRCLES};
-use v888_booleen::fourier5_dynamic::{
-    train_context_gates, GatedFiveCircle, RadiusGate,
-};
+use v888_booleen::fourier5_dynamic::{train_context_gates, GatedFiveCircle, RadiusGate};
 
 fn examples(start: u8, end: u8) -> Vec<(u8, u8, bool)> {
     let mut result = Vec::new();
@@ -35,8 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let initial = GatedFiveCircle::new(base, gates).map_err(|err| format!("{err:?}"))?;
     let train = examples(0, 16); // low fifth bit
     let test = examples(16, 32); // held-out high fifth bit
-    let report = train_context_gates(initial, &train, 64)
-        .map_err(|err| format!("{err:?}"))?;
+    let report = train_context_gates(initial, &train, 64).map_err(|err| format!("{err:?}"))?;
 
     let static_correct = test
         .iter()
