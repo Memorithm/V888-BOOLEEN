@@ -109,10 +109,7 @@ pub fn walsh_transform(table: &[bool; TABLE_SIZE]) -> [i32; TABLE_SIZE] {
 
 /// Reference reconstruction using ALL 32 modes, not a five-circle model.
 /// Its score is exactly +32 for false and -32 for true.
-pub fn full_walsh_score(
-    coefficients: &[i32; TABLE_SIZE],
-    input: u8,
-) -> Result<i64, FourierError> {
+pub fn full_walsh_score(coefficients: &[i32; TABLE_SIZE], input: u8) -> Result<i64, FourierError> {
     valid_input(input)?;
     Ok(coefficients
         .iter()
@@ -234,10 +231,7 @@ mod tests {
         };
         let neuron = FiveCircle::new(circles, 0).unwrap();
         for input in 0..TABLE_SIZE {
-            assert_eq!(
-                neuron.predict(input as u8),
-                Ok(input.count_ones() % 2 != 0)
-            );
+            assert_eq!(neuron.predict(input as u8), Ok(input.count_ones() % 2 != 0));
         }
     }
 
