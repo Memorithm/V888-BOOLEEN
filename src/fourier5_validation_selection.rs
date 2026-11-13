@@ -143,10 +143,34 @@ pub fn select_or_keep_frozen(
     template: CreditConfig,
     seeds: &[u64],
 ) -> Result<GuardedSelection, CreditError> {
+    select_or_keep_frozen_with_class_floor(
+        base, train, validation, template, seeds, 0, 1,
+    )
+}
+
+/// Opt-in deployment guard: require at least `min_recall_num / min_recall_den`
+/// recall for EACH label on independent VALID. No TEST/OOD access. This
+/// prevents accepting a balanced-score improvement that sacrifices one class
+/// below the pre-registered minimum. A failed floor keeps the frozen circuit;
+/// it does not claim that the frozen circuit itself meets the floor.
+pub fn select_or_keep_frozen_with_class_floor(
+    base: &FiveCircleHierarchy,
+    train: &[RoutingSample],
+    validation: &[RoutingSample],
+    template: CreditConfig,
+    seeds: &[u64],
+    min_recall_num: usize,
+    min_recall_den: usize,
+) -> Result<GuardedSelection, CreditError> {
+    if min_recall_den == 0 || min_recall_num > min_recall_den {
+        return Err(CreditError::InvalidBudget);
+    }
     // The selector performs split disjointness, class, width and budget checks.
     let selected = select_by_validation(base, train, validation, template, seeds)?;
     let frozen = evaluate(base, validation)?;
-    if strictly_better_balanced(&selected.validation, &frozen) {
+    if strictly_better_balanced(&selected.validation, &frozen)
+        && meets_class_floor(&selected.validation, min_recall_num, min_recall_den)
+    {
         Ok(GuardedSelection::Trained(selected))
     } else {
         Ok(GuardedSelection::Frozen {
@@ -163,12 +187,52 @@ fn strictly_better_balanced(candidate: &Confusion, reference: &Confusion) -> boo
     a * d > c * b
 }
 
+
+/// Exact integer comparison, avoiding floating-point threshold drift.
+fn meets_class_floor(c: &Confusion, numerator: usize, denominator: usize) -> bool {
+    let pos = c.tp as u128 + c.fn_ as u128;
+    let neg = c.tn as u128 + c.fp as u128;
+    pos != 0
+        && neg != 0
+        && (c.tp as u128) * (denominator as u128) >= pos * (numerator as u128)
+        && (c.tn as u128) * (denominator as u128) >= neg * (numerator as u128)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::fourier5_counterfactual_credit::{CreditPolicy, CreditScope};
     use crate::fourier5_hierarchy::{GateKind, LeafRouting};
     use crate::BooleanState;
+
+    #[test]
+    fn class_floor_blocks_single_class_collapse() {
+        let collapsed = Confusion { tp: 8, tn: 0, fp: 2, fn_: 0 };
+        let balanced = Confusion { tp: 7, tn: 1, fp: 1, fn_: 1 };
+        assert!(!meets_class_floor(&collapsed, 1, 2));
+        assert!(meets_class_floor(&balanced, 1, 2));
+        assert!(meets_class_floor(&collapsed, 0, 1));
+    }
+
+    #[test]
+    fn class_floor_rejects_invalid_ratio_before_training() {
+        let base = FiveCircleHierarchy::from_modes(
+            &[GateKind::Majority], LeafRouting::Contiguous,
+        ).unwrap();
+        let config = CreditConfig {
+            scope: CreditScope::OutputParameters,
+            policy: CreditPolicy::Greedy,
+            rounds: 1,
+            proposals_per_round: 2,
+            seed: 1,
+        };
+        assert!(matches!(
+            select_or_keep_frozen_with_class_floor(
+                &base, &[], &[], config, &[1], 2, 1,
+            ),
+            Err(CreditError::InvalidBudget)
+        ));
+    }
 
     #[test]
     fn frozen_control_wins_ties_and_loses_to_better_balanced_model() {
