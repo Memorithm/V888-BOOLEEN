@@ -245,6 +245,12 @@ fn power_marker(label: &str) -> Result<(), String> {
 /// parameters and evaluates identical proposals. Energy includes model
 /// initialization, acceptance/rebuilds and the complete TRAIN loop, but
 /// excludes teacher generation and VALID/TEST scoring (same in both arms).
+struct EnergyExpected {
+    decisions: Vec<(u64, bool)>,
+    valid: u32,
+    test: u32,
+}
+
 fn energy_experiment(width: usize, seed: u64) -> Result<(), String> {
     let tree = WideFiveTree::new(width).map_err(|e| format!("{e:?}"))?;
     let train = words(width, seed ^ 0x1111_2222_3333_4444);
@@ -299,7 +305,7 @@ fn energy_experiment(width: usize, seed: u64) -> Result<(), String> {
     } else {
         ["CACHED", "FULL"]
     };
-    let mut expected: Option<(Vec<(u64, bool)>, u32, u32)> = None;
+    let mut expected: Option<EnergyExpected> = None;
     for arm in order {
         let phase = format!("S{seed}_{arm}");
         power_marker(&format!("{phase}_BEGIN"))?;
@@ -324,12 +330,19 @@ fn energy_experiment(width: usize, seed: u64) -> Result<(), String> {
         let valid_score = valid_hits(&circuit, &valid, valid_target)?;
         let test_score = valid_hits(&circuit, &test, test_target)?;
         let train_score = hits(circuit.output(), target);
-        if let Some((previous, prior_valid, prior_test)) = &expected {
-            if &decisions != previous || valid_score != *prior_valid || test_score != *prior_test {
+        if let Some(reference) = &expected {
+            if decisions != reference.decisions
+                || valid_score != reference.valid
+                || test_score != reference.test
+            {
                 return Err("full/cache physical energy arms diverged".into());
             }
         } else {
-            expected = Some((decisions, valid_score, test_score));
+            expected = Some(EnergyExpected {
+                decisions,
+                valid: valid_score,
+                test: test_score,
+            });
         }
         println!(
             "V888_TRAIN_ENERGY_RESULT phase={phase} seed={seed} arm={arm}              proposals={} accepted={accepted} train={train_score}/64              valid={valid_score}/64 test={test_score}/64 elapsed_us={elapsed_us}              matched_all_decisions=true",
