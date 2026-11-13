@@ -5,9 +5,7 @@
 //! increases an existing circle's radius. The base neuron is immutable.
 //! Synthetic supervised examples are not anatomical evidence.
 use crate::fourier5::{FiveCircle, CIRCLES};
-use crate::fourier5_dynamic::{
-    train_context_gates, GatedFiveCircle, ModulationError, RadiusGate,
-};
+use crate::fourier5_dynamic::{train_context_gates, GatedFiveCircle, ModulationError, RadiusGate};
 
 pub const MAX_CONTEXT_SAMPLES: usize = 512;
 pub const MAX_CONTEXT_EPOCHS: usize = 64;
@@ -212,9 +210,12 @@ mod tests {
         assert_eq!(report.model.gates()[0].boost, 2);
         assert_eq!(report.train_correct, train.len());
         assert_eq!(
-            report
-                .model
-                .correct_count(&test.iter().map(|s| (s.input, s.context, s.fire)).collect::<Vec<_>>()),
+            report.model.correct_count(
+                &test
+                    .iter()
+                    .map(|s| (s.input, s.context, s.fire))
+                    .collect::<Vec<_>>()
+            ),
             Ok(test.len())
         );
         assert_eq!(report.model.base(), &base());
