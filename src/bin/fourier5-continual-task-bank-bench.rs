@@ -80,9 +80,13 @@ fn feature_codes_seen(items: &[TaskBatch]) -> u32 {
             if item.observed & (1_u64 << lane) == 0 {
                 continue;
             }
-            let input = item.features.iter().enumerate().fold(0_u8, |acc, (i, plane)| {
-                acc | ((((plane >> lane) & 1) as u8) << i)
-            });
+            let input = item
+                .features
+                .iter()
+                .enumerate()
+                .fold(0_u8, |acc, (i, plane)| {
+                    acc | ((((plane >> lane) & 1) as u8) << i)
+                });
             codes |= 1_u32 << input;
         }
     }
@@ -94,7 +98,9 @@ fn feature_plane_set(
     source: &[u64],
     feature_layer: usize,
 ) -> Result<[u64; CIRCLES], String> {
-    let trace = circuit.evaluate_trace(source).map_err(|e| format!("{e:?}"))?;
+    let trace = circuit
+        .evaluate_trace(source)
+        .map_err(|e| format!("{e:?}"))?;
     let layer = trace.get(feature_layer).ok_or("missing feature layer")?;
     if layer.len() < CIRCLES {
         return Err("not enough distinct feature neurons".into());
@@ -130,18 +136,22 @@ fn labeled(features: &[[u64; CIRCLES]], model: FiveCircle, train: bool) -> Vec<T
         .map(|planes| TaskBatch {
             features: planes,
             labels: scalar(model, planes),
-            observed: if train { !heldout_mask(planes) } else { u64::MAX },
+            observed: if train {
+                !heldout_mask(planes)
+            } else {
+                u64::MAX
+            },
         })
         .collect()
 }
 
-fn score_model(
-    model: FiveCircle,
-    samples: &[TaskBatch],
-    novel_only: bool,
-) -> (u64, u64) {
+fn score_model(model: FiveCircle, samples: &[TaskBatch], novel_only: bool) -> (u64, u64) {
     samples.iter().fold((0, 0), |(right, total), batch| {
-        let mask = if novel_only { heldout_mask(batch.features) } else { u64::MAX };
+        let mask = if novel_only {
+            heldout_mask(batch.features)
+        } else {
+            u64::MAX
+        };
         let difference = (scalar(model, batch.features) ^ batch.labels) & mask;
         (
             right + u64::from(mask.count_ones() - difference.count_ones()),
@@ -150,8 +160,14 @@ fn score_model(
     })
 }
 
-fn score_bank(bank: &TaskHeadBank, task: usize, samples: &[TaskBatch]) -> Result<(u64, u64), String> {
-    let model = bank.model(task).map_err(|e| format!("{e:?}"))?
+fn score_bank(
+    bank: &TaskHeadBank,
+    task: usize,
+    samples: &[TaskBatch],
+) -> Result<(u64, u64), String> {
+    let model = bank
+        .model(task)
+        .map_err(|e| format!("{e:?}"))?
         .ok_or("missing trained head")?;
     Ok(score_model(model, samples, false))
 }
@@ -170,21 +186,48 @@ struct TaskRecord {
 fn experiment(tree: &WideFiveTree, seed: u64, count: usize) -> Result<(), String> {
     let start = Instant::now();
     let width = tree.input_bits();
-    let feature_layer = tree.depth().checked_sub(3).ok_or("hierarchy depth under 3")?;
+    let feature_layer = tree
+        .depth()
+        .checked_sub(3)
+        .ok_or("hierarchy depth under 3")?;
     let first_input = words(width, seed ^ 0x9111_0111, false);
     let circuit = WidePlasticCircuit::new(tree, &first_input).map_err(|e| format!("{e:?}"))?;
     let mut train_features = vec![feature_plane_set(&circuit, &first_input, feature_layer)?];
     train_features.extend(more_features(
-        &circuit, width, feature_layer, seed, 0xa111_0001, TRAIN_BATCHES - 1, false,
+        &circuit,
+        width,
+        feature_layer,
+        seed,
+        0xa111_0001,
+        TRAIN_BATCHES - 1,
+        false,
     )?);
     let valid_features = more_features(
-        &circuit, width, feature_layer, seed, 0xb222_0002, HELDOUT_BATCHES, false,
+        &circuit,
+        width,
+        feature_layer,
+        seed,
+        0xb222_0002,
+        HELDOUT_BATCHES,
+        false,
     )?;
     let test_features = more_features(
-        &circuit, width, feature_layer, seed, 0xc333_0003, HELDOUT_BATCHES, false,
+        &circuit,
+        width,
+        feature_layer,
+        seed,
+        0xc333_0003,
+        HELDOUT_BATCHES,
+        false,
     )?;
     let ood_features = more_features(
-        &circuit, width, feature_layer, seed, 0xd444_0004, HELDOUT_BATCHES, true,
+        &circuit,
+        width,
+        feature_layer,
+        seed,
+        0xd444_0004,
+        HELDOUT_BATCHES,
+        true,
     )?;
     let possible_masks: Vec<u8> = (1..=31_u8)
         .filter(|mask| mask.count_ones() >= 2 && *mask != 31)
@@ -195,9 +238,15 @@ fn experiment(tree: &WideFiveTree, seed: u64, count: usize) -> Result<(), String
         .map_err(|e| format!("{e:?}"))?;
     let mut records: Vec<TaskRecord> = Vec::new();
     let feature_valid_ones: u64 = valid_features
-        .iter().flat_map(|item| item.iter()).map(|x| u64::from(x.count_ones())).sum();
+        .iter()
+        .flat_map(|item| item.iter())
+        .map(|x| u64::from(x.count_ones()))
+        .sum();
     let feature_ood_ones: u64 = ood_features
-        .iter().flat_map(|item| item.iter()).map(|x| u64::from(x.count_ones())).sum();
+        .iter()
+        .flat_map(|item| item.iter())
+        .map(|x| u64::from(x.count_ones()))
+        .sum();
     println!(
         "TASK_FEATURE_DISTRIBUTION seed={seed} width={width} backbone_nodes={}          feature_layer={feature_layer} valid_ones={feature_valid_ones}/640          ood_ones={feature_ood_ones}/640 ood_sources_biased_p025=true          task_heads_new=true backbone_frozen=true",
         tree.logical_neurons()
@@ -226,9 +275,8 @@ fn experiment(tree: &WideFiveTree, seed: u64, count: usize) -> Result<(), String
             return Err("missing Fourier candidate evaluations".into());
         }
         let saved = bank.checkpoint();
-        let restored = TaskHeadBank::restore(
-            &saved, count, feature_layer as u32, FEATURE_NODES,
-        ).map_err(|e| format!("{e:?}"))?;
+        let restored = TaskHeadBank::restore(&saved, count, feature_layer as u32, FEATURE_NODES)
+            .map_err(|e| format!("{e:?}"))?;
         if saved != restored.checkpoint() || bank.learned_count() != task + 1 {
             return Err("persistent checkpoint or task count changed".into());
         }
@@ -247,10 +295,16 @@ fn experiment(tree: &WideFiveTree, seed: u64, count: usize) -> Result<(), String
                 observed: b.observed,
             })
             .collect();
-        shuffled.fit(task, &shuffled_train).map_err(|e| format!("{e:?}"))?;
-        let head = bank.model(task).map_err(|e| format!("{e:?}"))?
+        shuffled
+            .fit(task, &shuffled_train)
+            .map_err(|e| format!("{e:?}"))?;
+        let head = bank
+            .model(task)
+            .map_err(|e| format!("{e:?}"))?
             .ok_or("task head not learned")?;
-        let shuffled_head = shuffled.model(task).map_err(|e| format!("{e:?}"))?
+        let shuffled_head = shuffled
+            .model(task)
+            .map_err(|e| format!("{e:?}"))?
             .ok_or("negative control not learned")?;
         let train_score = score_model(head, &train, false);
         let valid_score = score_model(head, &valid, false);
@@ -263,7 +317,10 @@ fn experiment(tree: &WideFiveTree, seed: u64, count: usize) -> Result<(), String
             return Err("too few supervised or combinatorially unseen examples".into());
         }
         let record = TaskRecord {
-            valid, test, ood, previous_test: test_score,
+            valid,
+            test,
+            ood,
+            previous_test: test_score,
         };
         records.push(record);
         // Replay every earlier task's independent TEST after EVERY new task.
@@ -342,7 +399,8 @@ mod tests {
     fn heldout_masks_exclude_exactly_8_of_32_feature_codes() {
         let mut heldout = 0;
         for code in 0..32 {
-            let features = std::array::from_fn(|bit| if code & (1 << bit) != 0 { u64::MAX } else { 0 });
+            let features =
+                std::array::from_fn(|bit| if code & (1 << bit) != 0 { u64::MAX } else { 0 });
             let mask = heldout_mask(features);
             heldout += usize::from(mask == u64::MAX);
         }
