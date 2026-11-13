@@ -249,6 +249,27 @@ impl FiveCircleHierarchy {
         &self.routing
     }
 
+    /// Produce another frozen hierarchy with the *same* Fourier neurons
+    /// and compiled tables, but an explicitly validated leaf permutation.
+    /// Reusing the compiled tables avoids recompiling 32 truth-table entries
+    /// per neuron during bounded routing selection. No weights are changed.
+    pub fn rerouted(&self, routing: Vec<u16>) -> Result<Self, HierarchyError> {
+        if routing.len() != self.routing.len() {
+            return Err(HierarchyError::InvalidRouting);
+        }
+        let mut seen = vec![false; self.routing.len()];
+        for &source in &routing {
+            let index = usize::from(source);
+            if index >= seen.len() || seen[index] {
+                return Err(HierarchyError::InvalidRouting);
+            }
+            seen[index] = true;
+        }
+        let mut updated = self.clone();
+        updated.routing = routing;
+        Ok(updated)
+    }
+
     #[must_use]
     pub fn logical_wiring_and_model_bytes(&self) -> usize {
         std::mem::size_of_val(self.routing.as_slice())
