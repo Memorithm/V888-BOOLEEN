@@ -103,45 +103,23 @@ fn in_candidate_bank(
     if base.routing() == teacher.routing() {
         return Ok(true);
     }
+    // Exhaust the ENTIRE bounded 0/1/2/3-swap space. No teacher labels
+    // or train/test examples are used to create the proposals.
     for i in 0..swaps.len() {
-        for j in i..swaps.len() {
-            for k in j..swaps.len() {
-                let positions: Vec<usize> = [i, j, k]
-                    .into_iter()
-                    .filter(|n| *n != swaps.len())
-                    .collect();
-                if i == j && j == k {
-                    if multiswap_model(base, swaps, &[i])
-                        .map_err(|e| format!("{e:?}"))?
-                        .routing()
-                        == teacher.routing()
-                    {
-                        return Ok(true);
-                    }
-                } else if i == j && j != k {
-                    if multiswap_model(base, swaps, &[i, k])
-                        .map_err(|e| format!("{e:?}"))?
-                        .routing()
-                        == teacher.routing()
-                    {
-                        return Ok(true);
-                    }
-                } else if i < j && j == k {
-                    if multiswap_model(base, swaps, &[i, j])
-                        .map_err(|e| format!("{e:?}"))?
-                        .routing()
-                        == teacher.routing()
-                    {
-                        return Ok(true);
-                    }
-                } else if i < j && j < k {
-                    if multiswap_model(base, swaps, &positions)
-                        .map_err(|e| format!("{e:?}"))?
-                        .routing()
-                        == teacher.routing()
-                    {
-                        return Ok(true);
-                    }
+        let one = multiswap_model(base, swaps, &[i]).map_err(|e| format!("{e:?}"))?;
+        if one.routing() == teacher.routing() {
+            return Ok(true);
+        }
+        for j in i + 1..swaps.len() {
+            let two = multiswap_model(base, swaps, &[i, j]).map_err(|e| format!("{e:?}"))?;
+            if two.routing() == teacher.routing() {
+                return Ok(true);
+            }
+            for k in j + 1..swaps.len() {
+                let three = multiswap_model(base, swaps, &[i, j, k])
+                    .map_err(|e| format!("{e:?}"))?;
+                if three.routing() == teacher.routing() {
+                    return Ok(true);
                 }
             }
         }
