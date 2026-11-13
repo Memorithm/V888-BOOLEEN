@@ -122,6 +122,20 @@ impl<'a> WidePlasticCircuit<'a> {
         self.tree.cache_word_bytes()
     }
 
+    /// Move the persistent model to a new 64-lane training minibatch.
+    /// All 1,562,501 Fourier models remain unchanged. This is a FULL
+    /// cache rebuild (not an incremental source update); its cost must
+    /// be measured separately. Outstanding proposals become stale.
+    pub fn rebind_sources(&mut self, sources: &'a [u64]) -> Result<(), WideError> {
+        if sources.len() != self.tree.input_bits() {
+            return Err(WideError::InvalidInput);
+        }
+        self.sources = sources;
+        self.rebuild_cache();
+        self.generation += 1;
+        Ok(())
+    }
+
     pub fn model(&self, layer: usize, neuron: usize) -> Result<FiveCircle, WideError> {
         self.models
             .get(layer)
@@ -366,6 +380,36 @@ mod tests {
                 seed
             })
             .collect()
+    }
+
+    #[test]
+    fn rebinding_preserves_learned_parameters_and_invalidates_stale_proposals() {
+        let tree = WideFiveTree::new(125).unwrap();
+        let first = planes(125, 123);
+        let second = planes(125, 456);
+        let mut circuit = WidePlasticCircuit::new(&tree, &first).unwrap();
+        let chosen = GateKind::And.five_circle();
+        circuit.accept(circuit.propose(0, 0, chosen).unwrap()).unwrap();
+        let stale = circuit.propose(0, 1, GateKind::Or.five_circle()).unwrap();
+        let previous_commits = circuit.commits();
+        circuit.rebind_sources(&second).unwrap();
+        assert_eq!(circuit.commits(), previous_commits);
+        assert_eq!(circuit.model(0, 0), Ok(chosen));
+        assert!(circuit.accept(stale).is_err());
+        assert_eq!(
+            circuit.output(),
+            circuit.evaluate_trace(&second).unwrap().last().unwrap()[0]
+        );
+        assert_eq!(circuit.rebind_sources(&first[..124]), Err(WideError::InvalidInput));
+        assert_eq!(
+            circuit.output(),
+            circuit.evaluate_trace(&second).unwrap().last().unwrap()[0]
+        );
+        circuit.rebind_sources(&first).unwrap();
+        assert_eq!(
+            circuit.output(),
+            circuit.evaluate_trace(&first).unwrap().last().unwrap()[0]
+        );
     }
 
     #[test]
