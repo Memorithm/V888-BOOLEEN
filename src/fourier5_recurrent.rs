@@ -191,7 +191,7 @@ impl RecurrentFiveCircle {
     #[must_use]
     pub fn estimated_state_and_wiring_bytes(&self) -> usize {
         self.node_count() * std::mem::size_of::<WiredNeuron>()
-            + self.state.words().len() * std::mem::size_of::<u64>()
+            + std::mem::size_of_val(self.state.words())
     }
 
     /// One synchronous recurrent update; compares original previous and next
