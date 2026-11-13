@@ -155,11 +155,7 @@ pub fn fit_hidden_with_teacher_taps(
             let local: Vec<(u8,bool)> = actual.iter().zip(&teacher_traces)
                 .map(|(observed, goal)| (observed[layer].0[neuron],goal[layer].1[neuron]))
                 .collect();
-            let original = model.layer_trace(&train[0].state)?;
-            // The parameters of this neuron can be retrieved without a
-            // second public getter by using an explicit hierarchy API.
             let previous = model.layer_model(layer, neuron)?;
-            debug_assert_eq!(original[layer].0.len(), count);
             let (learned, updates, visits, hits) = fit_node(previous, &local, epochs);
             changed_neurons += usize::from(learned != previous);
             hidden_neurons += 1;
