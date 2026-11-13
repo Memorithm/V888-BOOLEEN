@@ -141,9 +141,7 @@ impl SharedContextNeuron {
             || current.len() > 1_024
             || current.iter().all(|b| b.observed == 0)
             || replay.len() > 128
-            || replay
-                .iter()
-                .any(|r| r.is_empty() || r.len() > 1_024)
+            || replay.iter().any(|r| r.is_empty() || r.len() > 1_024)
         {
             return Err(SharedError::InvalidTraining);
         }
@@ -172,8 +170,7 @@ impl SharedContextNeuron {
                     continue;
                 }
                 let improvement = score_set(mask, phase, current);
-                if improvement > selected.2
-                    || (improvement == selected.2 && retained > selected.3)
+                if improvement > selected.2 || (improvement == selected.2 && retained > selected.3)
                 {
                     selected = (mask, phase, improvement, retained);
                 }
@@ -195,7 +192,10 @@ impl SharedContextNeuron {
             candidates_tested: tested,
             current_before: old_cur,
             current_after: selected.2,
-            current_total: current.iter().map(|x| u64::from(x.observed.count_ones())).sum(),
+            current_total: current
+                .iter()
+                .map(|x| u64::from(x.observed.count_ones()))
+                .sum(),
             previous_before,
             previous_after: selected.3,
             changed_coupling_bits,
@@ -342,6 +342,9 @@ mod tests {
         let before = model.clone();
         assert_eq!(model.fit(&[], &[]), Err(SharedError::InvalidTraining));
         assert_eq!(before, model);
-        assert_eq!(SharedContextNeuron::new(7, [0, 0, 2]), Err(SharedError::InvalidFeatures));
+        assert_eq!(
+            SharedContextNeuron::new(7, [0, 0, 2]),
+            Err(SharedError::InvalidFeatures)
+        );
     }
 }
