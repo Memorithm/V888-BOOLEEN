@@ -338,10 +338,7 @@ impl FiveCircleHierarchy {
     /// EVERY level. No labels, optimization or neuron mutation occurs here.
     /// Synthetic teacher traces may be used to supervise hidden neurons on
     /// TRAIN only, but are not available in a real uninstrumented network.
-    pub fn layer_trace(
-        &self,
-        state: &BooleanState,
-    ) -> Result<HierarchyLayerTrace, HierarchyError> {
+    pub fn layer_trace(&self, state: &BooleanState) -> Result<HierarchyLayerTrace, HierarchyError> {
         if state.len() != self.input_bits() {
             return Err(HierarchyError::InvalidInput);
         }
