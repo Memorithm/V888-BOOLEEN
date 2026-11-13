@@ -84,6 +84,10 @@ pub enum LeafRouting {
 }
 
 #[derive(Clone, Debug)]
+/// Observable five-bit presynaptic words and corresponding Boolean outputs
+/// for every layer of a frozen or experimentally adapted hierarchy.
+pub type HierarchyLayerTrace = Vec<(Vec<u8>, Vec<bool>)>;
+
 pub struct FiveCircleHierarchy {
     depth: usize,
     routing: Vec<u16>,
@@ -337,7 +341,7 @@ impl FiveCircleHierarchy {
     pub fn layer_trace(
         &self,
         state: &BooleanState,
-    ) -> Result<Vec<(Vec<u8>, Vec<bool>)>, HierarchyError> {
+    ) -> Result<HierarchyLayerTrace, HierarchyError> {
         if state.len() != self.input_bits() {
             return Err(HierarchyError::InvalidInput);
         }
