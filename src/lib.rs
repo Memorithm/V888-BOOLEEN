@@ -7,6 +7,7 @@ pub mod consolidation;
 pub mod consolidation_scale;
 pub mod eligibility_trace;
 pub mod engine;
+pub mod fourier5;
 pub mod full_synapse;
 pub mod gates;
 pub mod generalization_bench;
