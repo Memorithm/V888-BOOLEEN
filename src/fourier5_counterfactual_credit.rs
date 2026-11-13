@@ -10,6 +10,7 @@ use std::collections::BTreeSet;
 
 use crate::fourier5::{Circle, FiveCircle, CIRCLES};
 use crate::fourier5_hierarchy::{FiveCircleHierarchy, HierarchyError, BITSLICE_LANES};
+use crate::fourier5_incremental::{FiveCircleIncrementalCache, PackedIntervention};
 use crate::fourier5_routing_search::{RoutingSample, MAX_ROUTING_TRAIN};
 
 pub const MAX_CREDIT_ROUNDS: usize = 16;
@@ -31,6 +32,13 @@ pub enum CreditPolicy {
     /// Blindly choose an intervention before seeing its scored outputs.
     /// Every proposed candidate is still evaluated for a matched compute budget.
     Blind,
+}
+
+/// Inference paths evaluated under identical interventions and randomness.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CreditEvaluationMode {
+    Incremental,
+    Full,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,6 +76,18 @@ pub struct CreditResult {
     pub accepted_routing_moves: usize,
     pub rounds_without_improvement: usize,
     pub rounds_run: usize,
+    /// Gate calls needed to build all immutable 64-lane round baselines,
+    /// including the initial complete evaluation.
+    pub cache_build_gate_evaluations: usize,
+    /// Exact gate calls used to evaluate only counterfactual dependency cones.
+    pub delta_gate_evaluations: usize,
+    /// Gate calls that full-model reevaluation of every candidate would need.
+    /// Counts 64-lane gates, NOT wall time or scalar Boolean predictions.
+    pub full_recompute_gate_evaluations: usize,
+    /// Real gate evaluations of the chosen evaluation mode, ignoring
+    /// input transposition and model construction in both modes.
+    pub actual_gate_evaluations: usize,
+    pub evaluation_mode: CreditEvaluationMode,
 }
 
 #[derive(Clone, Copy)]
@@ -150,7 +170,7 @@ fn perturb_parameter(
     model: &FiveCircleHierarchy,
     scope: CreditScope,
     random: &mut Xorshift,
-) -> Result<FiveCircleHierarchy, CreditError> {
+) -> Result<(FiveCircleHierarchy, PackedIntervention), CreditError> {
     let depth = model.depth();
     let allowed = if scope == CreditScope::OutputParameters {
         1
@@ -191,7 +211,14 @@ fn perturb_parameter(
         circles[coordinate].phase_pi = value < 0;
     }
     let next = FiveCircle::new(circles, bias).expect("unchanged valid Walsh masks");
-    Ok(model.with_neuron_parameters(layer, node, next)?)
+    Ok((
+        model.with_neuron_parameters(layer, node, next)?,
+        PackedIntervention::Parameter {
+            layer,
+            neuron: node,
+            model: next,
+        },
+    ))
 }
 
 /// Explicit top-level cross-group swap: every source remains used exactly
@@ -199,7 +226,7 @@ fn perturb_parameter(
 fn perturb_route(
     model: &FiveCircleHierarchy,
     random: &mut Xorshift,
-) -> Result<FiveCircleHierarchy, CreditError> {
+) -> Result<(FiveCircleHierarchy, PackedIntervention), CreditError> {
     let width = model.input_bits();
     let stride = width / CIRCLES;
     let a = (random.next() % width as u64) as usize;
@@ -208,7 +235,13 @@ fn perturb_route(
     let b = other_group * stride + (random.next() % stride as u64) as usize;
     let mut routing = model.routing().to_vec();
     routing.swap(a, b);
-    Ok(model.rerouted(routing)?)
+    Ok((
+        model.rerouted(routing)?,
+        PackedIntervention::LeafSwap {
+            first: a,
+            second: b,
+        },
+    ))
 }
 
 /// Select among interventions by measuring exact OUTPUT LABEL error on
@@ -220,6 +253,18 @@ pub fn fit_final_loss(
     base: &FiveCircleHierarchy,
     train: &[RoutingSample],
     config: CreditConfig,
+) -> Result<CreditResult, CreditError> {
+    fit_final_loss_with_evaluator(base, train, config, CreditEvaluationMode::Incremental)
+}
+
+/// Reference mode uses the existing full model evaluator with the same
+/// proposal stream, accepted moves and scoring. It is deliberately retained
+/// to compare measured end-to-end runtimes, not only nominal gate counts.
+pub fn fit_final_loss_with_evaluator(
+    base: &FiveCircleHierarchy,
+    train: &[RoutingSample],
+    config: CreditConfig,
+    evaluation_mode: CreditEvaluationMode,
 ) -> Result<CreditResult, CreditError> {
     if base.depth() < 2
         || !(1..=MAX_CREDIT_ROUNDS).contains(&config.rounds)
@@ -235,8 +280,37 @@ pub fn fit_final_loss(
     let mut accepted_parameter_moves = 0;
     let mut accepted_routing_moves = 0;
     let mut rounds_without_improvement = 0;
+    let mut cache_build_gate_evaluations = batches.len() * base.neuron_count();
+    let mut delta_gate_evaluations = 0;
 
     for _ in 0..config.rounds {
+        // One full 64-lane baseline traversal per batch per round.
+        // Interventions then evaluate *only* gates inside changed cones.
+        let caches = if evaluation_mode == CreditEvaluationMode::Incremental {
+            let cached: Vec<_> = batches
+                .iter()
+                .map(|batch| FiveCircleIncrementalCache::new(&model, &batch.planes))
+                .collect::<Result<_, _>>()?;
+            cache_build_gate_evaluations += cached
+                .iter()
+                .map(FiveCircleIncrementalCache::build_gate_evaluations)
+                .sum::<usize>();
+            debug_assert_eq!(
+                cached
+                    .iter()
+                    .zip(&batches)
+                    .map(|(cache, batch)| {
+                        (BITSLICE_LANES as u32
+                            - (cache.baseline_output() ^ batch.labels).count_ones())
+                            as usize
+                    })
+                    .sum::<usize>(),
+                hits
+            );
+            Some(cached)
+        } else {
+            None
+        };
         let blind_index = (rng.next() % config.proposals_per_round as u64) as usize;
         let mut winning_model: Option<FiveCircleHierarchy> = None;
         let mut winning_hits = hits;
@@ -247,12 +321,24 @@ pub fn fit_final_loss(
                 CreditScope::JointHiddenAndRouting => rng.next() & 3 == 0,
                 CreditScope::HiddenParameters | CreditScope::OutputParameters => false,
             };
-            let proposal = if route {
+            let (proposal, delta) = if route {
                 perturb_route(&model, &mut rng)?
             } else {
                 perturb_parameter(&model, config.scope, &mut rng)?
             };
-            let candidate_hits = correct(&proposal, &batches)?;
+            let candidate_hits = if let Some(ref cached) = caches {
+                let mut correct_count = 0;
+                for (cache, batch) in cached.iter().zip(&batches) {
+                    let evaluation = cache.evaluate(delta)?;
+                    delta_gate_evaluations += evaluation.gate_evaluations;
+                    correct_count += (BITSLICE_LANES as u32
+                        - (evaluation.output ^ batch.labels).count_ones())
+                        as usize;
+                }
+                correct_count
+            } else {
+                correct(&proposal, &batches)?
+            };
             let chosen = match config.policy {
                 CreditPolicy::Greedy => candidate_hits > winning_hits,
                 CreditPolicy::Blind => index == blind_index,
@@ -279,6 +365,12 @@ pub fn fit_final_loss(
         }
     }
     let evaluations = config.rounds * config.proposals_per_round;
+    let full_recompute_gate_evaluations = (evaluations + 1) * batches.len() * base.neuron_count();
+    let actual_gate_evaluations = if evaluation_mode == CreditEvaluationMode::Incremental {
+        cache_build_gate_evaluations + delta_gate_evaluations
+    } else {
+        full_recompute_gate_evaluations
+    };
     Ok(CreditResult {
         model,
         initial_train_correct: initial,
@@ -290,6 +382,11 @@ pub fn fit_final_loss(
         accepted_routing_moves,
         rounds_without_improvement,
         rounds_run: config.rounds,
+        cache_build_gate_evaluations,
+        delta_gate_evaluations,
+        full_recompute_gate_evaluations,
+        actual_gate_evaluations,
+        evaluation_mode,
     })
 }
 
@@ -416,6 +513,77 @@ mod tests {
         assert_eq!(output.model.routing(), base.routing());
         for i in 0..5 {
             assert_eq!(output.model.layer_model(0, i), base.layer_model(0, i));
+        }
+    }
+
+    #[test]
+    fn cached_and_full_credit_proposals_select_the_exact_same_models() {
+        let teacher = FiveCircleHierarchy::from_modes(
+            &[GateKind::Majority, GateKind::Parity, GateKind::Parity],
+            LeafRouting::SeededShuffle(77),
+        )
+        .unwrap();
+        let frozen = FiveCircleHierarchy::from_modes(
+            &[GateKind::Majority, GateKind::Parity, GateKind::Parity],
+            LeafRouting::Contiguous,
+        )
+        .unwrap();
+        let student = frozen
+            .with_neuron_parameters(0, 0, GateKind::And.five_circle())
+            .unwrap();
+        let train = sample(&teacher, 128);
+        for scope in [
+            CreditScope::HiddenParameters,
+            CreditScope::OutputParameters,
+            CreditScope::LeafRouting,
+            CreditScope::JointHiddenAndRouting,
+        ] {
+            for policy in [CreditPolicy::Greedy, CreditPolicy::Blind] {
+                let settings = CreditConfig {
+                    scope,
+                    policy,
+                    rounds: 3,
+                    proposals_per_round: 32,
+                    seed: 9913,
+                };
+                let fast = fit_final_loss_with_evaluator(
+                    &student,
+                    &train,
+                    settings,
+                    CreditEvaluationMode::Incremental,
+                )
+                .unwrap();
+                let full = fit_final_loss_with_evaluator(
+                    &student,
+                    &train,
+                    settings,
+                    CreditEvaluationMode::Full,
+                )
+                .unwrap();
+                assert_eq!(fast.final_train_correct, full.final_train_correct);
+                assert_eq!(fast.initial_train_correct, full.initial_train_correct);
+                assert_eq!(fast.model.routing(), full.model.routing());
+                assert_eq!(fast.accepted_parameter_moves, full.accepted_parameter_moves);
+                assert_eq!(fast.accepted_routing_moves, full.accepted_routing_moves);
+                assert_eq!(
+                    fast.full_model_train_inferences,
+                    full.full_model_train_inferences
+                );
+                assert_eq!(
+                    fast.full_recompute_gate_evaluations,
+                    full.actual_gate_evaluations
+                );
+                assert!(fast.actual_gate_evaluations < full.actual_gate_evaluations);
+                for layer in 0..student.depth() {
+                    let nodes = student.input_bits() / CIRCLES.pow((layer + 1) as u32);
+                    for node in 0..nodes {
+                        assert_eq!(
+                            fast.model.layer_model(layer, node),
+                            full.model.layer_model(layer, node),
+                        );
+                    }
+                }
+            }
         }
     }
 
