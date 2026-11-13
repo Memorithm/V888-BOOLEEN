@@ -135,11 +135,20 @@ fn main() -> Result<(), String> {
         WidePlasticCircuit::new(&tree, &train).map_err(|e| format!("teacher: {e:?}"))?;
     teacher.install_models(|layer, neuron| {
         let bucket = hash(layer, neuron) % 10;
-        let choice = match bucket {
-            0 => 2,
-            1 => 3,
-            2..=5 => 0,
-            _ => 1,
+        // Keep upper-layer teacher signals balanced: repeated AND/OR
+        // gates can collapse the only output to a constant, making
+        // apparently perfect output-only learning scientifically vacuous.
+        let choice = if layer == 0 {
+            match bucket {
+                0 => 2,
+                1 => 3,
+                2..=5 => 0,
+                _ => 1,
+            }
+        } else if bucket % 2 == 0 {
+            0
+        } else {
+            1
         };
         options[choice]
     });
@@ -194,6 +203,14 @@ fn main() -> Result<(), String> {
         WidePlasticCircuit::new(&tree, &train).map_err(|e| format!("global: {e:?}"))?;
     let train_label = targets.last().unwrap()[0];
     let valid_label = valid_targets.last().unwrap()[0];
+    let train_positive = train_label.count_ones();
+    let valid_positive = valid_label.count_ones();
+    println!(
+        "LARGE_LABEL_BALANCE train_positive={train_positive}/64 valid_positive={valid_positive}/64"
+    );
+    if !(16..=48).contains(&train_positive) || !(16..=48).contains(&valid_positive) {
+        return Err("degenerate synthetic label balance; no generalization claim".into());
+    }
     let global_valid_before = global
         .evaluate_trace(&valid)
         .map_err(|e| format!("{e:?}"))?
