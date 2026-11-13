@@ -26,7 +26,11 @@ const PROPOSALS: usize = 64;
 struct Random(u64);
 impl Random {
     fn new(seed: u64) -> Self {
-        Self(if seed == 0 { 0x9e37_79b9_7f4a_7c15 } else { seed })
+        Self(if seed == 0 {
+            0x9e37_79b9_7f4a_7c15
+        } else {
+            seed
+        })
     }
     fn next(&mut self) -> u64 {
         let mut v = self.0;
@@ -38,11 +42,7 @@ impl Random {
     }
 }
 
-fn independent_oracle(
-    input: &BooleanState,
-    routing: &[u16],
-    modes: &[GateKind],
-) -> bool {
+fn independent_oracle(input: &BooleanState, routing: &[u16], modes: &[GateKind]) -> bool {
     let mut bits: Vec<bool> = routing
         .iter()
         .map(|&source| input.get(usize::from(source)).expect("validated source"))
@@ -51,9 +51,10 @@ fn independent_oracle(
         bits = bits
             .chunks_exact(5)
             .map(|five| {
-                let word = five.iter().enumerate().fold(0_u8, |acc, (bit, value)| {
-                    acc | (u8::from(*value) << bit)
-                });
+                let word = five
+                    .iter()
+                    .enumerate()
+                    .fold(0_u8, |acc, (bit, value)| acc | (u8::from(*value) << bit));
                 mode.oracle(word)
             })
             .collect();
@@ -72,18 +73,24 @@ fn generate(
 ) -> Result<Vec<RoutingSample>, String> {
     let mut rows = Vec::with_capacity(count);
     for _ in 0..count * 32 {
-        if rows.len() == count { break; }
+        if rows.len() == count {
+            break;
+        }
         let mut state = BooleanState::new(width);
         for bit in 0..width {
             if ((random.next() >> 32) & 255) < density {
                 state.set(bit, true).expect("bounded bit");
             }
         }
-        if !unique.insert(state.words().to_vec()) { continue; }
+        if !unique.insert(state.words().to_vec()) {
+            continue;
+        }
         let label = independent_oracle(&state, routing, modes);
         rows.push(RoutingSample { state, label });
     }
-    if rows.len() != count { return Err("cannot generate disjoint inputs".into()); }
+    if rows.len() != count {
+        return Err("cannot generate disjoint inputs".into());
+    }
     Ok(rows)
 }
 
@@ -96,15 +103,18 @@ struct Hits {
     true_negative: usize,
 }
 
-fn score(
-    model: &FiveCircleHierarchy,
-    rows: &[RoutingSample],
-) -> Result<Hits, String> {
+fn score(model: &FiveCircleHierarchy, rows: &[RoutingSample]) -> Result<Hits, String> {
     let mut hits = Hits {
-        correct: 0, positives: 0, true_positive: 0, negatives: 0, true_negative: 0,
+        correct: 0,
+        positives: 0,
+        true_positive: 0,
+        negatives: 0,
+        true_negative: 0,
     };
     for row in rows {
-        let predicted = model.infer_scalar(&row.state).map_err(|e| format!("{e:?}"))?;
+        let predicted = model
+            .infer_scalar(&row.state)
+            .map_err(|e| format!("{e:?}"))?;
         hits.correct += usize::from(predicted == row.label);
         if row.label {
             hits.positives += 1;
@@ -120,20 +130,16 @@ fn score(
     Ok(hits)
 }
 
-fn profile(
-    seed: u64,
-    modes: &[GateKind],
-) -> Result<(), String> {
-    let teacher_base = FiveCircleHierarchy::from_modes(
-        modes, LeafRouting::Contiguous
-    ).map_err(|e| format!("{e:?}"))?;
+fn profile(seed: u64, modes: &[GateKind]) -> Result<(), String> {
+    let teacher_base = FiveCircleHierarchy::from_modes(modes, LeafRouting::Contiguous)
+        .map_err(|e| format!("{e:?}"))?;
     let width = teacher_base.input_bits();
     // Independent teacher source changes: NO coordinates or random proposal
     // streams from the learning algorithm are used here.
-    let teacher_bank = candidate_swaps(width, seed ^ 0x341a_8b2f, 8)
-        .map_err(|e| format!("{e:?}"))?;
-    let teacher = multiswap_model(&teacher_base, &teacher_bank, &[0, 3, 6])
-        .map_err(|e| format!("{e:?}"))?;
+    let teacher_bank =
+        candidate_swaps(width, seed ^ 0x341a_8b2f, 8).map_err(|e| format!("{e:?}"))?;
+    let teacher =
+        multiswap_model(&teacher_base, &teacher_bank, &[0, 3, 6]).map_err(|e| format!("{e:?}"))?;
     if teacher.routing() == teacher_base.routing() {
         return Err("unexpected unmodified teacher routing".into());
     }
@@ -146,7 +152,8 @@ fn profile(
     let bottom = width / 5;
     let mut perturbed = 0;
     for index in (0..bottom).step_by(5) {
-        base = base.with_neuron_parameters(0, index, GateKind::And.five_circle())
+        base = base
+            .with_neuron_parameters(0, index, GateKind::And.five_circle())
             .map_err(|e| format!("{e:?}"))?;
         perturbed += 1;
     }
@@ -156,10 +163,42 @@ fn profile(
 
     let mut rng = Random::new(seed ^ 0x45ce_991a);
     let mut unique = BTreeSet::new();
-    let train = generate(&mut rng, &mut unique, TRAIN, width, 128, teacher.routing(), modes)?;
-    let valid = generate(&mut rng, &mut unique, VALID, width, 128, teacher.routing(), modes)?;
-    let test = generate(&mut rng, &mut unique, TEST, width, 128, teacher.routing(), modes)?;
-    let shifted = generate(&mut rng, &mut unique, SHIFT, width, 64, teacher.routing(), modes)?;
+    let train = generate(
+        &mut rng,
+        &mut unique,
+        TRAIN,
+        width,
+        128,
+        teacher.routing(),
+        modes,
+    )?;
+    let valid = generate(
+        &mut rng,
+        &mut unique,
+        VALID,
+        width,
+        128,
+        teacher.routing(),
+        modes,
+    )?;
+    let test = generate(
+        &mut rng,
+        &mut unique,
+        TEST,
+        width,
+        128,
+        teacher.routing(),
+        modes,
+    )?;
+    let shifted = generate(
+        &mut rng,
+        &mut unique,
+        SHIFT,
+        width,
+        64,
+        teacher.routing(),
+        modes,
+    )?;
     if unique.len() != TRAIN + VALID + TEST + SHIFT {
         return Err("cross-split duplicate Boolean input".into());
     }
@@ -171,11 +210,31 @@ fn profile(
 
     let training_seed = seed ^ 0x71d0_cafe;
     let setups = [
-        ("readout_only", CreditScope::OutputParameters, CreditPolicy::Greedy),
-        ("hidden_only", CreditScope::HiddenParameters, CreditPolicy::Greedy),
-        ("connections_only", CreditScope::LeafRouting, CreditPolicy::Greedy),
-        ("joint", CreditScope::JointHiddenAndRouting, CreditPolicy::Greedy),
-        ("blind_joint", CreditScope::JointHiddenAndRouting, CreditPolicy::Blind),
+        (
+            "readout_only",
+            CreditScope::OutputParameters,
+            CreditPolicy::Greedy,
+        ),
+        (
+            "hidden_only",
+            CreditScope::HiddenParameters,
+            CreditPolicy::Greedy,
+        ),
+        (
+            "connections_only",
+            CreditScope::LeafRouting,
+            CreditPolicy::Greedy,
+        ),
+        (
+            "joint",
+            CreditScope::JointHiddenAndRouting,
+            CreditPolicy::Greedy,
+        ),
+        (
+            "blind_joint",
+            CreditScope::JointHiddenAndRouting,
+            CreditPolicy::Blind,
+        ),
     ];
     let reference = score(&teacher, &test)?;
     if reference.correct != TEST {
@@ -194,12 +253,17 @@ fn profile(
     for (name, scope, policy) in setups {
         let started = Instant::now();
         let result = fit_final_loss(
-            &base, &train,
+            &base,
+            &train,
             CreditConfig {
-                scope, policy, rounds: ROUNDS, proposals_per_round: PROPOSALS,
+                scope,
+                policy,
+                rounds: ROUNDS,
+                proposals_per_round: PROPOSALS,
                 seed: training_seed,
             },
-        ).map_err(|e| format!("{e:?}"))?;
+        )
+        .map_err(|e| format!("{e:?}"))?;
         let train_ms = started.elapsed().as_millis();
         if result.candidate_evaluations != ROUNDS * PROPOSALS
             || result.full_model_train_inferences != (ROUNDS * PROPOSALS + 1) * TRAIN
@@ -237,8 +301,19 @@ fn profile(
 fn main() -> Result<(), String> {
     for seed in [0xc088_0101_u64, 0xc088_0202, 0xc088_0303] {
         profile(seed, &[GateKind::Majority, GateKind::Parity])?;
-        profile(seed, &[GateKind::Majority, GateKind::Parity, GateKind::Parity])?;
-        profile(seed, &[GateKind::Majority, GateKind::Parity, GateKind::Parity, GateKind::Parity])?;
+        profile(
+            seed,
+            &[GateKind::Majority, GateKind::Parity, GateKind::Parity],
+        )?;
+        profile(
+            seed,
+            &[
+                GateKind::Majority,
+                GateKind::Parity,
+                GateKind::Parity,
+                GateKind::Parity,
+            ],
+        )?;
     }
     println!("FOURIER5_FINAL_LABEL_COUNTERFACTUAL_CREDIT_SYNTHETIC_PASS");
     Ok(())
@@ -251,9 +326,7 @@ mod tests {
     #[test]
     fn independent_oracle_agrees_with_existing_fourier_neurons() {
         let modes = [GateKind::Majority, GateKind::Parity];
-        let tree = FiveCircleHierarchy::from_modes(
-            &modes, LeafRouting::SeededShuffle(71),
-        ).unwrap();
+        let tree = FiveCircleHierarchy::from_modes(&modes, LeafRouting::SeededShuffle(71)).unwrap();
         let mut rng = Random::new(17);
         let mut seen = BTreeSet::new();
         let rows = generate(&mut rng, &mut seen, 64, 25, 128, tree.routing(), &modes).unwrap();
@@ -265,9 +338,7 @@ mod tests {
     #[test]
     fn test_sets_are_input_disjoint_and_shift_has_independent_density() {
         let modes = [GateKind::Majority, GateKind::Parity];
-        let tree = FiveCircleHierarchy::from_modes(
-            &modes, LeafRouting::Contiguous
-        ).unwrap();
+        let tree = FiveCircleHierarchy::from_modes(&modes, LeafRouting::Contiguous).unwrap();
         let mut rng = Random::new(23);
         let mut seen = BTreeSet::new();
         let train = generate(&mut rng, &mut seen, 64, 25, 128, tree.routing(), &modes).unwrap();
