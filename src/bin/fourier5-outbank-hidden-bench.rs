@@ -116,8 +116,8 @@ fn in_candidate_bank(
                 return Ok(true);
             }
             for k in j + 1..swaps.len() {
-                let three = multiswap_model(base, swaps, &[i, j, k])
-                    .map_err(|e| format!("{e:?}"))?;
+                let three =
+                    multiswap_model(base, swaps, &[i, j, k]).map_err(|e| format!("{e:?}"))?;
                 if three.routing() == teacher.routing() {
                     return Ok(true);
                 }
