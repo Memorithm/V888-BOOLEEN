@@ -253,8 +253,8 @@ mod tests {
         let (train, test) = split(0x57ad_b0a1);
         assert!(score_base(&b, &train) < train.len());
         assert!(score_base(&b, &test) < test.len());
-        assert_eq!(teacher(1, 0), true);
-        assert_eq!(teacher(1, 5), false);
+        assert!(teacher(1, 0));
+        assert!(!teacher(1, 5));
         assert_eq!(b.predict(1), Ok(true));
     }
 }
