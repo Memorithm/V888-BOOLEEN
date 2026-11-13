@@ -12,12 +12,17 @@ neuron learn independently.
 
 The new module `src/fourier5_local_learning.rs` creates up to 250,000
 individual `GatedFiveCircle` models. Every neuron receives its own
-64 supervised TRAIN examples, holds its own integer context gate gains,
+64 supervised TRAIN examples, holds its own four inhibitory context gains,
 and receives no learned gains from other neuron identities.
 
 The five Walsh mode masks, phases, persistent radii, and ten directed
 incoming contacts are **fixed**, while each neuron independently learns
-the five nonnegative boost values for fixed singleton context gates. This
+the four nonnegative inhibitory boost values for fixed singleton context gates.
+The fifth circle is reserved for the fifth-order parity term. Since its
+Walsh sign is negative for odd inputs, increasing that circle's nonnegative
+radius cannot inhibit firing; attempting to use it as a fifth generic
+inhibitory gate failed the first physical qualification. Context bit 4
+is retained as an irrelevant distractor in this experiment. This
 is **local parameter learning**, not topology learning or learning the
 mask identities. It is not unsupervised or biologically plausible
 plasticity.
@@ -31,16 +36,16 @@ partially install a model.
 ## Supervised task A/B and disjoint holdout
 
 For each neuron i, a deterministic teacher chooses one contextual
-bit `b_i` from 0..4 using the seed and neuron ID. Task A is:
+bit `b_i` from 0..3 using the seed and neuron ID. Task A is:
 
 `y_A = odd_parity(data_5) AND NOT(context[b_i])`.
 
-Task B is another teacher with bit `(b_i + 1) mod 5`:
+Task B is another teacher with bit `(b_i + 1) mod 4`:
 
-`y_B = odd_parity(data_5) AND NOT(context[(b_i+1) mod 5])`.
+`y_B = odd_parity(data_5) AND NOT(context[(b_i+1) mod 4])`.
 
 The learner is **not passed** the identity of the teacher bit and has
-to discover effective boosts for its own singleton gates.
+to discover effective boosts for its own four inhibitory singleton gates.
 
 TRAIN contains 64 `(data,context,label)` pairs per neuron:
 every possible 5-bit context, paired with one odd-parity and one
