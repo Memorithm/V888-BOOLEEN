@@ -310,6 +310,25 @@ impl<'a> WidePlasticCircuit<'a> {
         Ok(())
     }
 
+    /// Recompute the ENTIRE trained network after accepting one edit.
+    /// This is a deliberately expensive full-recomputation control for
+    /// paired training benchmarks, not an efficient production path.
+    /// The persistent neuron parameters are updated exactly once.
+    pub fn accept_full(
+        &mut self,
+        layer: usize,
+        neuron: usize,
+        model: FiveCircle,
+    ) -> Result<(), WideError> {
+        self.model(layer, neuron)?;
+        self.models[layer][neuron] = model;
+        self.truths[layer][neuron] = compiled_truth_table(model);
+        self.rebuild_cache();
+        self.generation += 1;
+        self.commits += 1;
+        Ok(())
+    }
+
     /// Fit a fully observed artificial teacher circuit on TRAIN activations.
     /// These are PRIVILEGED HIDDEN LABELS, not output-only learning.
     /// Every neuron chooses its own Fourier parameter set. The caller is
@@ -448,6 +467,33 @@ mod tests {
         assert_eq!(
             learner.model_bytes(),
             tree.logical_neurons() * std::mem::size_of::<FiveCircle>()
+        );
+    }
+
+    #[test]
+    fn full_acceptance_and_incremental_acceptance_agree_after_each_edit() {
+        let tree = WideFiveTree::new(125).unwrap();
+        let input = planes(125, 81);
+        let mut full = WidePlasticCircuit::new(&tree, &input).unwrap();
+        let mut cached = WidePlasticCircuit::new(&tree, &input).unwrap();
+        for (layer, neuron, kind) in [
+            (0, 1, GateKind::And),
+            (1, 2, GateKind::Or),
+            (0, 17, GateKind::Parity),
+            (2, 0, GateKind::Majority),
+        ] {
+            let model = kind.five_circle();
+            let expected = full.evaluate_full_edit(layer, neuron, model).unwrap();
+            let proposal = cached.propose(layer, neuron, model).unwrap();
+            assert_eq!(expected, proposal.output);
+            full.accept_full(layer, neuron, model).unwrap();
+            cached.accept(proposal).unwrap();
+            assert_eq!(full.output(), cached.output());
+            assert_eq!(full.commits(), cached.commits());
+        }
+        assert_eq!(
+            full.output(),
+            full.evaluate_trace(&input).unwrap().last().unwrap()[0]
         );
     }
 
