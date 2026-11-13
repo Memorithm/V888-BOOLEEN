@@ -235,7 +235,6 @@ fn experiment(width: usize, seed: u64, passes: usize, proposals: usize) -> Resul
     Ok(())
 }
 
-
 fn power_marker(label: &str) -> Result<(), String> {
     println!("V888_TRAIN_MARKER={label}");
     io::stdout().flush().map_err(|e| e.to_string())
@@ -270,11 +269,15 @@ fn energy_experiment(width: usize, seed: u64) -> Result<(), String> {
     });
     let target = teacher.output();
     let valid_target = teacher
-        .evaluate_trace(&valid).map_err(|e| format!("{e:?}"))?
-        .last().unwrap()[0];
+        .evaluate_trace(&valid)
+        .map_err(|e| format!("{e:?}"))?
+        .last()
+        .unwrap()[0];
     let test_target = teacher
-        .evaluate_trace(&test).map_err(|e| format!("{e:?}"))?
-        .last().unwrap()[0];
+        .evaluate_trace(&test)
+        .map_err(|e| format!("{e:?}"))?
+        .last()
+        .unwrap()[0];
     drop(teacher);
     if [target, valid_target, test_target]
         .iter()
@@ -301,8 +304,7 @@ fn energy_experiment(width: usize, seed: u64) -> Result<(), String> {
         let phase = format!("S{seed}_{arm}");
         power_marker(&format!("{phase}_BEGIN"))?;
         let started = Instant::now();
-        let mut circuit = WidePlasticCircuit::new(&tree, &train)
-            .map_err(|e| format!("{e:?}"))?;
+        let mut circuit = WidePlasticCircuit::new(&tree, &train).map_err(|e| format!("{e:?}"))?;
         let mut decisions = Vec::with_capacity(proposals.len());
         let mut accepted = 0;
         for &(layer, neuron, model) in &proposals {
