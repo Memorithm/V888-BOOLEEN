@@ -83,8 +83,8 @@ struct Task {
     ood: Vec<TaskBatch>,
 }
 
-fn split(
-    circuit: &WidePlasticCircuit<'_>,
+#[derive(Clone, Copy)]
+struct SplitSpec {
     size: usize,
     layer: usize,
     seed: u64,
@@ -94,7 +94,12 @@ fn split(
     training: bool,
     ood: bool,
     target: FiveCircle,
-) -> Result<Vec<TaskBatch>, String> {
+}
+
+fn split(circuit: &WidePlasticCircuit<'_>, spec: SplitSpec) -> Result<Vec<TaskBatch>, String> {
+    let SplitSpec {
+        size, layer, seed, task, salt, batches, training, ood, target,
+    } = spec;
     let mut result = Vec::new();
     for i in 0..batches {
         let source = data(
@@ -141,56 +146,30 @@ fn suite(
     target: FiveCircle,
 ) -> Result<Vec<Task>, String> {
     (0..TASKS)
-        .map(|t| {
+        .map(|task| {
+            let base = SplitSpec {
+                size,
+                layer,
+                seed,
+                task,
+                salt: 0x1111_0001,
+                batches: 3,
+                training: true,
+                ood: false,
+                target,
+            };
             Ok(Task {
-                train: split(
-                    circuit,
-                    size,
-                    layer,
-                    seed,
-                    t,
-                    0x1111_0001,
-                    3,
-                    true,
-                    false,
-                    target,
-                )?,
-                valid: split(
-                    circuit,
-                    size,
-                    layer,
-                    seed,
-                    t,
-                    0x2222_0002,
-                    2,
-                    false,
-                    false,
-                    target,
-                )?,
-                test: split(
-                    circuit,
-                    size,
-                    layer,
-                    seed,
-                    t,
-                    0x3333_0003,
-                    2,
-                    false,
-                    false,
-                    target,
-                )?,
-                ood: split(
-                    circuit,
-                    size,
-                    layer,
-                    seed,
-                    t,
-                    0x4444_0004,
-                    2,
-                    false,
-                    true,
-                    target,
-                )?,
+                train: split(circuit, base)?,
+                valid: split(circuit, SplitSpec {
+                    salt: 0x2222_0002, batches: 2, training: false, ..base
+                })?,
+                test: split(circuit, SplitSpec {
+                    salt: 0x3333_0003, batches: 2, training: false, ..base
+                })?,
+                ood: split(circuit, SplitSpec {
+                    salt: 0x4444_0004, batches: 2,
+                    training: false, ood: true, ..base
+                })?,
             })
         })
         .collect()
