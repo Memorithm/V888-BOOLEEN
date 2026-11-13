@@ -121,7 +121,11 @@ impl TaskHeadBank {
     }
 
     pub fn revision(&self, task: usize) -> Result<u64, HeadError> {
-        Ok(self.heads.get(task).ok_or(HeadError::InvalidTask)?.map_or(0, |h| h.revision))
+        Ok(self
+            .heads
+            .get(task)
+            .ok_or(HeadError::InvalidTask)?
+            .map_or(0, |h| h.revision))
     }
 
     pub fn predict(&self, task: usize, features: [u64; CIRCLES]) -> Result<u64, HeadError> {
@@ -144,10 +148,7 @@ impl TaskHeadBank {
         if self.heads.get(task).is_none() {
             return Err(HeadError::InvalidTask);
         }
-        if train.len() < 2
-            || train.len() > 1_024
-            || train.iter().all(|batch| batch.observed == 0)
-        {
+        if train.len() < 2 || train.len() > 1_024 || train.iter().all(|batch| batch.observed == 0) {
             return Err(HeadError::InvalidShape);
         }
         let old = self.heads[task];
@@ -155,15 +156,11 @@ impl TaskHeadBank {
         let mut tested = 0;
         for mask in 1..=31_u8 {
             for phase in [false, true] {
-                let correct: u64 = train
-                    .iter()
-                    .map(|b| matches(b, mask, phase))
-                    .sum();
+                let correct: u64 = train.iter().map(|b| matches(b, mask, phase)).sum();
                 tested += 1;
                 if best.is_none_or(|(score, _, _)| correct > score)
                     || best.is_some_and(|(score, _, _)| {
-                        correct == score
-                            && old.is_some_and(|h| h.mask == mask && h.phase == phase)
+                        correct == score && old.is_some_and(|h| h.mask == mask && h.phase == phase)
                     })
                 {
                     best = Some((correct, mask, phase));
@@ -181,7 +178,10 @@ impl TaskHeadBank {
         Ok(HeadFit {
             task,
             train_correct: correct,
-            train_total: train.iter().map(|batch| u64::from(batch.observed.count_ones())).sum(),
+            train_total: train
+                .iter()
+                .map(|batch| u64::from(batch.observed.count_ones()))
+                .sum(),
             candidates_tested: tested,
             changed,
             revision,
@@ -225,7 +225,8 @@ impl TaskHeadBank {
         if bytes.len() != expected_len || &bytes[..8] != MAGIC {
             return Err(HeadError::CorruptCheckpoint);
         }
-        let u32_at = |p: usize| u32::from_le_bytes(bytes[p..p + 4].try_into().expect("checked size"));
+        let u32_at =
+            |p: usize| u32::from_le_bytes(bytes[p..p + 4].try_into().expect("checked size"));
         if u32_at(8) != 1 || u32_at(12) != tasks as u32 || u32_at(16) != feature_layer {
             return Err(HeadError::CorruptCheckpoint);
         }
@@ -312,7 +313,10 @@ mod tests {
         assert!(TaskHeadBank::new(1, 0, [1, 1, 2, 3, 4]).is_err());
         let mut bank = TaskHeadBank::new(2, 0, [0, 1, 2, 3, 4]).unwrap();
         assert_eq!(bank.fit(0, &[]), Err(HeadError::InvalidShape));
-        assert_eq!(bank.fit(2, &[batch(3, false, 1), batch(3, false, 2)]), Err(HeadError::InvalidTask));
+        assert_eq!(
+            bank.fit(2, &[batch(3, false, 1), batch(3, false, 2)]),
+            Err(HeadError::InvalidTask)
+        );
         assert!(bank.model(1).unwrap().is_none());
         assert_eq!(bank.revision(1), Ok(0));
     }
