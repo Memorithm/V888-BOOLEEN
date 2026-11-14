@@ -159,8 +159,106 @@ cargo +1.89 run --release -- bench-cue-init --csv results/cue-zero-init-v1.csv >
 
 ## Results
 
-Pending (filled in after the pre-registration commit is pushed and the grid
-has run once).
+Run once after the pre-registration commit 7d44bd9 had been pushed. The grid
+(1440 rows: 3 flips × 40 seeds × 6 arms × 2 budgets) takes about 4.3 min on
+CPU. Two runs give a byte-identical CSV (sha256 `579485fb…e9948800b`) and an
+identical report. Every row keeps the original topology
+(`topology_unchanged_all=true`). Files: `results/cue-zero-init-v1.csv`,
+`results/cue-zero-init-report-v1.txt`, pilot
+`results/cue-zero-init-census-v1.txt`.
+
+### 1. Design gates (reported first)
+
+* **G1 passes:** every row starts from its documented initial weights and
+  keeps its topology; writes never exceed the allowance;
+  `error-gated@paced100` is bit-identical to uncapped `error-gated` with zero
+  refusals; Z and ZP are bit-identical uncapped on all 120 (flip, seed).
+* **G2 passes:** Z and C1 at `paced100` end with different weights in 100 %
+  of seeds at every flip.
+* **G3 passes:** median CN pairs per (seed, task) 125 ≥ 20.
+
+### 2. Settings at flip 50 (k = 4, mean over 40 seeds)
+
+| arm @ budget | ACC_all | ACC_CN | LEARN_all | LEARN_CN | FGT_all | FGT_CN | LAST_all | writes (4 tasks) | cue writes | cue share |
+|---|---|---|---|---|---|---|---|---|---|---|
+| supervised @ free | 0.615 | 0.581 | 0.881 | 0.762 | 0.354 | 0.241 | 0.873 | 3601 | 0 | 0 |
+| error-gated @ free (= paced100) | 0.637 | 0.624 | 0.971 | 0.911 | 0.446 | 0.383 | 0.973 | 207 | 0 | 0 |
+| E/E-cue (C1) @ free | 0.692 | 0.633 | 0.971 | 0.903 | 0.372 | 0.361 | 0.972 | 445 | 253 | 0.569 |
+| E/E-cue0 (Z) @ free (= ZP @ free) | 0.661 | 0.630 | 0.971 | 0.907 | 0.413 | 0.369 | 0.972 | 336 | 134 | 0.398 |
+| supervised @ paced100 | 0.582 | 0.541 | 0.647 | 0.564 | 0.086 | 0.030 | 0.633 | 207 | 0 | 0 |
+| reward @ paced100 | 0.597 | 0.579 | 0.627 | 0.573 | 0.041 | −0.008 | 0.599 | 207 | 0 | 0 |
+| E/E-cue (C1) @ paced100 | 0.640 | 0.608 | 0.694 | 0.647 | 0.072 | 0.051 | 0.706 | 207 | 124 | 0.598 |
+| **E/E-cue0 (Z) @ paced100** | 0.655 | 0.628 | 0.822 | 0.762 | 0.223 | 0.178 | 0.784 | 207 | 77 | 0.371 |
+| E/E-cue0-pattern-first (ZP) @ paced100 | 0.637 | 0.624 | 0.971 | 0.911 | 0.446 | 0.383 | 0.973 | 207 | 0 | 0 |
+
+Silent cue edges cut the uncapped cue cost from ≈ 63 to ≈ 33 writes per task
+(below `error-gated`'s ≈ 52) and, at `paced100`, recover about half of the
+cued arm's learning loss (LEARN_all 0.69 → 0.82; `error-gated` 0.97). Z still
+spends 37 % of the allowance on cue edges and learns 0.15 less than
+`error-gated`. (`saturated_end` is higher for Z because cue edges left at 0
+count as saturated.)
+
+### 3. Hypotheses (k = 4; mean [95 % CI] seeds better/tied/worse)
+
+| | statistic | value | result |
+|---|---|---|---|
+| G1 | integrity (topology, init, caps, E unchanged, Z = ZP uncapped) | all rows | **pass** |
+| G2 | Z ≠ C1 final weights in ≥ 50 % of seeds, flip 50 | 100 % | **pass** |
+| G3 | median CN pairs ≥ 20 | 125 | **pass** |
+| H1 | Z vs E, sequence rule, all pairs, flip 50 | ACC +0.018 [+0.012, +0.025] 32/0/8 (mean < 0.05); Δ LEARN −0.149, Δ LAST −0.189 | **fail** |
+| H2 | cue writes(Zfree) < writes(E), ≥ 80 % of seeds, flip 50 (manipulation check) | 40/40 (134 vs 207 over four tasks) | **pass** |
+| H3 | LEARN_all(Z) − LEARN_all(C1) strong, flip 50 | +0.128 [+0.119, +0.137] 40/0/0 | **pass** |
+| H4 | Z vs E, sequence rule, CN pairs, flip 50 | ACC_CN +0.004 [−0.013, +0.021] 20/0/20; Δ LEARN_CN −0.150 | **fail** |
+| H5 | Z vs S1, sequence rule, CN pairs, flip 50 | ACC_CN +0.087 [+0.069, +0.106] 35/0/5; Δ LEARN_CN +0.197, Δ LAST_CN +0.176 | **pass** |
+| H6 | FGT_CN(E) − FGT_CN(Z) strong and Δ LEARN_CN ≥ −0.05, flip 100 | +0.158 [+0.134, +0.183] 38/0/2, but Δ LEARN_CN −0.140 | **fail** |
+| H7 | Zfree vs E, sequence rule, all pairs, flip 50 | ACC +0.025 [+0.022, +0.027] 40/0/0 (mean < 0.05); Δ LEARN −0.000 | **fail** |
+
+### 4. Secondary (no pass/fail)
+
+* **ZP @ paced100 is `error-gated`:** as the pilot predicted, pattern steps
+  use the whole allowance, the zero-init cue never receives a write, and every
+  ACC/LEARN/LAST/FGT contrast with E is 0/40/0.
+* **Z − C1 at `paced100` (flip 50, all pairs):** ACC +0.015 [+0.004, +0.025]
+  26/0/14, LEARN +0.128, LAST +0.078, but forgetting 0.151 worse (0/0/40).
+  On CN: ACC_CN +0.020 [−0.004, +0.043], LEARN_CN +0.115.
+* **Replication of #127 on new seeds (flip 50, all pairs vs E):**
+  C1 @ paced100 +0.003 [−0.006, +0.013] 23/0/17 (#127: +0.015);
+  C1 @ free +0.056 [+0.051, +0.061] 40/0/0 (#127: +0.066).
+* **Silent cue, uncapped:** Zfree − Cfree −0.031 [−0.035, −0.027] 0/0/40 on
+  all pairs at flip 50 with equal learning: the init-1 cue buys more
+  protection from forgetting when writes are free.
+* **Flip 100 (vs E):** Z @ paced100 all +0.056 (40/0/0), CN −0.021 (16/0/24);
+  C1 @ paced100 all +0.124, CN +0.066 (33/0/7). Zfree all +0.054, CN +0.036;
+  Cfree all +0.107, CN +0.101. At high conflict the init-1 cue is better on
+  ACC at either budget.
+* **Flip 25 (vs E, all pairs):** Z @ paced100 +0.007 [+0.002, +0.013]
+  29/0/11, C1 @ paced100 −0.122 (0/0/40): at low conflict the silent cue
+  removes the large equal-budget loss of the init-1 cue.
+* **k = 2 and 3 at flip 50 (Z vs E, all pairs):** +0.005 and +0.011; Δ LEARN
+  −0.099 and −0.136.
+* **Equal-write ranking (flip 50, all pairs vs S1):** E +0.054 (40/0/0),
+  Z +0.073 (40/0/0), C1 +0.058, R +0.015 [+0.010, +0.020] 32/0/8 (#127 H7:
+  +0.028), R learning 0.020 less than S1.
+
+### Reading
+
+The #127 post-hoc reading is **partly confirmed**. Starting cue edges at 0
+halves the cue's uncapped write cost and brings it under `error-gated`'s
+budget (H2), and at an equal write schedule it recovers about half of the
+cued arm's learning loss (H3: +0.128 LEARN over the init-1 cue). It does
+**not** make the cue a gain over `error-gated` at equal writes (H1, H4 fail:
++0.018 all, +0.004 CN), because Z still spends about a third of the allowance
+on cue edges and learns 0.15 less than `error-gated`; the forgetting it
+avoids at flip 100 is again bought with less learning (H6 fails). Silencing
+the cue also weakens what the cue does when writes are free (H7 fails:
++0.025 vs +0.056 for the init-1 cue) and at high conflict. In short: the
+fixed init cost explains roughly half of the equal-budget learning loss, not
+all of it, and removing it trades away part of the cue's retention benefit.
+
+At equal writes the zero-init cued arm beats the supervised control on CN
+pairs with more learning (H5: +0.087, Δ LEARN_CN +0.197), and the
+write-efficiency ranking error gate > reward > supervised replicates on new
+seeds. All of this is on a synthetic graph with artificial labels.
 
 ## Limitations
 
