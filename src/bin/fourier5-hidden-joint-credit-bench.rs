@@ -354,6 +354,41 @@ fn experiment(tree: &WideFiveTree, seed: u64) -> Result<(), String> {
             frozen: &original, feature_layer: layer as u32,
         })?;
     }
+    // Explicit incompatible fifth task: exactly the same input/context
+    // examples as the last learned task, with every observed label flipped.
+    // With a fixed deterministic readout and strict replay, a positive
+    // reward here MUST trade off at least one earlier TRAIN prediction.
+    // The non-improvement is a scientific capacity boundary, not a failure.
+    let incompatible: Vec<_> = tasks[TASKS - 1]
+        .train
+        .iter()
+        .map(|example| HiddenExample {
+            label: !example.label,
+            ..*example
+        })
+        .collect();
+    let prior_train: Vec<_> = tasks.iter().map(|task| task.train.as_slice()).collect();
+    let original_score = primary.score(&tasks[TASKS - 1].train);
+    let incompatible_before = primary.score(&incompatible);
+    let previous_checkpoint = primary.checkpoint();
+    let conflict = primary
+        .fit_coordinate(&incompatible, &prior_train)
+        .map_err(|e| format!("{e:?}"))?;
+    let incompatible_after = primary.score(&incompatible);
+    if conflict.accepted
+        || incompatible_before != incompatible_after
+        || primary.score(&tasks[TASKS - 1].train) != original_score
+        || primary.checkpoint() != previous_checkpoint
+    {
+        return Err("incompatible-task retention failed to preserve shared parameters".into());
+    }
+    println!(
+        "HIDDEN_CONFLICT_LIMIT seed={seed} original_task_correct={}/{}          contradictory_task_before={}/{} contradictory_task_after={}/{}          accepted={} fixed_capacity_conflict=true          note=no_single_deterministic_model_can_satisfy_opposite_labels",
+        original_score.0, original_score.1,
+        incompatible_before.0, incompatible_before.1,
+        incompatible_after.0, incompatible_after.1, conflict.accepted,
+    );
+
     let final_valid = aggregate(&primary, &tasks, Split::Valid);
     let final_test = aggregate(&primary, &tasks, Split::Test);
     let final_ood = aggregate(&primary, &tasks, Split::Ood);
