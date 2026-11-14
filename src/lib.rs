@@ -235,3 +235,4 @@ pub mod region_recall_monitor;
 pub mod regional_retention;
 pub mod regional_episodes;
 pub mod regional_transition_profile;
+pub mod regional_lag;
