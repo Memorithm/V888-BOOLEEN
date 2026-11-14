@@ -59,7 +59,14 @@ impl Window {
             .fold((0_u128, 0_u128), |(f, i), p| {
                 (f + u128::from(p.full), i + u128::from(p.incremental))
             });
-        if incremental * 10 < full * 9 {
+        // Require broad paired evidence, not only a favorable sum driven by one outlier.
+        // A strict 10% win in at least 3/4 of the observations guards against
+        // heterogeneous workloads whose average hides frequent regressions.
+        let wins = self.pairs[..self.len]
+            .iter()
+            .filter(|p| u128::from(p.incremental) * 10 < u128::from(p.full) * 9)
+            .count();
+        if incremental * 10 < full * 9 && wins * 4 >= self.len * 3 {
             Engine::Incremental
         } else {
             Engine::Full
@@ -236,6 +243,19 @@ mod tests {
         );
         assert_eq!(p.choose(2, 100), Ok(Engine::Full));
         p.record_verified(2, 100, 1, 1, 100, 10).unwrap();
+        assert_eq!(p.choose(2, 100), Ok(Engine::Incremental));
+    }
+    #[test]
+    fn isolated_outlier_cannot_override_majority_regressions() {
+        let mut p = RecentPairedPolicy::default();
+        for _ in 0..15 {
+            p.record_verified(2, 100, 1, 1, 100, 110).unwrap();
+        }
+        p.record_verified(2, 100, 1, 1, 100_000, 1).unwrap();
+        assert_eq!(p.choose(2, 100), Ok(Engine::Full));
+        for _ in 0..16 {
+            p.record_verified(2, 100, 1, 1, 100, 50).unwrap();
+        }
         assert_eq!(p.choose(2, 100), Ok(Engine::Incremental));
     }
     #[test]
