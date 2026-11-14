@@ -152,7 +152,151 @@ drop ≤ 0.05.
 cargo +1.89 run --release -- bench-cue-gating --csv results/cue-gating-v1.csv
 ```
 
-## Results
+## Results (pre-registered grid; CSV `results/cue-gating-v1.csv`)
 
-(Filled in after the pre-registered run; nothing above this line is
-changed after the run.)
+Nothing above this section was changed after the run.
+
+CSV: 1080 rows (3 flips × 40 seeds × 9 arms), sha256
+`4315b1575a9ac79b0ce4470c38bf0891c9aac8b7c86739f77a02d6f944cfc639`. A second
+run gave a byte-identical CSV and identical stdout; the grid takes ~8 s
+(release build, CPU). `topology_unchanged=true` in every row. Greedy cue
+sizes as in #120 (7.7 / 8.9 lines, 24/24 targets reached; k1: 6.3 / 5.0
+targets, k2: 11.1 / 9.2, k4: 17.9 / 15.8).
+
+**Reproduction of #120.** On seeds 1..20, `supervised`, `error-gated`,
+`S/S-cue` and `E/E-cue` reproduce `results/context-cue-v1.csv` exactly for
+A train, A test after A / after B, B test, forgetting, conflict
+forgetting, conflict both-correct and weights changed (2520 values
+compared, 0 differences). The only differing column is `ceiling_fixable`
+of the two **uncued** arms, which #120 computed for the reserved cue and
+this CSV reports as 0 (no active cue line); it is a diagnostic and enters
+no rule.
+
+### Primary (flip 50 %, 40 seeds), mean ± sd
+
+| arm | A train | A test (after A) | A TPR / TNR (after A) | A test after B | forgetting | B test | conflict forgetting | conflict both-correct | ceiling (active lines) | weights changed (A+B) | cue A edge weight after A |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| supervised | 0.949±0.027 | 0.903±0.038 | 1.000 / 0.807 | 0.580±0.060 | 0.324±0.072 | 0.861±0.044 | 0.703±0.100 | 0.000 | — | 1456.2 | — |
+| error-gated | 1.000±0.000 | 0.967±0.023 | 1.000 / 0.933 | 0.559±0.064 | 0.408±0.069 | 0.967±0.022 | 0.901±0.056 | 0.000 | — | 80.2 | — |
+| S/S-cue | 0.890±0.045 | 0.853±0.043 | 1.000 / 0.705 | 0.587±0.054 | 0.265±0.065 | 0.818±0.053 | 0.565±0.086 | 0.075±0.060 | 0.842 | 6310.5 | 0.43 |
+| S/E-cue | 0.949±0.027 | 0.903±0.038 | 1.000 / 0.807 | 0.614±0.051 | 0.290±0.063 | 0.862±0.043 | 0.627±0.095 | 0.090±0.064 | 0.842 | 1520.2 | 0.15 |
+| E/S-cue | 0.923±0.038 | 0.894±0.032 | 1.000 / 0.788 | 0.580±0.055 | 0.314±0.059 | 0.896±0.047 | 0.690±0.084 | 0.115±0.073 | 0.842 | 4934.3 | 0.43 |
+| E/E-cue | 1.000±0.000 | 0.967±0.023 | 1.000 / 0.933 | 0.658±0.055 | 0.309±0.063 | 0.968±0.021 | 0.690±0.105 | 0.229±0.097 | 0.842 | 157.8 | 0.15 |
+| S/S-cue-k1 | 0.936±0.030 | 0.892±0.037 | 1.000 / 0.784 | 0.584±0.061 | 0.309±0.072 | 0.852±0.044 | 0.670±0.093 | 0.022±0.031 | 0.201 | 2365.4 | 0.43 |
+| S/S-cue-k2 | 0.920±0.035 | 0.878±0.038 | 1.000 / 0.757 | 0.584±0.058 | 0.294±0.070 | 0.845±0.048 | 0.639±0.094 | 0.036±0.037 | 0.368 | 3127.4 | 0.43 |
+| S/S-cue-k4 | 0.905±0.041 | 0.867±0.041 | 1.000 / 0.733 | 0.585±0.055 | 0.281±0.067 | 0.833±0.054 | 0.606±0.096 | 0.056±0.047 | 0.609 | 4466.9 | 0.42 |
+
+### Paired comparisons (flip 50 %, 40 seeds)
+
+Each cell: mean ± sd [bootstrap 95 % CI] better/tied/worse seeds
+("better" = x forgets less, or x is higher).
+
+| x vs base | Δ forgetting | Δ A test | Δ A TNR | Δ retained A | Δ B test | rule |
+|---|---|---|---|---|---|---|
+| S/S-cue vs supervised | +0.058±0.040 [+0.046, +0.071] 39/0/1 | **−0.051±0.031** [−0.060, −0.042] 0/2/38 | −0.101±0.061 0/2/38 | +0.008±0.029 [−0.000, +0.017] 26/0/14 | −0.043±0.027 0/2/38 | fails (A guard) |
+| **S/E-cue vs supervised (H1)** | +0.034±0.032 [+0.025, +0.044] 32/7/1 | **+0.000±0.000 0/40/0** | +0.000 0/40/0 | +0.034±0.032 [+0.025, +0.044] 32/7/1 | +0.001±0.008 [−0.002, +0.003] 10/24/6 | **fails** (mean < 0.05) |
+| S/S-cue-k1 vs supervised (H2) | +0.015±0.021 [+0.009, +0.022] 25/14/1 | −0.011±0.015 0/19/21 | −0.022±0.030 | +0.004±0.015 16/14/10 | −0.009±0.012 | fails |
+| S/S-cue-k2 vs supervised (H2) | +0.030±0.030 [+0.021, +0.040] 34/4/2 | −0.025±0.024 0/10/30 | −0.050±0.048 | +0.005±0.018 18/6/16 | −0.016±0.016 | fails |
+| S/S-cue-k4 vs supervised (H2) | +0.042±0.037 [+0.032, +0.054] 36/2/2 | −0.037±0.030 0/5/35 | −0.073±0.060 | +0.006±0.027 23/2/15 | −0.028±0.021 | fails |
+| **E/S-cue vs error-gated (H3)** | +0.094±0.047 [+0.080, +0.109] 40/0/0 | **−0.073±0.036** [−0.083, −0.062] 0/0/40 | −0.145±0.072 0/0/40 | +0.021±0.034 [+0.011, +0.032] 30/0/10 | **−0.071±0.046** 0/0/40 | **fails** (A and B guards) |
+| E/E-cue vs error-gated | +0.100±0.050 [+0.084, +0.115] 40/0/0 | +0.000 0/40/0 | +0.000 | +0.100±0.050 40/0/0 | +0.001±0.009 13/18/9 | passes |
+| E/S-cue vs E/E-cue | −0.006±0.063 [−0.025, +0.014] 18/0/22 | −0.073±0.036 0/0/40 | −0.145±0.072 | −0.078±0.048 2/0/38 | −0.072±0.045 0/0/40 | fails |
+| E/E-cue vs supervised | +0.015±0.070 [−0.006, +0.037] 25/0/15 | +0.063±0.035 40/0/0 | +0.127±0.071 | +0.079±0.050 38/0/2 | +0.107±0.044 40/0/0 | fails (forgetting) |
+
+**H4 statistic** d = [F(error-gated) − F(E/E-cue)] − [F(supervised) −
+F(S/E-cue)]: **+0.066±0.040 [+0.054, +0.078], 37/3/0** (seeds 1..20:
++0.058 [+0.040, +0.079] 18/2/0; seeds 21..40: +0.073 [+0.060, +0.087]
+19/1/0).
+
+Seed blocks (flip 50, Δ forgetting / Δ A test): S/S-cue vs supervised
+1..20 +0.066 / −0.054 (the #120 numbers), 21..40 +0.051 / −0.048; S/E-cue
+vs supervised 1..20 +0.035 / 0.000, 21..40 +0.033 / 0.000; E/S-cue vs
+error-gated 1..20 +0.106 / −0.082, 21..40 +0.082 / −0.064.
+
+### Secondary flips (reported, not hypotheses; not corrected for multiplicity)
+
+| flip | x vs base | Δ forgetting | Δ A test | Δ B test | rule |
+|---|---|---|---|---|---|
+| 25 | S/S-cue vs supervised | +0.019±0.029 26/1/13 | −0.051 0/2/38 | −0.050 0/0/40 | fails |
+| 25 | S/E-cue vs supervised | +0.011±0.016 [+0.006, +0.015] 25/11/4 | +0.000 0/40/0 | −0.002 | fails |
+| 25 | S/S-cue-k1 / k2 / k4 vs supervised | +0.005 / +0.012 / +0.015 | −0.011 / −0.025 / −0.037 | −0.010 / −0.019 / −0.032 | all fail |
+| 25 | E/S-cue vs error-gated | +0.042±0.027 40/0/0 | −0.073 0/0/40 | −0.073 0/0/40 | fails |
+| 25 | E/E-cue vs error-gated | +0.043±0.027 39/1/0 | +0.000 | −0.004 | fails (mean < 0.05) |
+| 100 | S/S-cue vs supervised | +0.149±0.058 40/0/0 | −0.051 0/2/38 | −0.033 | fails (A guard) |
+| 100 | **S/E-cue vs supervised** | **+0.092±0.048 [+0.078, +0.106] 40/0/0** | **+0.000 0/40/0** | +0.003 | **passes** |
+| 100 | S/S-cue-k1 vs supervised | +0.038±0.031 33/7/0 | −0.011 | −0.005 | fails (mean < 0.05) |
+| 100 | S/S-cue-k2 vs supervised | +0.069±0.045 [+0.055, +0.083] 38/2/0 | −0.025 | −0.012 | passes |
+| 100 | S/S-cue-k4 vs supervised | +0.105±0.054 [+0.089, +0.121] 40/0/0 | −0.037 | −0.021 | passes |
+| 100 | E/S-cue vs error-gated | +0.202±0.073 40/0/0 | −0.073 | −0.063 | fails (A guard) |
+| 100 | E/E-cue vs error-gated | +0.206±0.072 40/0/0 | +0.000 | +0.006 | passes |
+
+H4 statistic: flip 25 +0.032 [+0.025, +0.040] 37/3/0; flip 100 +0.114
+[+0.100, +0.128] 40/0/0.
+
+## Pre-stated readings
+
+* **S0 (structural): holds.** In all 720 rows with an S pattern gate
+  (3 flips × 40 seeds × 6 arms), pattern-edge weights after A and after B
+  are bit-identical to the `supervised` control and A test after A has
+  FN = 0 (TPR = 1.000). Every A-test change of those arms is a TNR change.
+  The #120 H1 failure is therefore an **evaluation-time false-positive
+  cost of the cue drive**, not a change in what the pattern edges learn:
+  `S/S-cue` loses 0.101 TNR (A test −0.051 on 40 seeds; −0.054 on #120's
+  20 seeds).
+* **H1 (S/E-cue vs supervised, flip 50): fails** on the forgetting
+  criterion, as expected a priori. The cue-edge error gate removes the A
+  cost entirely (A test identical in 40/40 seeds, B test +0.001) and
+  forgetting still falls by +0.034 (32/40 better, CI [+0.025, +0.044]),
+  but the mean is below the 0.05 threshold. Cue A edges end at weight 0.15
+  (vs 0.43 under S/S), so little cue drive is left to recover A after B.
+* **H2 (fewer cue lines, flip 50): fails** for k = 1, 2, 4. Fewer lines
+  shrink the A cost (−0.011 / −0.025 / −0.037, all inside the guard) and
+  the forgetting reduction together (+0.015 / +0.030 / +0.042, all < 0.05).
+  No k reaches both.
+* **H3 (E/S-cue vs error-gated, flip 50): fails.** The error gate on
+  pattern edges alone does not make the supervised cue rule usable: the
+  forgetting reduction is large (+0.094, 40/40) but A test drops −0.073
+  and B test −0.071 (40/40 seeds worse in both), again purely through TNR
+  (−0.145).
+* **H4 (attribution, flip 50): passes.** With the same (E) cue-edge gate,
+  the cue cuts forgetting by 0.066 more under an E pattern gate than under
+  an S pattern gate (37/3/0, CI [+0.054, +0.078], both seed blocks
+  positive).
+
+## Findings, including negative ones
+
+* **Answer to "why does the cue hurt supervised A-test?"** Structural, not
+  a generalisation failure of the pattern edges: under the supervised
+  pattern rule the pattern edges learn exactly what they learn without the
+  cue, and A positives are always recalled, so any cue drive into a target
+  can only add false positives on A after A. With the supervised rule on
+  the cue edges, those edges end around 0.43 and add them.
+* **The two edge classes play different roles.** Gating the **cue edges**
+  is what protects A test (S/E and E/E: ΔA = 0.000 in 40/40 seeds; S/S and
+  E/S: −0.051 and −0.073). Gating the **pattern edges** is what turns the
+  cue into a large forgetting cut (H4). Only the combination E/E passes
+  the #120 rule at flip 50 (+0.100, 40/40, reproducing #120's H2 on 40
+  seeds).
+* **No fix for the supervised control at the primary flip.** None of the
+  pre-registered supervised-pattern variants (S/E, k1, k2, k4) passes at
+  flip 50; the best (S/E) keeps A intact but delivers only +0.034. At flip
+  100 (secondary, uncorrected) S/E passes cleanly (+0.092, ΔA 0.000,
+  40/40) and k2/k4 pass inside the guard — the cue helps the supervised
+  rule when most pairs conflict, not at 50 %.
+* **Budget.** S/E costs 1520 weight changes vs 1456 for the control
+  (+4 %), S/S 6311 (+333 %), E/S 4934. Same 512 episodes everywhere.
+* **Bit-level reproducibility.** #120's four arms reproduce exactly on
+  seeds 1..20; the effect sizes on the new seeds 21..40 have the same sign
+  and similar size for every comparison above.
+
+## Limitations
+
+Synthetic generated graph only (not BANC; DOI 10.7910/DVN/7WTH1N is not
+built on the box). Artificial OR-rule task. One graph size (64/24/6),
+threshold 1, init weight 1 (point 2 of the structural analysis depends on
+init ≥ 1 and the OR teacher), one cue-selection rule (#120 greedy cover,
+cap 12) and greedy-prefix line counts, 40 seeds, 64 held-out test patterns,
+no rehearsal or protection. H1–H4 are four tests at one flip rate without
+multiplicity correction; the flip-25/100 rows are secondary. The cue is a
+set of input lines switched on together, an engineering device; nothing
+here models a biological context signal.
