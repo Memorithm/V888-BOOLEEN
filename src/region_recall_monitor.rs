@@ -1368,7 +1368,14 @@ mod tests {
             Err(RegionMonitorError::InvalidBudget),
         );
         assert_eq!(
-            monitor.paired_region_transition_cost(&baseline, &[BooleanState::new(3), BooleanState::new(3), BooleanState::new(3)]),
+            monitor.paired_region_transition_cost(
+                &baseline,
+                &[
+                    BooleanState::new(3),
+                    BooleanState::new(3),
+                    BooleanState::new(3)
+                ]
+            ),
             Err(RegionMonitorError::InvalidDimensions),
         );
         assert_eq!(
