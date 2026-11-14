@@ -25,8 +25,7 @@ pub struct ProposalResult {
     pub accepted: bool,
 }
 
-/// A cache is rebuilt from the current model for each proposal, including
-/// after accepted interventions. Its build cost is included in engine choice.
+/// A cache is constructed only when its conservative cost lower bound can beat\n/// full inference. Rebuild after acceptance; never reuse stale state.
 /// Unknown calibration (zero rates) always selects the full oracle.
 pub fn evaluate_and_apply(
     current: &mut FiveCircleHierarchy,
@@ -51,26 +50,33 @@ pub fn evaluate_and_apply(
             current.with_neuron_parameters(layer, neuron, model)?
         }
     };
-    let cache = FiveCircleIncrementalCache::new(current, planes)?;
-    let delta = cache.evaluate(proposal)?;
     let full_gates = current.neuron_count();
-    let incremental_cost = (cache.build_gate_evaluations() as u128)
-        .saturating_mul(calibration.full_ns_per_gate as u128)
-        .saturating_add(calibration.cache_build_ns as u128)
-        .saturating_add((delta.gate_evaluations as u128)
-            .saturating_mul(calibration.incremental_ns_per_gate as u128));
+    // A fresh cache evaluates every baseline gate before any counterfactual
+    // work. With nonzero per-gate cost it cannot beat a single full pass.
+    // Skip that allocation and traversal entirely when the lower bound
+    // already exceeds the full oracle cost.
     let full_cost = (full_gates as u128)
         .saturating_mul(calibration.full_ns_per_gate as u128);
-    let engine = if calibration.full_ns_per_gate != 0
+    let cache_lower_bound = (full_gates as u128)
+        .saturating_mul(calibration.full_ns_per_gate as u128)
+        .saturating_add(calibration.cache_build_ns as u128);
+    let can_try_incremental = calibration.full_ns_per_gate != 0
         && calibration.incremental_ns_per_gate != 0
-        && incremental_cost < full_cost {
-        Engine::Incremental
+        && cache_lower_bound < full_cost;
+    let (output, engine, cone_gates) = if can_try_incremental {
+        let cache = FiveCircleIncrementalCache::new(current, planes)?;
+        let delta = cache.evaluate(proposal)?;
+        let incremental_cost = cache_lower_bound.saturating_add(
+            (delta.gate_evaluations as u128)
+                .saturating_mul(calibration.incremental_ns_per_gate as u128),
+        );
+        if incremental_cost < full_cost {
+            (delta.output, Engine::Incremental, delta.gate_evaluations)
+        } else {
+            (candidate.infer_bitplanes(planes)?, Engine::Full, delta.gate_evaluations)
+        }
     } else {
-        Engine::Full
-    };
-    let output = match engine {
-        Engine::Full => candidate.infer_bitplanes(planes)?,
-        Engine::Incremental => delta.output,
+        (candidate.infer_bitplanes(planes)?, Engine::Full, 0)
     };
     if accept {
         *current = candidate;
@@ -79,7 +85,7 @@ pub fn evaluate_and_apply(
         output,
         engine,
         full_gates,
-        cone_gates: delta.gate_evaluations,
+        cone_gates,
         accepted: accept,
     })
 }
