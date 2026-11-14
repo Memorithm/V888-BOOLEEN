@@ -60,7 +60,9 @@ impl OnlineRecall {
         };
         let recovered = matches && self.quiet_streak > 0;
         let next_recoveries = if recovered {
-            self.recovery_events.checked_add(1).ok_or(RecallError::ZeroBudget)?
+            self.recovery_events
+                .checked_add(1)
+                .ok_or(RecallError::ZeroBudget)?
         } else {
             self.recovery_events
         };
@@ -275,11 +277,13 @@ impl OnlineRecall {
         });
         // Compare rational occupancies without floating point. Each region's
         // denominator is ticks * member_count, so compare per-member activity.
-        candidates.sort_unstable_by(|a, b| {
-            (a.1 * b.2).cmp(&(b.1 * a.2)).then_with(|| a.0.cmp(&b.0))
-        });
+        candidates
+            .sort_unstable_by(|a, b| (a.1 * b.2).cmp(&(b.1 * a.2)).then_with(|| a.0.cmp(&b.0)));
         candidates.truncate(maximum_regions);
-        Ok(candidates.into_iter().map(|(region, _, _)| region).collect())
+        Ok(candidates
+            .into_iter()
+            .map(|(region, _, _)| region)
+            .collect())
     }
 
     /// Atomically observe one simulated state and select the most active annotated regions.
@@ -687,7 +691,10 @@ mod tests {
     fn quiet_region_selection_is_bounded_and_annotation_only() {
         let mut tracker = OnlineRecall::new(Subcircuit::new(5, vec![0, 1, 2, 3, 4]).unwrap());
         let labels = [Some(8), Some(8), Some(3), Some(3), None];
-        assert_eq!(tracker.select_quiet_regions(&labels, 50, 1, 2), Err(RecallError::ZeroBudget));
+        assert_eq!(
+            tracker.select_quiet_regions(&labels, 50, 1, 2),
+            Err(RecallError::ZeroBudget)
+        );
         let mut state = BooleanState::new(5);
         state.set(0, true).unwrap();
         state.set(1, true).unwrap();
@@ -695,12 +702,24 @@ mod tests {
         tracker.observe(&state, 1).unwrap();
         tracker.observe(&BooleanState::new(5), 1).unwrap();
         // Region 3: 1/4; region 8: 2/4; unannotated index 4 excluded.
-        assert_eq!(tracker.select_quiet_regions(&labels, 50, 2, 2), Ok(vec![3, 8]));
+        assert_eq!(
+            tracker.select_quiet_regions(&labels, 50, 2, 2),
+            Ok(vec![3, 8])
+        );
         assert_eq!(tracker.select_quiet_regions(&labels, 25, 2, 2), Ok(vec![3]));
         assert_eq!(tracker.select_quiet_regions(&labels, 0, 2, 2), Ok(vec![]));
-        assert_eq!(tracker.select_quiet_regions(&labels, 100, 2, 1), Ok(vec![3]));
-        assert_eq!(tracker.select_quiet_regions(&labels[..4], 50, 2, 2), Err(RecallError::LengthMismatch));
-        assert_eq!(tracker.select_quiet_regions(&labels, 101, 2, 2), Err(RecallError::ZeroBudget));
+        assert_eq!(
+            tracker.select_quiet_regions(&labels, 100, 2, 1),
+            Ok(vec![3])
+        );
+        assert_eq!(
+            tracker.select_quiet_regions(&labels[..4], 50, 2, 2),
+            Err(RecallError::LengthMismatch)
+        );
+        assert_eq!(
+            tracker.select_quiet_regions(&labels, 101, 2, 2),
+            Err(RecallError::ZeroBudget)
+        );
         assert_eq!(tracker.ticks(), 2);
     }
 
