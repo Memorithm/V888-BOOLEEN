@@ -118,6 +118,60 @@ impl PersistentSession {
         Ok(changes[&0])
     }
 
+    /// Execute a bounded heterogeneous sequence against the evolving accepted circuit.
+    /// Every proposed output is compared with an independently reconstructed Full
+    /// inference. Accepted interventions update the persistent cache; rejected ones
+    /// leave it unchanged. A mismatch stops execution with an error.
+    ///
+    /// The caller owns TRAIN/VALID/TEST/OOD separation. This method does not
+    /// calibrate on, or infer labels from, any evaluation partition.
+    /// If an invalid intervention occurs after earlier acceptances, those earlier
+    /// acceptances remain committed (prefix semantics).
+    pub fn execute_verified_sequence(
+        &mut self,
+        interventions: &[(PackedIntervention, bool)],
+        max_steps: usize,
+    ) -> Result<Vec<(u64, usize)>, HierarchyError> {
+        if interventions.len() > max_steps {
+            return Err(HierarchyError::InvalidInput);
+        }
+        // Reconstruct the original input planes from the bijective routing.
+        // The input planes remain constant across accepted interventions.
+        let mut planes = vec![0_u64; self.model.input_bits()];
+        for (position, &source) in self.model.routing().iter().enumerate() {
+            planes[usize::from(source)] = self.stages[0][position];
+        }
+        let mut trace = Vec::with_capacity(interventions.len());
+        for &(intervention, accepted) in interventions {
+            let predicted = self.propose(intervention)?;
+            let candidate = match intervention {
+                PackedIntervention::LeafSwap { first, second } => {
+                    let mut routing = self.model.routing().to_vec();
+                    routing.swap(first, second);
+                    self.model.rerouted(routing)?
+                }
+                PackedIntervention::Parameter { layer, neuron, model } => {
+                    self.model.with_neuron_parameters(layer, neuron, model)?
+                }
+            };
+            let oracle = candidate.infer_bitplanes(&planes)?;
+            if predicted != oracle {
+                return Err(HierarchyError::InvalidInput);
+            }
+            let updated = if accepted {
+                let count = self.accept(intervention)?;
+                if self.output() != oracle {
+                    return Err(HierarchyError::InvalidInput);
+                }
+                count
+            } else {
+                0
+            };
+            trace.push((predicted, updated));
+        }
+        Ok(trace)
+    }
+
     /// Exact per-lane Boolean influence of a proposed intervention on the
     /// current output. A set bit means that lane's final prediction flips.
     /// The session remains unchanged, including on invalid proposals.
