@@ -102,10 +102,10 @@ mod tests {
 
     #[test]
     fn parses_linux_hwm_strictly() {
-        assert_eq!(parse_vm_hwm_kib("Name:\\ttest\\nVmHWM:\\t1234 kB\\n"), Some(1234));
-        assert_eq!(parse_vm_hwm_kib("VmHWM:\\t12 MB\\n"), None);
-        assert_eq!(parse_vm_hwm_kib("VmHWM:\\tbad kB\\n"), None);
-        assert_eq!(parse_vm_hwm_kib("VmRSS:\\t1234 kB\\n"), None);
+        assert_eq!(parse_vm_hwm_kib("Name:\ttest\nVmHWM:\t1234 kB\n"), Some(1234));
+        assert_eq!(parse_vm_hwm_kib("VmHWM:\t12 MB\n"), None);
+        assert_eq!(parse_vm_hwm_kib("VmHWM:\tbad kB\n"), None);
+        assert_eq!(parse_vm_hwm_kib("VmRSS:\t1234 kB\n"), None);
     }
 
     #[test]
