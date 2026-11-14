@@ -181,6 +181,159 @@ mean ≥ 0.05, > 0 in ≥ 32/40 seeds, CI lower bound > 0.
 cargo +1.89 run --release -- bench-task-sequence --csv results/task-sequence-v1.csv
 ```
 
-## Results
+## Results (pre-registered grid; CSV `results/task-sequence-v1.csv`)
 
-Filled after the run. Nothing above this section is changed after the run.
+Nothing above this section was changed after the run.
+
+CSV: 1080 rows (3 flips × 40 seeds × 9 arms), sha256
+`9d27c7d080c8c2a03de0b9b277ba87d8a9210dd5a21bd96a0142d8f8e9c90e52`. A second
+run gave a byte-identical CSV and identical stdout; the grid takes ~24 s
+(release build, CPU only). `topology_unchanged=true` in every row. Cue sizes
+(mean lines): 7.7 / 8.8 / 10.4 / 11.8; reach 24 / 24 / 24 / 23.0 of 24
+targets. With four cues reserved, the pattern pool is much smaller than in
+#120/#121. TEST has 378.4 (pattern, target) pairs on average, but only
+**1.9 % of them are novel-configuration pairs** (mean 7.1 per task, median
+6, min 0, max 28).
+
+### Primary (flip 50 %, seeds 41..80), mean ± sd over 40 seeds
+
+| arm | ACC_2 | ACC_3 | ACC_4 | LEARN_4 | FGT_4 | R[4][1] (T1 at end) | weights changed (4 tasks) |
+|---|---|---|---|---|---|---|---|
+| supervised | 0.735±0.041 | 0.665±0.051 | 0.633±0.041 | 0.965±0.017 | 0.442±0.056 | 0.527±0.113 | 1217.5 |
+| error-gated | 0.751±0.042 | 0.673±0.051 | 0.643±0.039 | 1.000±0.000 | 0.477±0.052 | 0.525±0.105 | 62.0 |
+| margin-gated-4 | 0.751±0.042 | 0.673±0.051 | 0.643±0.039 | 1.000±0.000 | 0.477±0.052 | 0.525±0.105 | 165.7 |
+| S/E-cue | 0.811±0.043 | 0.764±0.047 | 0.752±0.041 | 0.965±0.017 | 0.285±0.046 | 0.681±0.078 | 1279.1 |
+| E/S-cue | 0.769±0.043 | 0.703±0.056 | 0.687±0.037 | 0.958±0.020 | 0.362±0.049 | 0.600±0.084 | 6734.0 |
+| **E/E-cue** | **0.922±0.030** | **0.881±0.037** | **0.858±0.039** | 1.000±0.000 | **0.189±0.052** | **0.779±0.074** | 117.0 |
+| M2/M2-cue | 0.901±0.034 | 0.846±0.042 | 0.832±0.034 | 1.000±0.000 | 0.225±0.046 | 0.748±0.073 | 146.9 |
+| M4/M4-cue | 0.848±0.037 | 0.788±0.047 | 0.778±0.035 | 1.000±0.000 | 0.296±0.046 | 0.693±0.083 | 255.6 |
+| M8/M8-cue | 0.833±0.042 | 0.777±0.049 | 0.768±0.036 | 1.000±0.000 | 0.309±0.047 | 0.685±0.075 | 459.2 |
+
+Accuracy matrix R[i][j] at flip 50 (mean over seeds; rows = after task i):
+
+| arm | after T1 | after T2 | after T3 | after T4 |
+|---|---|---|---|---|
+| supervised | 0.972 · · · | 0.512 0.957 · · | 0.511 0.513 0.970 · | 0.525 0.528 0.510 0.961 |
+| error-gated | 1.000 · · · | 0.503 1.000 · · | 0.501 0.519 1.000 · | 0.525 0.529 0.516 1.000 |
+| E/E-cue | 1.000 · · · | 0.844 1.000 · · | 0.793 0.851 1.000 · | 0.779 0.812 0.841 1.000 |
+| M2/M2-cue | 1.000 · · · | 0.802 1.000 · · | 0.740 0.797 1.000 · | 0.748 0.774 0.804 1.000 |
+
+At flip 50 the uncued arms fall to chance (≈ 0.50–0.53) on every earlier task
+as soon as the next task is trained. In this small-pool setting almost every
+TEST configuration was seen in training, so each one is simply relabelled.
+
+### Paired comparisons (flip 50 %, 40 seeds)
+
+Each cell: mean ± sd [bootstrap 95 % CI] better/tied/worse seeds (> 0
+favours x; Δ FGT = base − x).
+
+| k | x vs base | Δ ACC_k | Δ ACCN_k (novel) | Δ LEARN_k | Δ LAST_k | Δ FGT_k | seq rule | two-task rule |
+|---|---|---|---|---|---|---|---|---|
+| 2 | **E/E-cue vs error-gated (H1)** | +0.170±0.045 [+0.157, +0.185] 40/0/0 | +0.064±0.100 [+0.033, +0.096] 14/26/0 | 0.000 | 0.000 | **+0.341±0.090 [+0.315, +0.369] 40/0/0** | passes | **passes** |
+| 3 | **E/E-cue vs error-gated (H2)** | **+0.208±0.041 [+0.195, +0.220] 40/0/0** | +0.069±0.090 [+0.044, +0.097] 20/19/1 | 0.000 | 0.000 | +0.312±0.062 [+0.293, +0.331] 40/0/0 | **passes** | — |
+| 4 | **E/E-cue vs error-gated (H2)** | **+0.215±0.045 [+0.202, +0.229] 40/0/0** | +0.030±0.062 [+0.012, +0.049] 18/20/2 | 0.000 | 0.000 | +0.287±0.060 [+0.269, +0.306] 40/0/0 | **passes** | — |
+| 2 | E/E-cue vs supervised | +0.187±0.043 [+0.175, +0.201] 40/0/0 | +0.070±0.118 [+0.036, +0.110] 14/26/0 | +0.035±0.025 38/2/0 | +0.043±0.035 32/8/0 | +0.304±0.092 [+0.276, +0.333] 40/0/0 | passes | passes |
+| 3 | **E/E-cue vs supervised (H3)** | **+0.217±0.042 [+0.203, +0.229] 40/0/0** | +0.073±0.091 [+0.047, +0.100] 21/18/1 | +0.034±0.020 40/0/0 | +0.030±0.032 28/12/0 | +0.274±0.071 [+0.251, +0.296] 40/0/0 | **passes** | — |
+| 4 | **E/E-cue vs supervised (H3)** | **+0.225±0.047 [+0.211, +0.239] 40/0/0** | +0.030±0.062 [+0.012, +0.049] 18/20/2 | +0.035±0.017 40/0/0 | +0.039±0.034 29/11/0 | +0.253±0.067 [+0.232, +0.273] 40/0/0 | **passes** | — |
+| 2 | error-gated vs supervised | +0.017±0.023 [+0.010, +0.024] 27/8/5 | +0.006 1/39/0 | +0.035 | +0.043 | −0.037±0.042 [−0.051, −0.025] 6/2/32 | fails | fails |
+| 4 | error-gated vs supervised | +0.009±0.016 [+0.004, +0.014] 22/11/7 | +0.000 | +0.035 | +0.039 | −0.034±0.027 3/0/37 | fails | — |
+| 2 | S/E-cue vs supervised | +0.076±0.034 [+0.066, +0.087] 40/0/0 | +0.027 8/32/0 | 0.000 | 0.000 | +0.153±0.069 [+0.132, +0.175] 40/0/0 | passes | passes |
+| 3 | S/E-cue vs supervised | +0.099±0.036 [+0.088, +0.110] 40/0/0 | +0.030 | 0.000 | 0.000 | +0.149±0.054 40/0/0 | passes | — |
+| 4 | S/E-cue vs supervised | +0.118±0.034 [+0.108, +0.128] 40/0/0 | +0.018 | 0.000 | 0.000 | +0.158±0.045 40/0/0 | passes | — |
+| 2 | E/S-cue vs error-gated | +0.017±0.039 [+0.006, +0.030] 30/0/10 | +0.020 | −0.040±0.026 0/1/39 | **−0.038±0.036 0/12/28** | +0.115±0.062 39/1/0 | fails | passes |
+| 4 | E/S-cue vs error-gated | +0.044±0.031 [+0.035, +0.054] 38/0/2 | +0.021 | −0.042±0.020 0/0/40 | −0.047±0.036 0/7/33 | +0.115±0.040 40/0/0 | fails | — |
+| 4 | E/S-cue vs E/E-cue | −0.171±0.047 [−0.186, −0.157] 0/0/40 | −0.008 | −0.042 | −0.047 | −0.172±0.066 0/0/40 | fails | — |
+| 2–4 | margin-gated-4 vs error-gated | 0.000 0/40/0 (all k) | 0.000 | 0.000 | 0.000 | 0.000 | fails | fails |
+| 3 | **M2/M2-cue vs E/E-cue (H5)** | **−0.036±0.027 [−0.044, −0.028] 0/4/36** | −0.011 0/35/5 | 0.000 | 0.000 | −0.053±0.040 [−0.066, −0.042] 0/4/36 | **fails** | — |
+| 3 | **M4/M4-cue vs E/E-cue (H5)** | **−0.093±0.036 [−0.105, −0.082] 0/0/40** | −0.039 2/27/11 | 0.000 | 0.000 | −0.140±0.055 0/0/40 | **fails** | — |
+| 3 | **M8/M8-cue vs E/E-cue (H5)** | **−0.104±0.038 [−0.116, −0.092] 0/0/40** | −0.039 2/27/11 | 0.000 | 0.000 | −0.156±0.056 0/0/40 | **fails** | — |
+| 4 | M2 / M4 / M8 vs E/E-cue | −0.026 / −0.080 / −0.090 (0 better seeds each) | | 0.000 | 0.000 | −0.035 / −0.107 / −0.120 | fail | — |
+| 4 | M2 / M4 / M8 vs supervised | +0.198 / +0.144 / +0.135 (40/0/0 each) | +0.030 / +0.021 / +0.018 | +0.035 | +0.039 | +0.218 / +0.146 / +0.133 | pass | — |
+
+Seed blocks (flip 50, Δ ACC, all 20/0/0): E/E-cue vs error-gated k = 3:
+41..60 +0.205 [+0.190, +0.218], 61..80 +0.212 [+0.190, +0.231]; k = 4: +0.223 /
++0.208. E/E-cue vs supervised k = 3: +0.215 / +0.218; k = 4: +0.237 / +0.213.
+Every block passes the same rules as the full set.
+
+### Secondary flips (reported, not hypotheses; not corrected for multiplicity)
+
+| flip | x vs base | Δ ACC_2 | Δ ACC_3 | Δ ACC_4 | seq rule k = 2/3/4 |
+|---|---|---|---|---|---|
+| 25 | E/E-cue vs error-gated | +0.081 [+0.068, +0.097] 40/0/0 | +0.131 40/0/0 | +0.166 40/0/0 | pass / pass / pass |
+| 25 | E/E-cue vs supervised | +0.111 40/0/0 | +0.146 40/0/0 | +0.186 40/0/0 | pass / pass / pass |
+| 25 | S/E-cue vs supervised | +0.043 [+0.034, +0.053] 37/3/0 | +0.063 40/0/0 | +0.076 40/0/0 | fail / pass / pass |
+| 25 | E/S-cue vs error-gated (Δ LAST ≈ −0.04) | −0.008 16/1/23 | +0.012 24/0/16 | +0.020 28/0/12 | fail / fail / fail |
+| 25 | M2 / M4 / M8 vs E/E-cue | −0.010 / −0.031 / −0.035 | −0.024 / −0.059 / −0.064 | −0.031 / −0.077 / −0.083 | all fail |
+| 100 | E/E-cue vs error-gated | +0.346 40/0/0 | +0.231 40/0/0 | +0.340 40/0/0 | pass / pass / pass |
+| 100 | E/E-cue vs supervised | +0.348 40/0/0 | +0.242 40/0/0 | +0.341 40/0/0 | pass / pass / pass |
+| 100 | S/E-cue vs supervised | +0.166 40/0/0 | +0.113 40/0/0 | +0.165 40/0/0 | pass / pass / pass |
+| 100 | E/S-cue vs error-gated | +0.081 39/0/1 | +0.034 36/0/4 | +0.077 40/0/0 | pass / fail / pass |
+| 100 | M2 / M4 / M8 vs E/E-cue | −0.041 / −0.145 / −0.177 | −0.029 / −0.093 / −0.116 | −0.047 / −0.138 / −0.172 | all fail |
+
+At flip 100 the chain alternates (T3 = T1), so k = 3 is easier for the
+uncued arms (they relearn T1 during T3). That is why Δ ACC_3 is smaller than
+Δ ACC_2 and Δ ACC_4 there.
+
+## Pre-stated readings
+
+| | result |
+|---|---|
+| H1: `E/E-cue` passes the two-task rule vs `error-gated` on held-out seeds 41..80 | **passes** (Δ FGT_2 +0.341, 40/40; ΔA and ΔB exactly 0) |
+| H2: `E/E-cue` passes the sequence rule vs `error-gated` at k = 3 and k = 4 | **passes** (Δ ACC +0.208 and +0.215, 40/40) |
+| H3: `E/E-cue` passes the sequence rule vs `supervised` at k = 3 and k = 4 | **passes** (Δ ACC +0.217 and +0.225, 40/40; LEARN and LAST also higher) |
+| H4: novel-configuration Δ ACCN strong at k = 3 and 4 | **not evaluable**: median 6 novel TEST pairs per task (< 20 pre-registered). Descriptive only: +0.069 [+0.044, +0.097] at k = 3 (20/19/1) and +0.030 [+0.012, +0.049] at k = 4 (18/20/2). At k = 4 this is below the 0.05 effect size anyway. |
+| H5: some margin arm passes the sequence rule vs `E/E-cue` at k = 3 | **fails**: every margin is worse, and more so as m grows (−0.036, −0.093, −0.104; 0 better seeds) |
+
+**Reading.**
+- On seeds never used before, the #121 winner replicates: error-gating both
+  edge classes with one cue per task keeps its benefit for two, three and
+  four tasks. Its advantage in mean final accuracy grows from +0.170 (k = 2)
+  to +0.215 (k = 4) vs `error-gated`, and from +0.187 to +0.225 vs the
+  supervised control, at the same 256 episodes per task. It also changes
+  10× fewer weights than `supervised` (117 vs 1218 over four tasks).
+- The benefit decays slowly with sequence length but does not vanish: T1
+  falls from 0.844 after T2 to 0.793 after T3 and 0.779 after T4 (uncued:
+  chance). This is consistent with point 1 of the a-priori analysis: cue j's
+  edges are frozen after task j, so what erodes is the shared pattern edges.
+- **A positive margin does not help** at threshold 1. With cues it is
+  monotonically harmful. Without a cue, `margin-gated-4` is identical to
+  `error-gated` on every accuracy here, while changing 2.7× more weights.
+  This matches #117 cycle 8.
+- **The B-side cost is specific to the supervised cue-edge rule.**
+  `E/S-cue` costs about −0.04 on the just-learned task (Δ LEARN, Δ LAST) at
+  every k and flip and is 0.17 worse than `E/E-cue` at k = 4. `E/E-cue` and
+  the margin arms have Δ LEARN = Δ LAST = 0 vs `error-gated`. Switching the
+  cue edges to the error gate removes that cost at equal budget. No
+  threshold/margin variant beat it.
+- `S/E-cue` (supervised pattern edges, error-gated cue edges) passes vs
+  `supervised` at every k here (+0.076 to +0.118), unlike in #121 (+0.034
+  forgetting cut). The difference comes from the smaller pattern pool (more
+  forgetting to recover), not from a rule change. It is not a hypothesis of
+  this cycle.
+- The generalisation side is **not answered** by this design. Reserving four
+  cues leaves so few pattern inputs that 98 % of TEST pairs repeat a training
+  configuration. `error-gated` then reaches 1.000 on TEST, which is
+  memorisation, not generalisation. The few novel pairs show a positive but
+  noisy and shrinking `E/E-cue` effect.
+
+## Limitations
+
+- Synthetic graph and artificial OR-rule task only. One graph size (64/24/6),
+  threshold 1, init 1, one cue-selection rule (greedy cover, cap 12).
+  Nothing is measured on the real BANC graph (DOI 10.7910/DVN/7WTH1N), which
+  is not built on this machine.
+- **Small pattern pool.** Four reserved cues leave ~25 pattern inputs. TEST
+  is then nearly in-distribution (1.9 % novel pairs), and uncued arms forget
+  to chance at flip 50. The effect sizes here (+0.17 to +0.23) are therefore
+  larger than in #121 and are not comparable value-for-value with it. H4 is
+  not evaluable. A follow-up needs a larger graph or fewer reserved lines per
+  cue to test held-out generalisation properly.
+- The context cue is assumed known at test time, as in #120/#121.
+- 40 seeds; no multiplicity correction across H1–H5 or the three margins.
+  Secondary flips are uncorrected.
+- The equal budget is in episodes. Arms differ in weight writes: `E/E-cue`
+  writes ~10× fewer than `supervised`, and the margin arms write more than
+  `E/E-cue`.
+
+B888-3 files (`src/circuit_explorer.rs`, subcircuit recall, activity atlas)
+are untouched. No NVIDIA dependency, no secrets. CPU only.
