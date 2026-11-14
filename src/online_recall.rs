@@ -911,7 +911,10 @@ mod tests {
         assert_eq!(tracker.ticks(), 0);
         tracker.observe(&state, 1).unwrap();
         assert_eq!(tracker.ticks(), 1);
-        assert_eq!(tracker.live_regional_recall(&state, &labels, 2), Ok(vec![(9, 2, 2)]));
+        assert_eq!(
+            tracker.live_regional_recall(&state, &labels, 2),
+            Ok(vec![(9, 2, 2)])
+        );
         assert_eq!(tracker.ticks(), 1);
     }
 
