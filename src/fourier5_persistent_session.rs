@@ -311,6 +311,35 @@ impl PersistentSession {
         })
     }
 
+    /// Independently verify an adaptive decision against a complete inference.
+    /// Diagnostic safety mode: doubles inference work and makes no speed claim.
+    /// A mismatch fails closed without mutating the accepted model or cache.
+    pub fn propose_verified_adaptive(
+        &self,
+        proposal: PackedIntervention,
+        calibration: crate::fourier5_sequential_adaptive::EngineCalibration,
+    ) -> Result<crate::fourier5_sequential_adaptive::ProposalResult, HierarchyError> {
+        let selected = self.propose_adaptive(proposal, calibration)?;
+        let mut planes = vec![0u64; self.model.input_bits()];
+        for (position, &source) in self.model.routing().iter().enumerate() {
+            planes[usize::from(source)] = self.stages[0][position];
+        }
+        let candidate = match proposal {
+            PackedIntervention::LeafSwap { first, second } => {
+                let mut routing = self.model.routing().to_vec();
+                routing.swap(first, second);
+                self.model.rerouted(routing)?
+            }
+            PackedIntervention::Parameter { layer, neuron, model } => {
+                self.model.with_neuron_parameters(layer, neuron, model)?
+            }
+        };
+        if selected.output != candidate.infer_bitplanes(&planes)? {
+            return Err(HierarchyError::InvalidInput);
+        }
+        Ok(selected)
+    }
+
     /// Atomic acceptance: validate and construct the candidate first, then
     /// refresh only changed leaves/ancestors. Failed changes leave state intact.
     pub fn accept(&mut self, proposal: PackedIntervention) -> Result<usize, HierarchyError> {
@@ -373,6 +402,42 @@ mod tests {
     use super::*;
     use crate::fourier5::FiveCircle;
     use crate::fourier5_hierarchy::{GateKind, LeafRouting};
+
+    #[test]
+    fn verified_adaptive_matches_full_after_sequential_acceptances() {
+        use crate::fourier5_sequential_adaptive::EngineCalibration;
+        let base = FiveCircleHierarchy::from_modes(
+            &[GateKind::Majority, GateKind::Parity, GateKind::Or],
+            LeafRouting::SeededShuffle(47),
+        ).unwrap();
+        let planes: Vec<u64> = (0..base.input_bits())
+            .map(|i| (i as u64 + 5).wrapping_mul(0x9e3779b97f4a7c15))
+            .collect();
+        let mut session = PersistentSession::new(base, planes.clone()).unwrap();
+        for step in 0..16 {
+            let proposal = PackedIntervention::LeafSwap { first: step, second: step + 13 };
+            for (full, incremental) in [(1, 10000), (10000, 1), (0, 0)] {
+                let result = session.propose_verified_adaptive(
+                    proposal,
+                    EngineCalibration {
+                        full_ns_per_gate: full,
+                        incremental_ns_per_gate: incremental,
+                        cache_build_ns: 0,
+                    },
+                ).unwrap();
+                let mut routing = session.model().routing().to_vec();
+                routing.swap(step, step + 13);
+                let oracle = session.model().rerouted(routing).unwrap()
+                    .infer_bitplanes(&planes).unwrap();
+                assert_eq!(result.output, oracle);
+                assert!(!result.accepted);
+            }
+            if step % 2 == 0 {
+                session.accept(proposal).unwrap();
+                assert_eq!(session.output(), session.model().infer_bitplanes(&planes).unwrap());
+            }
+        }
+    }
 
     #[test]
     fn measured_selector_preserves_exact_output_and_rejects_invalid_budget() {
