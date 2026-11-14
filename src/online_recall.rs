@@ -354,6 +354,40 @@ impl OnlineRecall {
         self.recovery_events
     }
 
+    /// Consume at most `maximum_steps` simulated states, stopping when recall
+    /// remains positive for `required_streak` consecutive observations.
+    /// Returns the number of observations consumed, or None if not recovered.
+    /// This is an experimental temporal criterion, not biological evidence.
+    /// Input validation happens before the first observation.
+    pub fn observe_until_durable<'a>(
+        &mut self,
+        states: impl IntoIterator<Item = &'a BooleanState>,
+        minimum_active: usize,
+        required_streak: u64,
+        maximum_steps: usize,
+    ) -> Result<Option<usize>, RecallError> {
+        if minimum_active == 0 || required_streak == 0 || maximum_steps == 0 || maximum_steps > 1000
+        {
+            return Err(RecallError::ZeroBudget);
+        }
+        if usize::try_from(required_streak)
+            .ok()
+            .is_none_or(|n| n > maximum_steps)
+        {
+            return Err(RecallError::ZeroBudget);
+        }
+        if self.circuit.members().len() < minimum_active {
+            return Err(RecallError::ZeroBudget);
+        }
+        for (index, state) in states.into_iter().take(maximum_steps).enumerate() {
+            self.observe(state, minimum_active)?;
+            if self.current_streak >= required_streak {
+                return Ok(Some(index + 1));
+            }
+        }
+        Ok(None)
+    }
+
     #[must_use]
     pub fn ticks(&self) -> u64 {
         self.ticks
@@ -443,6 +477,35 @@ mod tests {
         assert_eq!(tracker.recovery_events(), 2);
         assert_eq!(tracker.observe(&quiet, 0), Err(RecallError::ZeroBudget));
         assert_eq!(tracker.recovery_events(), 2);
+    }
+
+    #[test]
+    fn durable_recall_stops_early_and_preserves_bounded_observation() {
+        let mut tracker = OnlineRecall::new(Subcircuit::new(2, vec![0, 1]).unwrap());
+        let mut active = BooleanState::new(2);
+        active.set(0, true).unwrap();
+        let quiet = BooleanState::new(2);
+        let sequence = [&quiet, &active, &quiet, &active, &active, &active, &quiet];
+        assert_eq!(
+            tracker.observe_until_durable(sequence, 1, 3, 7),
+            Ok(Some(6))
+        );
+        assert_eq!(tracker.ticks(), 6);
+        assert_eq!(tracker.latest_streak(), 3);
+        assert_eq!(
+            tracker.member_counts().collect::<Vec<_>>(),
+            vec![(0, 4), (1, 0)]
+        );
+        assert_eq!(
+            tracker.observe_until_durable([&quiet], 1, 1, 0),
+            Err(RecallError::ZeroBudget)
+        );
+        assert_eq!(tracker.ticks(), 6);
+        assert_eq!(
+            tracker.observe_until_durable([&quiet, &active], 1, 2, 2),
+            Ok(None)
+        );
+        assert_eq!(tracker.latest_streak(), 1);
     }
 
     #[test]
