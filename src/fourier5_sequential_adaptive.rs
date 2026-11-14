@@ -115,6 +115,21 @@ pub fn evaluate_frozen_batch(
     proposals: &[PackedIntervention],
     calibration: EngineCalibration,
 ) -> Result<BatchEvaluation, HierarchyError> {
+    evaluate_frozen_batch_with_margin(baseline, planes, proposals, calibration, 0)
+}
+
+/// Require a minimum predicted saving before selecting Incremental.
+/// `minimum_saving_ppm` is clamped to [0, 1_000_000]. A stricter
+/// margin can only select Full more often; outputs must remain identical.
+pub fn evaluate_frozen_batch_with_margin(
+    baseline: &FiveCircleHierarchy,
+    planes: &[u64],
+    proposals: &[PackedIntervention],
+    calibration: EngineCalibration,
+    minimum_saving_ppm: u32,
+) -> Result<BatchEvaluation, HierarchyError> {
+    let retained_ppm = 1_000_000_u128
+        .saturating_sub(u128::from(minimum_saving_ppm.min(1_000_000)));
     if planes.len() != baseline.input_bits() {
         return Err(HierarchyError::InvalidInput);
     }
@@ -171,7 +186,7 @@ pub fn evaluate_frozen_batch(
     let cold_lower_bound = (baseline.neuron_count() as u128)
         .saturating_mul(calibration.full_ns_per_gate as u128)
         .saturating_add(calibration.cache_build_ns as u128);
-    if cold_lower_bound >= full_cost {
+    if cold_lower_bound.saturating_mul(1_000_000) >= full_cost.saturating_mul(retained_ppm) {
         return Ok(BatchEvaluation {
             outputs: candidates
                 .iter()
@@ -197,7 +212,8 @@ pub fn evaluate_frozen_batch(
         .saturating_add(
             (cone_gates as u128).saturating_mul(calibration.incremental_ns_per_gate as u128),
         );
-    let use_incremental = incremental_cost < full_cost;
+    let use_incremental = incremental_cost.saturating_mul(1_000_000)
+        < full_cost.saturating_mul(retained_ppm);
     let outputs = if use_incremental {
         deltas.iter().map(|d| d.output).collect()
     } else {
@@ -337,6 +353,36 @@ mod tests {
             assert_eq!(result.cache_build_gates, 0);
             assert_eq!(result.incremental_gates, 0);
         }
+    }
+
+    #[test]
+    fn safety_margin_changes_engine_not_oracle_predictions() {
+        let model = FiveCircleHierarchy::from_modes(
+            &[GateKind::Majority, GateKind::Parity, GateKind::Or],
+            LeafRouting::SeededShuffle(43),
+        )
+        .unwrap();
+        let input = planes(model.input_bits());
+        let proposals: Vec<_> = (0..12)
+            .map(|i| PackedIntervention::LeafSwap {
+                first: i,
+                second: i + 1,
+            })
+            .collect();
+        let calibration = EngineCalibration {
+            full_ns_per_gate: 100,
+            incremental_ns_per_gate: 1,
+            cache_build_ns: 0,
+        };
+        let normal = evaluate_frozen_batch(&model, &input, &proposals, calibration).unwrap();
+        let conservative = evaluate_frozen_batch_with_margin(
+            &model, &input, &proposals, calibration, 1_000_000,
+        )
+        .unwrap();
+        assert_eq!(normal.engine, Engine::Incremental);
+        assert_eq!(conservative.engine, Engine::Full);
+        assert_eq!(normal.outputs, conservative.outputs);
+        assert_eq!(conservative.cache_build_gates, 0);
     }
 
     #[test]
