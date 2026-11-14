@@ -124,7 +124,6 @@ impl RecentPairedPolicy {
         Ok(self.windows[bucket].choice())
     }
 
-
     /// Choose for a *future* sequence of homogeneous-cost proposals, including
     /// the one-off cost of building or refreshing the cache. The caller must
     /// supply a conservative setup measurement and a predeclared horizon.
@@ -134,7 +133,11 @@ impl RecentPairedPolicy {
     /// If the cache is already valid, setup_ns may be zero. The caller must
     /// account separately for accepted interventions that invalidate it.
     pub fn choose_amortized(
-        &self, cone: usize, total: usize, horizon: usize, setup_ns: u64,
+        &self,
+        cone: usize,
+        total: usize,
+        horizon: usize,
+        setup_ns: u64,
     ) -> Result<Engine, RecentPolicyError> {
         if horizon == 0 || horizon > 1_000_000 {
             return Err(RecentPolicyError::InvalidHorizon);
@@ -143,10 +146,11 @@ impl RecentPairedPolicy {
         if window.len < MIN_PAIRS {
             return Ok(Engine::Full);
         }
-        let (full, incremental) = window.pairs[..window.len].iter().fold(
-            (0_u128, 0_u128),
-            |(f, i), p| (f + u128::from(p.full), i + u128::from(p.incremental)),
-        );
+        let (full, incremental) = window.pairs[..window.len]
+            .iter()
+            .fold((0_u128, 0_u128), |(f, i), p| {
+                (f + u128::from(p.full), i + u128::from(p.incremental))
+            });
         // Compare integer cross-products, retaining the strict 10% margin.
         // u64 timings, at most 16 samples and 1e6 proposals cannot overflow u128.
         let h = horizon as u128;
@@ -254,10 +258,22 @@ mod tests {
         // 8 observations: full=800, incremental=160, setup=1000.
         // One proposal is slower after setup; 20 proposals amortize it.
         assert_eq!(p.choose_amortized(2, 100, 1, 1000), Ok(Engine::Full));
-        assert_eq!(p.choose_amortized(2, 100, 20, 1000), Ok(Engine::Incremental));
-        assert_eq!(p.choose_amortized(2, 100, 0, 0), Err(RecentPolicyError::InvalidHorizon));
-        assert_eq!(p.choose_amortized(2, 100, 1_000_001, 0), Err(RecentPolicyError::InvalidHorizon));
-        assert_eq!(p.choose_amortized(101, 100, 2, 0), Err(RecentPolicyError::InvalidCone));
+        assert_eq!(
+            p.choose_amortized(2, 100, 20, 1000),
+            Ok(Engine::Incremental)
+        );
+        assert_eq!(
+            p.choose_amortized(2, 100, 0, 0),
+            Err(RecentPolicyError::InvalidHorizon)
+        );
+        assert_eq!(
+            p.choose_amortized(2, 100, 1_000_001, 0),
+            Err(RecentPolicyError::InvalidHorizon)
+        );
+        assert_eq!(
+            p.choose_amortized(101, 100, 2, 0),
+            Err(RecentPolicyError::InvalidCone)
+        );
         assert_eq!(p.choose(2, 100), Ok(Engine::Incremental));
     }
 
@@ -269,5 +285,4 @@ mod tests {
         }
         assert_eq!(p.choose_amortized(2, 100, 100, 0), Ok(Engine::Full));
     }
-
 }
