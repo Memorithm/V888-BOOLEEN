@@ -244,3 +244,4 @@ pub mod regional_retention;
 pub mod regional_transition_profile;
 pub mod regional_window_stability;
 pub mod regional_window_consistency;
+pub mod paired_forgetting;
