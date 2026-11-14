@@ -164,6 +164,25 @@ pub fn evaluate_frozen_batch(
             cache_build_gates: 0,
         });
     }
+    // A cold cache must evaluate every baseline gate before any proposal.
+    // If even that lower bound cannot beat Full, avoid allocating the cache.
+    // This is a conservative rejection only: it cannot change predictions.
+    let full_cost = (full_gates as u128).saturating_mul(calibration.full_ns_per_gate as u128);
+    let cold_lower_bound = (baseline.neuron_count() as u128)
+        .saturating_mul(calibration.full_ns_per_gate as u128)
+        .saturating_add(calibration.cache_build_ns as u128);
+    if cold_lower_bound >= full_cost {
+        return Ok(BatchEvaluation {
+            outputs: candidates
+                .iter()
+                .map(|c| c.infer_bitplanes(planes))
+                .collect::<Result<Vec<_>, _>>()?,
+            engine: Engine::Full,
+            full_gates,
+            incremental_gates: 0,
+            cache_build_gates: 0,
+        });
+    }
     let cache = FiveCircleIncrementalCache::new(baseline, planes)?;
     let deltas = proposals
         .iter()
@@ -273,6 +292,50 @@ mod tests {
                 model.infer_bitplanes(&input).unwrap(),
                 model.infer_bitplanes(&input).unwrap()
             );
+        }
+    }
+
+    #[test]
+    fn cold_cache_lower_bound_skips_unprofitable_build_without_changing_oracle() {
+        let model = FiveCircleHierarchy::from_modes(
+            &[GateKind::Majority, GateKind::Parity, GateKind::Or],
+            LeafRouting::SeededShuffle(31),
+        )
+        .unwrap();
+        let input = planes(model.input_bits());
+        for count in [1, 2, 4] {
+            let proposals: Vec<_> = (0..count)
+                .map(|i| PackedIntervention::LeafSwap {
+                    first: i,
+                    second: i + 1,
+                })
+                .collect();
+            let expected: Vec<_> = proposals
+                .iter()
+                .map(|proposal| {
+                    let PackedIntervention::LeafSwap { first, second } = *proposal else {
+                        unreachable!()
+                    };
+                    let mut routing = model.routing().to_vec();
+                    routing.swap(first, second);
+                    model.rerouted(routing).unwrap().infer_bitplanes(&input).unwrap()
+                })
+                .collect();
+            let result = evaluate_frozen_batch(
+                &model,
+                &input,
+                &proposals,
+                EngineCalibration {
+                    full_ns_per_gate: 10,
+                    incremental_ns_per_gate: 1,
+                    cache_build_ns: 1_000_000,
+                },
+            )
+            .unwrap();
+            assert_eq!(result.outputs, expected);
+            assert_eq!(result.engine, Engine::Full);
+            assert_eq!(result.cache_build_gates, 0);
+            assert_eq!(result.incremental_gates, 0);
         }
     }
 
