@@ -12,6 +12,7 @@ pub mod fourier5_context_search;
 pub mod fourier5_counterfactual_credit;
 pub mod fourier5_dynamic;
 pub mod fourier5_eligibility;
+pub mod fourier5_hidden_credit;
 pub mod fourier5_hidden_teacher;
 pub mod fourier5_hierarchy;
 pub mod fourier5_incremental;
