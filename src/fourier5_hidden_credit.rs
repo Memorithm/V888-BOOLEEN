@@ -105,11 +105,23 @@ impl HiddenCircuit {
             feature_layer: layer,
             source_neurons,
             hidden: [
-                WalshGate { mask: 1, phase: false },
-                WalshGate { mask: 1, phase: false },
-                WalshGate { mask: 1, phase: false },
+                WalshGate {
+                    mask: 1,
+                    phase: false,
+                },
+                WalshGate {
+                    mask: 1,
+                    phase: false,
+                },
+                WalshGate {
+                    mask: 1,
+                    phase: false,
+                },
             ],
-            root: WalshGate { mask: 0b00111, phase: false },
+            root: WalshGate {
+                mask: 0b00111,
+                phase: false,
+            },
             commits: 0,
         })
     }
@@ -163,7 +175,10 @@ impl HiddenCircuit {
         data.iter().fold((0, 0), |(correct, total), example| {
             let error = (self.predict(example) ^ example.label) & example.observed;
             let observed = u64::from(example.observed.count_ones());
-            (correct + observed - u64::from(error.count_ones()), total + observed)
+            (
+                correct + observed - u64::from(error.count_ones()),
+                total + observed,
+            )
         })
     }
 
@@ -172,8 +187,12 @@ impl HiddenCircuit {
             && data.len() <= MAX_EXAMPLES
             && data.iter().any(|e| e.observed != 0)
             && replay.len() <= MAX_GROUPS
-            && replay.iter().all(|group| !group.is_empty() && group.len() <= MAX_EXAMPLES)
-            && data.iter().chain(replay.iter().flat_map(|group| group.iter()))
+            && replay
+                .iter()
+                .all(|group| !group.is_empty() && group.len() <= MAX_EXAMPLES)
+            && data
+                .iter()
+                .chain(replay.iter().flat_map(|group| group.iter()))
                 .all(|e| e.context <= 3)
     }
 
@@ -201,8 +220,12 @@ impl HiddenCircuit {
         total: u64,
         proposals: usize,
     ) -> HiddenCredit {
-        let hidden_changed = self.hidden.iter().zip(proposed.hidden)
-            .filter(|(a, b)| **a != *b).count();
+        let hidden_changed = self
+            .hidden
+            .iter()
+            .zip(proposed.hidden)
+            .filter(|(a, b)| **a != *b)
+            .count();
         let root_changed = self.root != proposed.root;
         let accepted = (hidden_changed != 0 || root_changed) && best.0 > initial.0;
         if accepted {
@@ -248,9 +271,18 @@ impl HiddenCircuit {
         for a in 1..=31 {
             for b in 1..=31 {
                 for c in 1..=31 {
-                    candidate.hidden[0] = WalshGate { mask: a, phase: false };
-                    candidate.hidden[1] = WalshGate { mask: b, phase: false };
-                    candidate.hidden[2] = WalshGate { mask: c, phase: false };
+                    candidate.hidden[0] = WalshGate {
+                        mask: a,
+                        phase: false,
+                    };
+                    candidate.hidden[1] = WalshGate {
+                        mask: b,
+                        phase: false,
+                    };
+                    candidate.hidden[2] = WalshGate {
+                        mask: c,
+                        phase: false,
+                    };
                     for phase in [false, true] {
                         proposals += 1;
                         candidate.root.phase = phase;
@@ -358,15 +390,21 @@ impl HiddenCircuit {
         if fnv(&bytes[..92]) != sum {
             return Err(HiddenError::CorruptCheckpoint);
         }
-        for (index, gate) in circuit.hidden.iter_mut()
-            .chain(std::iter::once(&mut circuit.root)).enumerate()
+        for (index, gate) in circuit
+            .hidden
+            .iter_mut()
+            .chain(std::iter::once(&mut circuit.root))
+            .enumerate()
         {
             let mask = bytes[76 + 2 * index];
             let phase = bytes[77 + 2 * index];
             if !(1..=31).contains(&mask) || phase > 1 {
                 return Err(HiddenError::CorruptCheckpoint);
             }
-            *gate = WalshGate { mask, phase: phase != 0 };
+            *gate = WalshGate {
+                mask,
+                phase: phase != 0,
+            };
         }
         circuit.commits = u64::from_le_bytes(bytes[84..92].try_into().expect("length"));
         Ok(circuit)
@@ -379,14 +417,19 @@ mod tests {
 
     fn sample(context: u8, target: &HiddenCircuit, seed: u64) -> HiddenExample {
         let mut state = seed;
-        let blocks = std::array::from_fn(|_| std::array::from_fn(|_| {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state
-        }));
+        let blocks = std::array::from_fn(|_| {
+            std::array::from_fn(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                state
+            })
+        });
         let mut result = HiddenExample {
-            blocks, context, label: 0, observed: u64::MAX,
+            blocks,
+            context,
+            label: 0,
+            observed: u64::MAX,
         };
         result.label = target.predict(&result);
         result
@@ -402,9 +445,11 @@ mod tests {
         teacher.root.mask = 0b11111;
         let mut model = HiddenCircuit::new(7, ids).unwrap();
         let tasks: Vec<Vec<HiddenExample>> = (0..4)
-            .map(|context| (0..4).map(|i| {
-                sample(context, &teacher, 123 + context as u64 * 11 + i)
-            }).collect())
+            .map(|context| {
+                (0..4)
+                    .map(|i| sample(context, &teacher, 123 + context as u64 * 11 + i))
+                    .collect()
+            })
             .collect();
         let first = model.fit_joint(&tasks[0], &[]).unwrap();
         assert!(first.accepted);
@@ -475,8 +520,10 @@ mod tests {
     fn five_circle_reference_matches_compiled_parity_gates() {
         use crate::fourier5_hierarchy::{compiled_truth_table, shannon_64};
         let features = [
-            0xaaaa_aaaa_aaaa_aaaa, 0xcccc_cccc_cccc_cccc,
-            0xf0f0_f0f0_f0f0_f0f0, 0xff00_ff00_ff00_ff00,
+            0xaaaa_aaaa_aaaa_aaaa,
+            0xcccc_cccc_cccc_cccc,
+            0xf0f0_f0f0_f0f0_f0f0,
+            0xff00_ff00_ff00_ff00,
             0xffff_0000_ffff_0000,
         ];
         for mask in 1..=31 {
