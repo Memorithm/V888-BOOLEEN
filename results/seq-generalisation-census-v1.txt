@@ -1,0 +1,40 @@
+v888_seq_generalisation_schema=b888-4-seq-generalisation-v1
+graph=GENERATED_SYNTHETIC sources=128 targets=32 fan_in=8 (not BANC; real BANC V888 graph DOI 10.7910/DVN/7WTH1N not available here)
+census(identity order only; writes, refusals and pair counts; no accuracy computed)
+fixture: flip,seed,pool,cue_lines_per_cue,cue_reach_per_cue,cn_pairs_per_task
+50,1,47,[8, 8, 8, 8, 8, 8, 8, 8],[30, 28, 28, 21, 21, 21, 18, 16],[35, 40, 51, 69, 42, 51, 34, 33]
+50,2,46,[8, 8, 8, 8, 8, 8, 8, 8],[31, 27, 25, 25, 21, 20, 16, 16],[60, 48, 71, 58, 47, 57, 48, 66]
+50,3,44,[8, 8, 8, 8, 8, 8, 8, 8],[27, 27, 26, 25, 22, 21, 20, 17],[68, 74, 64, 70, 77, 75, 97, 58]
+50,4,43,[8, 8, 8, 8, 8, 8, 8, 8],[31, 28, 25, 24, 22, 20, 20, 17],[50, 64, 47, 44, 67, 56, 66, 39]
+50,5,45,[8, 8, 8, 8, 8, 8, 8, 8],[30, 30, 26, 24, 21, 20, 19, 18],[65, 63, 77, 52, 70, 55, 63, 45]
+writes: flip,seed,setting,pattern_writes,cue_writes,total_writes,refused
+50,1,supervised@paced100,230,0,230,11417
+50,1,reward@paced100,230,0,230,6191
+50,1,error-gated@free,230,0,230,0
+50,1,E/E-cue0@paced100,170,60,230,1569
+50,1,error-gated@Z-pattern,170,0,170,1846
+50,1,E/E-cue0@free,218,84,302,0
+50,2,supervised@paced100,251,0,251,13251
+50,2,reward@paced100,251,0,251,9524
+50,2,error-gated@free,251,0,251,0
+50,2,E/E-cue0@paced100,190,61,251,1967
+50,2,error-gated@Z-pattern,190,0,190,2268
+50,2,E/E-cue0@free,246,81,327,0
+50,3,supervised@paced100,258,0,258,15448
+50,3,reward@paced100,258,0,258,9271
+50,3,error-gated@free,258,0,258,0
+50,3,E/E-cue0@paced100,177,81,258,2247
+50,3,error-gated@Z-pattern,177,0,177,2375
+50,3,E/E-cue0@free,254,105,359,0
+50,4,supervised@paced100,208,0,208,12715
+50,4,reward@paced100,208,0,208,8473
+50,4,error-gated@free,208,0,208,0
+50,4,E/E-cue0@paced100,160,48,208,1768
+50,4,error-gated@Z-pattern,160,0,160,1583
+50,4,E/E-cue0@free,206,91,297,0
+50,5,supervised@paced100,211,0,211,12069
+50,5,reward@paced100,211,0,211,8397
+50,5,error-gated@free,211,0,211,0
+50,5,E/E-cue0@paced100,161,50,211,1749
+50,5,error-gated@Z-pattern,161,0,161,2107
+50,5,E/E-cue0@free,209,82,291,0
