@@ -83,6 +83,10 @@ pub enum LeafRouting {
     SeededShuffle(u64),
 }
 
+/// Observable five-bit presynaptic words and corresponding Boolean outputs
+/// for every layer of a frozen or experimentally adapted hierarchy.
+pub type HierarchyLayerTrace = Vec<(Vec<u8>, Vec<bool>)>;
+
 #[derive(Clone, Debug)]
 pub struct FiveCircleHierarchy {
     depth: usize,
@@ -125,7 +129,7 @@ fn routed_indices(count: usize, topology: LeafRouting) -> Vec<u16> {
     routing
 }
 
-fn compiled_truth_table(model: FiveCircle) -> u32 {
+pub(crate) fn compiled_truth_table(model: FiveCircle) -> u32 {
     let mut truth = 0_u32;
     for input in 0..TABLE_SIZE {
         if model.predict(input as u8) == Ok(true) {
@@ -146,7 +150,7 @@ fn gather_five(values: &[bool], first: usize) -> u8 {
 /// Compile one five-variable truth table to 31 bitwise Shannon multiplexers.
 /// Each operand is a bit-plane holding 64 independent evaluation lanes.
 /// The truth table itself is independently compiled from FiveCircle.predict.
-fn shannon_64(truth: u32, input: [u64; CIRCLES]) -> u64 {
+pub(crate) fn shannon_64(truth: u32, input: [u64; CIRCLES]) -> u64 {
     let mut terms = [0_u64; TABLE_SIZE];
     for (row, term) in terms.iter_mut().enumerate() {
         *term = if truth & (1_u32 << row) != 0 {
@@ -247,6 +251,148 @@ impl FiveCircleHierarchy {
     #[must_use]
     pub fn routing(&self) -> &[u16] {
         &self.routing
+    }
+
+    /// Produce another frozen hierarchy with the *same* Fourier neurons
+    /// and compiled tables, but an explicitly validated leaf permutation.
+    /// Reusing the compiled tables avoids recompiling 32 truth-table entries
+    /// per neuron during bounded routing selection. No weights are changed.
+    pub fn rerouted(&self, routing: Vec<u16>) -> Result<Self, HierarchyError> {
+        if routing.len() != self.routing.len() {
+            return Err(HierarchyError::InvalidRouting);
+        }
+        let mut seen = vec![false; self.routing.len()];
+        for &source in &routing {
+            let index = usize::from(source);
+            if index >= seen.len() || seen[index] {
+                return Err(HierarchyError::InvalidRouting);
+            }
+            seen[index] = true;
+        }
+        let mut updated = self.clone();
+        updated.routing = routing;
+        Ok(updated)
+    }
+
+    /// Frozen source routing is unchanged; only the five Walsh gains,
+    /// phase bits and threshold of the FINAL neuron may be replaced.
+    /// The equivalent Boolean truth table is recompiled exactly once.
+    #[must_use]
+    pub fn with_output_model(&self, model: FiveCircle) -> Self {
+        let mut updated = self.clone();
+        *updated
+            .layers
+            .last_mut()
+            .expect("nonempty hierarchy")
+            .first_mut()
+            .expect("one output neuron") = model;
+        *updated
+            .truth_tables
+            .last_mut()
+            .expect("nonempty hierarchy")
+            .first_mut()
+            .expect("one output truth table") = compiled_truth_table(model);
+        updated
+    }
+
+    #[must_use]
+    pub fn output_model(&self) -> FiveCircle {
+        self.layers.last().expect("nonempty hierarchy")[0]
+    }
+
+    /// The exact compiled 32-bit truth table of one already-validated
+    /// Fourier neuron. Internal use for incremental bit-sliced inference.
+    pub(crate) fn gate_truth(&self, layer: usize, neuron: usize) -> Result<u32, HierarchyError> {
+        self.truth_tables
+            .get(layer)
+            .and_then(|values| values.get(neuron))
+            .copied()
+            .ok_or(HierarchyError::InvalidLayerShape)
+    }
+
+    /// Inspect one fitted or frozen Fourier neuron by its layer index.
+    pub fn layer_model(&self, layer: usize, neuron: usize) -> Result<FiveCircle, HierarchyError> {
+        self.layers
+            .get(layer)
+            .and_then(|items| items.get(neuron))
+            .copied()
+            .ok_or(HierarchyError::InvalidLayerShape)
+    }
+
+    /// Replace one neuron in an existing hierarchy, preserving ALL five
+    /// Walsh mask identities, routing and the total number of contacts.
+    /// This is opt-in parameter plasticity, including hidden-layer nodes.
+    pub fn with_neuron_parameters(
+        &self,
+        layer: usize,
+        index: usize,
+        model: FiveCircle,
+    ) -> Result<Self, HierarchyError> {
+        let original = self
+            .layers
+            .get(layer)
+            .and_then(|items| items.get(index))
+            .ok_or(HierarchyError::InvalidLayerShape)?;
+        for i in 0..CIRCLES {
+            if original.circles()[i].mask != model.circles()[i].mask {
+                return Err(HierarchyError::InvalidLayerShape);
+            }
+        }
+        let mut updated = self.clone();
+        updated.layers[layer][index] = model;
+        updated.truth_tables[layer][index] = compiled_truth_table(model);
+        Ok(updated)
+    }
+
+    /// Scalar trace of the actual five-bit inputs and Boolean outputs at
+    /// EVERY level. No labels, optimization or neuron mutation occurs here.
+    /// Synthetic teacher traces may be used to supervise hidden neurons on
+    /// TRAIN only, but are not available in a real uninstrumented network.
+    pub fn layer_trace(&self, state: &BooleanState) -> Result<HierarchyLayerTrace, HierarchyError> {
+        if state.len() != self.input_bits() {
+            return Err(HierarchyError::InvalidInput);
+        }
+        let mut current: Vec<bool> = self
+            .routing
+            .iter()
+            .map(|&source| state.get(usize::from(source)).expect("validated routing"))
+            .collect();
+        let mut trace = Vec::with_capacity(self.depth);
+        for layer in &self.truth_tables {
+            let mut inputs = Vec::with_capacity(layer.len());
+            let mut outputs = Vec::with_capacity(layer.len());
+            for (index, &truth) in layer.iter().enumerate() {
+                let word = gather_five(&current, index * CIRCLES);
+                inputs.push(word);
+                outputs.push((truth >> word) & 1 != 0);
+            }
+            current = outputs.clone();
+            trace.push((inputs, outputs));
+        }
+        Ok(trace)
+    }
+
+    /// Five presynaptic bits observed at the final neuron's inputs.
+    /// Used to fit ONLY that readout's parameters, never intermediate gates.
+    /// Labels and test sets have no influence on this observation.
+    pub fn output_input(&self, state: &BooleanState) -> Result<u8, HierarchyError> {
+        if state.len() != self.input_bits() {
+            return Err(HierarchyError::InvalidInput);
+        }
+        let mut current: Vec<bool> = self
+            .routing
+            .iter()
+            .map(|&source| state.get(usize::from(source)).expect("validated routing"))
+            .collect();
+        for layer in self.truth_tables.iter().take(self.depth - 1) {
+            let mut next = Vec::with_capacity(layer.len());
+            for (index, &truth) in layer.iter().enumerate() {
+                let word = gather_five(&current, index * CIRCLES);
+                next.push((truth >> word) & 1 != 0);
+            }
+            current = next;
+        }
+        Ok(gather_five(&current, 0))
     }
 
     #[must_use]
