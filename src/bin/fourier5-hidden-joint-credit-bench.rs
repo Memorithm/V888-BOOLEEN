@@ -207,19 +207,26 @@ fn aggregate(
         .fold((0, 0), |(a, b), (c, d)| (a + c, b + d))
 }
 
-fn report(
+struct Report<'a> {
     seed: u64,
     phase: usize,
-    primary: &HiddenCircuit,
-    control: &HiddenCircuit,
-    tasks: &[Task],
+    primary: &'a HiddenCircuit,
+    control: &'a HiddenCircuit,
+    tasks: &'a [Task],
     fit: HiddenCredit,
     elapsed_us: u128,
     pretest: (u64, u64),
-    past: &[(u64, u64)],
-    null: &HiddenCircuit,
-    frozen: &HiddenCircuit,
-) -> Result<(), String> {
+    past: &'a [(u64, u64)],
+    null: &'a HiddenCircuit,
+    frozen: &'a HiddenCircuit,
+    feature_layer: u32,
+}
+
+fn report(input: Report<'_>) -> Result<(), String> {
+    let Report {
+        seed, phase, primary, control, tasks, fit, elapsed_us,
+        pretest, past, null, frozen, feature_layer,
+    } = input;
     let train = primary.score(&tasks[phase].train);
     let valid = primary.score(&tasks[phase].valid);
     let test = primary.score(&tasks[phase].test);
@@ -244,7 +251,7 @@ fn report(
         return Err("TRAIN replay accuracy decreased".into());
     }
     let record = primary.checkpoint();
-    let restored = HiddenCircuit::restore(&record, primary_layer(primary), SOURCES)
+    let restored = HiddenCircuit::restore(&record, feature_layer, SOURCES)
         .map_err(|e| format!("{e:?}"))?;
     if &restored != primary {
         return Err("hidden joint memory checkpoint mismatch".into());
@@ -264,12 +271,6 @@ fn report(
         no_replay.0, no_replay.1, record.len()
     );
     Ok(())
-}
-
-fn primary_layer(_model: &HiddenCircuit) -> u32 {
-    // Binding is fixed to the layer chosen by experiment for this width.
-    // The readout constructor never changes its layer during training.
-    7
 }
 
 fn experiment(tree: &WideFiveTree, seed: u64) -> Result<(), String> {
@@ -346,10 +347,12 @@ fn experiment(tree: &WideFiveTree, seed: u64) -> Result<(), String> {
         if restored != primary {
             return Err("checkpoint mutation detected".into());
         }
-        report(
-            seed, task, &primary, &no_replay, &tasks, fit, elapsed,
-            before, &previous_test, &shuffled, &original, layer as u32,
-        )?;
+        report(Report {
+            seed, phase: task, primary: &primary, control: &no_replay,
+            tasks: &tasks, fit, elapsed_us: elapsed,
+            pretest: before, past: &previous_test, null: &shuffled,
+            frozen: &original, feature_layer: layer as u32,
+        })?;
     }
     let final_valid = aggregate(&primary, &tasks, Split::Valid);
     let final_test = aggregate(&primary, &tasks, Split::Test);
@@ -389,6 +392,12 @@ fn main() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_shared_hidden_learning_runs_with_independent_holdouts() {
+        let tree = WideFiveTree::new(125).unwrap();
+        experiment(&tree, SEEDS[0]).unwrap();
+    }
 
     #[test]
     fn heldout_mask_picks_exact_unseen_feature_codes() {
