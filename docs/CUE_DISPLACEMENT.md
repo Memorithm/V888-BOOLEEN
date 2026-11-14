@@ -169,8 +169,109 @@ cargo +1.89 run --release -- bench-cue-displacement --csv results/cue-displaceme
 
 ## Results
 
-Pending: the main run on seeds 281..320 happens only after this
-pre-registration commit has been pushed.
+Run once after the pre-registration commit 0572b21 had been pushed. The grid
+(840 rows: 3 flips × 40 seeds × 7 settings) takes about 2.2 min on CPU. Two
+runs give a byte-identical CSV (sha256 `d1636473…40985f88`) and an identical
+report. Every row keeps the original topology (`topology_unchanged_all=true`).
+Files: `results/cue-displacement-v1.csv`,
+`results/cue-displacement-report-v1.txt`, pilot
+`results/cue-displacement-census-v1.txt`.
+
+### 1. Design gates (reported first)
+
+* **G1 passes:** every row keeps its topology, starts from its documented
+  initial weights and stays within its allowance; `error-gated@paced100` is
+  bit-identical to uncapped `error-gated` with zero refusals; Em's caps equal
+  Z's pattern writes and Zx's caps equal E's writes.
+* **G2 passes:** Zx ≠ Z in 100 % of seeds and Em's cap binds in 100 % of
+  seeds at every flip.
+* **G3 passes:** median CN pairs per (seed, task) 123 ≥ 20.
+
+### 2. Settings at flip 50 (k = 4, mean over 40 seeds)
+
+| setting | ACC_all | ACC_CN | LEARN_all | LEARN_CN | FGT_all | FGT_CN | LAST_all | pattern writes | cue writes | total writes |
+|---|---|---|---|---|---|---|---|---|---|---|
+| supervised @ paced100 (S1) | 0.579 | 0.538 | 0.648 | 0.565 | 0.093 | 0.036 | 0.618 | 213 | 0 | 213 |
+| reward @ paced100 (R1) | 0.596 | 0.557 | 0.627 | 0.564 | 0.042 | 0.009 | 0.590 | 213 | 0 | 213 |
+| error-gated @ free (E) | 0.630 | 0.619 | 0.972 | 0.910 | 0.456 | 0.388 | 0.973 | 213 | 0 | 213 |
+| **E/E-cue0 @ paced100 (Z)** | 0.647 | 0.614 | 0.820 | 0.756 | 0.231 | 0.190 | 0.771 | 135 | 78 | 213 |
+| **E/E-cue0-exempt @ paced100 (Zx)** | 0.653 | 0.624 | 0.970 | 0.909 | 0.423 | 0.379 | 0.968 | 208 | 145 | 353 |
+| **error-gated @ Z-pattern (Em)** | 0.621 | 0.607 | 0.805 | 0.750 | 0.245 | 0.192 | 0.749 | 135 | 0 | 135 |
+| E/E-cue0 @ free (Zfree) | 0.653 | 0.623 | 0.971 | 0.908 | 0.425 | 0.380 | 0.970 | 208 | 140 | 348 |
+
+Z gives up 37 % of `error-gated`'s pattern writes to the cue (135 of 213).
+Giving those pattern writes back (Zx) restores `error-gated`'s learning;
+taking the same pattern writes away from `error-gated` without any cue (Em)
+reproduces Z's learning loss. Zx equals Zfree in 70 % of seeds at flip 50
+(its pattern writes rarely reach the cap), as the pilot predicted.
+
+### 3. Hypotheses (k = 4; mean [95 % CI] seeds better/tied/worse)
+
+| | statistic | value | result |
+|---|---|---|---|
+| G1 | integrity (topology, init, caps, E unchanged, Em/Zx caps matched) | all rows | **pass** |
+| G2 | Zx ≠ Z in ≥ 50 % of seeds and Em binds in ≥ 50 %, flip 50 | 100 % / 100 % | **pass** |
+| G3 | median CN pairs ≥ 20 | 123 | **pass** |
+| H1 | LEARN_all(Zx) − LEARN_all(Z) strong, flip 50 (near manipulation check) | +0.150 [+0.143, +0.157] 40/0/0 | **pass** |
+| H2 | LEARN_all(Zx) − LEARN_all(E) non-inferior, flip 50 (near manipulation check) | −0.001 [−0.003, −0.000] 15/5/20 | **pass** |
+| H3 | LEARN_all(Em) − LEARN_all(Z) equivalent to 0 (CI in ±0.05), flip 50 | −0.016 [−0.022, −0.009] 7/0/33 | **pass** |
+| H4 | ACC_all(Z) − ACC_all(Em) strong, flip 50 | +0.026 [+0.020, +0.032] 37/0/3 (mean < 0.05) | **fail** |
+| H5 | Zx vs E, sequence rule, all pairs, flip 50 | ACC +0.023 [+0.020, +0.027] 40/0/0 (mean < 0.05); Δ LEARN −0.001 | **fail** |
+| H6 | Zx vs E, sequence rule, CN pairs, flip 50 | ACC_CN +0.005 [−0.002, +0.012] 27/3/10 | **fail** |
+| H7 | FGT_CN(E) − FGT_CN(Zx) strong and Δ LEARN_CN ≥ −0.05, flip 100 | +0.029 [+0.013, +0.046] 28/0/12 (not strong); Δ LEARN_CN +0.007 | **fail** |
+| H8 | Z vs S1, sequence rule, CN pairs, flip 50 | ACC_CN +0.076 [+0.057, +0.095] 37/0/3; Δ LEARN_CN +0.191, Δ LAST_CN +0.146 | **pass** |
+
+### 4. Secondary (no pass/fail)
+
+* **Em vs E (losing 37 % of pattern writes, no cue), flip 50, all pairs:**
+  ACC −0.008 [−0.013, −0.003], LEARN −0.167, LAST −0.223, forgetting
+  +0.212 less: the capped `error-gated` arm learns and forgets less, with
+  nearly the same final ACC.
+* **Interference, if any, is small and goes the other way:** Em learns
+  0.016 *less* than Z (H3 statistic, 7/0/33), so the pattern writes Z makes
+  are, if anything, slightly more useful with the cue on, not less.
+* **Flip 100 (Z vs Em, all pairs):** ACC +0.061 [+0.054, +0.069] 40/0/0,
+  LEARN +0.050, LAST +0.086 (passes the sequence rule); on CN +0.051
+  [+0.038, +0.065] 36/0/4. At high conflict the cue's writes do buy accuracy
+  over the same pattern writes; at flip 50 and 25 they buy +0.026 and +0.011.
+* **Flip 25 (vs E, all pairs):** Z +0.012, Em +0.001, Zx +0.011; LEARN
+  Z −0.112, Em −0.119 (same pattern as flip 50).
+* **k = 2 and 3 at flip 50 (Z − Em, all pairs):** ACC +0.010 and +0.019,
+  LEARN +0.009 and +0.014.
+* **Replications at equal total writes (flip 50, all pairs vs S1):**
+  E +0.051 (38/0/2), Z +0.069 (40/0/0), R +0.017 [+0.012, +0.023] 35/0/5
+  with 0.021 less learning. Em, with 37 % fewer writes than S1, is +0.042
+  (37/0/3) on all pairs and +0.069 on CN.
+* **Zx vs Zfree:** identical in 28/40 seeds at flip 50 and 40/40 at
+  flip 100: once cue writes are free, the pattern edges do not need more
+  than `error-gated`'s schedule.
+
+### Reading
+
+The remaining half of the silent cue's equal-budget learning loss is
+**write displacement**, not interference, on this synthetic task. Charging
+the cue's writes takes 37 % of the pattern writes; restoring them (Zx)
+restores `error-gated`'s learning exactly (H1, H2), and removing the same
+pattern writes from `error-gated` without any cue (Em) reproduces the loss
+within ±0.05 (H3; Em even learns 0.016 less than Z). Together with #128 this
+closes the learning-gap question for this design: the init-1 cue lost
+learning to a fixed initial write cost, the silent cue loses it to the
+writes it spends, and nothing else of comparable size is left.
+
+What the cue's writes buy is small at flip 50: +0.026 ACC over the same
+pattern writes (H4 fails), and +0.023 over `error-gated` even when they are
+free (H5 fails), with no CN gain (H6) and a weak forgetting reduction at
+flip 100 (H7 fails). Only at high conflict (flip 100, secondary) is the cue
+clearly worth its writes (+0.061, 40/0/0 over Em). At equal total writes
+the zero-init cued arm still beats the supervised control on CN pairs with
+more learning (H8), and the ranking error gate > reward > supervised
+replicates. All of this is on a synthetic graph with artificial labels.
+
+Next step suggested by this result (not tested here): the cue lever is
+nearly exhausted at k = 4 on this design, so the open question for the
+series is a fair generalisation/forgetting test over **more tasks (larger
+k) and held-out task orders**, where the cue's protection at high conflict
+could matter more than its write cost.
 
 ## Limitations
 
