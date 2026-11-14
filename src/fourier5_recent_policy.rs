@@ -97,7 +97,7 @@ impl RecentPairedPolicy {
     ) -> Result<VerifiedDecision, RecentPolicyError> {
         let start = Instant::now();
         let full = session.propose_adaptive(
-            proposal, EngineCalibration { full_ns_per_gate: 0, incremental_ns_per_gate: 0 }
+            proposal, EngineCalibration { full_ns_per_gate: 0, incremental_ns_per_gate: 0, cache_build_ns: 0 }
         )?;
         let full_ns = start.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
         let start = Instant::now();
