@@ -2,6 +2,19 @@
 use crate::BooleanState;
 use std::collections::{BTreeMap, BTreeSet};
 
+/// First and confirmed durable recall tick, grouped by explicit region ID.
+pub type RegionLatencyTrace = Vec<(u32, Option<usize>, Option<usize>)>;
+/// Baseline and candidate first/durable ticks, with explicit region ID.
+pub type RegionLatencyComparison = Vec<(
+    u32,
+    Option<usize>,
+    Option<usize>,
+    Option<usize>,
+    Option<usize>,
+)>;
+/// Confirmed recall ticks and paired activity costs by region.
+pub type RegionDurableActivity = Vec<(u32, Option<usize>, Option<usize>, u128, u128)>;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RegionRecall {
     pub region: u32,
@@ -374,6 +387,7 @@ impl RegionRecallMonitor {
     /// The callback owns the transition rule; this method never edits graph edges.
     /// A successful recall requires an observed threshold crossing after a step.
     /// Returns (final state, propagation steps used, confirmed region IDs).
+    #[expect(clippy::too_many_arguments, reason = "Frozen simulation API; preserve existing paired controls")]
     pub fn recover_with_propagation<F>(
         &self,
         state: &BooleanState,
@@ -430,6 +444,7 @@ impl RegionRecallMonitor {
     /// A single transient threshold crossing is not counted as recovery.
     /// Stimulation is hypothetical; the callback supplies the transition rule.
     /// Returns the final state, executed steps and durably recovered region IDs.
+    #[expect(clippy::too_many_arguments, reason = "Frozen simulation API; preserve existing paired controls")]
     pub fn recover_durable_with_propagation<F>(
         &self,
         state: &BooleanState,
@@ -490,7 +505,7 @@ impl RegionRecallMonitor {
         states: &[BooleanState],
         minimum_active: usize,
         durable_ticks: usize,
-    ) -> Result<Vec<(u32, Option<usize>, Option<usize>)>, RegionMonitorError> {
+    ) -> Result<RegionLatencyTrace, RegionMonitorError> {
         if states.is_empty() || states.len() > 1000 || minimum_active == 0 || durable_ticks == 0 {
             return Err(RegionMonitorError::InvalidBudget);
         }
@@ -535,16 +550,7 @@ impl RegionRecallMonitor {
         candidate: &[BooleanState],
         minimum_active: usize,
         durable_ticks: usize,
-    ) -> Result<
-        Vec<(
-            u32,
-            Option<usize>,
-            Option<usize>,
-            Option<usize>,
-            Option<usize>,
-        )>,
-        RegionMonitorError,
-    > {
+    ) -> Result<RegionLatencyComparison, RegionMonitorError> {
         if baseline.len() != candidate.len() {
             return Err(RegionMonitorError::InvalidDimensions);
         }
@@ -566,6 +572,7 @@ impl RegionRecallMonitor {
     /// initial-state perturbation; this does not infer anatomical connectivity.
     /// Returns paired regional latency observations with right-censored outcomes.
     /// The transition callback is invoked once per arm per step, baseline first.
+    #[expect(clippy::too_many_arguments, reason = "Frozen simulation API; preserve existing paired controls")]
     pub fn compare_live_recovery<F>(
         &self,
         initial: &BooleanState,
@@ -577,16 +584,7 @@ impl RegionRecallMonitor {
         minimum_active: usize,
         durable_ticks: usize,
         mut propagate: F,
-    ) -> Result<
-        Vec<(
-            u32,
-            Option<usize>,
-            Option<usize>,
-            Option<usize>,
-            Option<usize>,
-        )>,
-        RegionMonitorError,
-    >
+    ) -> Result<RegionLatencyComparison, RegionMonitorError>
     where
         F: FnMut(&BooleanState) -> Result<BooleanState, RegionMonitorError>,
     {
@@ -713,7 +711,7 @@ impl RegionRecallMonitor {
         candidate: &[BooleanState],
         minimum_active: usize,
         consecutive: usize,
-    ) -> Result<Vec<(u32, Option<usize>, Option<usize>, u128, u128)>, RegionMonitorError> {
+    ) -> Result<RegionDurableActivity, RegionMonitorError> {
         let recall =
             self.compare_recall_traces(baseline, candidate, minimum_active, consecutive)?;
         let costs = self.paired_region_activity_cost(baseline, candidate)?;
