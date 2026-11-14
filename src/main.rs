@@ -16,6 +16,7 @@ use v888_booleen::engine::BooleanEngine;
 use v888_booleen::full_synapse::{pack_records, FullSynapseReader};
 use v888_booleen::generalization_bench as genbench;
 use v888_booleen::graded_reward as gr;
+use v888_booleen::importance_protection as ip;
 use v888_booleen::learning_bench::benchmark;
 use v888_booleen::learning_strategies::compare_strategies;
 use v888_booleen::plasticity::PlasticCircuit;
@@ -132,6 +133,7 @@ fn help() {
     println!("  bench-reward-limits [--graph brain.v888b] [--seeds 1,..,10] [--init 1] [--csv out.csv]  (reward-modulated under reward noise / sparse reward / credit assignment vs matched supervised control; same task and defaults as bench-generalization; GENERATED synthetic graph by default)");
     println!("  bench-eligibility-traces [--graph brain.v888b] [--seeds 1,..,10] [--init 1] [--csv out.csv]  (eligibility trace + reward-prediction error remedy for scalar / delayed credit vs #34 reward arm and supervised control; GENERATED synthetic graph by default)");
     println!("  bench-consolidated-graded [--graph brain.v888b] [--seeds 1,..,10] [--init 1] [--csv out.csv]  (consolidation 1-of-4 + bounded 1-in-8 A rehearsal on supervised control, trace-group-8, trace-per-target; equal budget; GENERATED synthetic graph by default)");
+    println!("  bench-importance-protection [--graph brain.v888b] [--seeds 1,..,10] [--init 1] [--csv out.csv]  (importance-weighted freeze of top-credit A edges 25%/50% + task-gated plasticity vs #39 consolidate; equal budget; GENERATED synthetic graph by default)");
     println!("  bench-graded-reward [--graph brain.v888b] [--seeds 1,..,10] [--init 1] [--csv out.csv]  (graded reward ladder bit/fraction/group-k/per-target through the #36 trace + episode-stamped tags for delayed scalars; GENERATED synthetic graph by default)");
     println!("  train-plasticity --graph brain.v888b --episodes labeled.csv --output weights.v888pls [--epochs 1]");
     println!("  score-plasticity --graph brain.v888b --weights weights.v888pls --episodes labeled.csv [--threshold 1]");
@@ -874,6 +876,144 @@ fn main() -> Result<(), Box<dyn Error>> {
                     if c.y == et::TraceArm::Control { et::reaches_control(&c).to_string() } else { "n/a".to_string() },
                 );
             }
+            println!(
+                "topology_unchanged={}",
+                rows.iter().all(|r| r.topology_unchanged)
+            );
+            println!("evaluation_scope=synthetic_or_unverified_graph_artificial_labels_not_BANC_not_biological");
+        }
+        Some("bench-importance-protection") => {
+            let allowed = ["--graph", "--seeds", "--init", "--csv"];
+            for flag in args.iter().skip(1).filter(|arg| arg.starts_with("--")) {
+                if !allowed.contains(&flag.as_str()) {
+                    return Err(
+                        format!("unknown bench-importance-protection option: {flag}").into(),
+                    );
+                }
+            }
+            let seeds = optional(&args, "--seeds")
+                .unwrap_or("1,2,3,4,5,6,7,8,9,10")
+                .split(',')
+                .map(str::parse::<u64>)
+                .collect::<Result<Vec<_>, _>>()?;
+            let init = optional(&args, "--init").unwrap_or("1").parse::<u8>()?;
+            let shape = genbench::GraphShape {
+                sources: 64,
+                targets: 24,
+                fan_in: 6,
+            };
+            let spec = genbench::GenSpec {
+                active: 4,
+                train_patterns: 32,
+                test_patterns: 64,
+                rounds_a: 8,
+                rounds_b: 8,
+                positive_pct: 50,
+                flip_pct: 50,
+                init_weight: init,
+            };
+            let owned = match optional(&args, "--graph") {
+                Some(path) => Some(Connectome::load(Path::new(path))?),
+                None => None,
+            };
+            let graph_label = if owned.is_some() {
+                "PROVIDED_GRAPH"
+            } else {
+                "GENERATED_SYNTHETIC"
+            };
+            let rows = ip::run_grid(owned.as_ref(), &shape, &spec, &seeds)?;
+            if let Some(path) = optional(&args, "--csv") {
+                use std::io::Write;
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)?
+                    .write_all(ip::to_csv(&rows, graph_label).as_bytes())?;
+            }
+            println!("v888_importance_protection_schema=b888-4-importance-protection-v1");
+            if owned.is_some() {
+                println!("graph=PROVIDED_GRAPH (task labels artificial)");
+            } else {
+                println!("graph=GENERATED_SYNTHETIC sources=64 targets=24 fan_in=6 (not BANC; real BANC V888 graph DOI 10.7910/DVN/7WTH1N not available here)");
+            }
+            println!(
+                "seeds={} init={init} active=4 train_patterns=32 test_patterns=64 rounds_a=8 rounds_b=8 flip_pct=50 threshold=1 metric=balanced_accuracy consolidate_period={} gate_salt={:#x}",
+                seeds.len(),
+                ip::CONSOLIDATE_PERIOD,
+                ip::GATE_SALT,
+            );
+            let fmt = |s: genbench::Spread| format!("{:.3}±{:.3}", s.mean, s.sd);
+            let stat = |l: cg::Learner, m: ip::Mechanism, f: &dyn Fn(&ip::Row) -> f64| {
+                let v: Vec<f64> = rows
+                    .iter()
+                    .filter(|r| r.learner == l && r.mechanism == m)
+                    .map(f)
+                    .collect();
+                genbench::spread(&v)
+            };
+            println!("arm_summary: learner,mechanism,a_train,a_test_after_a,a_test_after_b,forgetting,b_test,protected_edges,weights_changed(A+B),a_blocked,b_protected_attempts,b_blocked");
+            for l in cg::LEARNERS {
+                for m in ip::MECHANISMS {
+                    println!(
+                        "{},{},{},{},{},{},{},{:.1},{:.1},{:.1},{:.1},{:.1}",
+                        l.label(),
+                        m.label(),
+                        fmt(stat(l, m, &|r| r.a_train_after_a.balanced())),
+                        fmt(stat(l, m, &|r| r.a_test_after_a.balanced())),
+                        fmt(stat(l, m, &|r| r.a_test_after_b.balanced())),
+                        fmt(stat(l, m, &ip::Row::forgetting)),
+                        fmt(stat(l, m, &|r| r.b_test_after_b.balanced())),
+                        stat(l, m, &|r| r.protected_edges as f64).mean,
+                        stat(
+                            l,
+                            m,
+                            &|r| (r.cost_a.weights_changed + r.cost_b.weights_changed) as f64
+                        )
+                        .mean,
+                        stat(l, m, &|r| r.a_blocked as f64).mean,
+                        stat(l, m, &|r| r.cost_b.protected_attempts as f64).mean,
+                        stat(l, m, &|r| r.cost_b.blocked as f64).mean,
+                    );
+                }
+            }
+            println!("comparison: x_learner,x_mech,y_learner,y_mech,n,d_a_test,d_forget(+=x_less),forget_b/t/w,d_retained_a,d_b,trade_sum,trade_pos/t/neg,passes_rule,better_exchange_h3,tradeoff_vs_control_h4");
+            for c in ip::preregistered_comparisons(&rows) {
+                let own = c.y.0 == c.x.0;
+                let vs_ctl = c.y == (cg::Learner::Control, ip::Mechanism::None)
+                    && c.x.0 != cg::Learner::Control;
+                println!(
+                    "{},{},{},{},{},{:+.3}±{:.3},{:+.3}±{:.3},{}/{}/{},{:+.3}±{:.3},{:+.3}±{:.3},{:+.3}±{:.3},{}/{}/{},{},{},{}",
+                    c.x.0.label(),
+                    c.x.1.label(),
+                    c.y.0.label(),
+                    c.y.1.label(),
+                    c.n,
+                    c.a_test.mean,
+                    c.a_test.sd,
+                    c.forget.delta.mean,
+                    c.forget.delta.sd,
+                    c.forget.better,
+                    c.forget.ties,
+                    c.forget.worse,
+                    c.retained.mean,
+                    c.retained.sd,
+                    c.b.mean,
+                    c.b.sd,
+                    c.trade.delta.mean,
+                    c.trade.delta.sd,
+                    c.trade.better,
+                    c.trade.ties,
+                    c.trade.worse,
+                    if own { c.passes().to_string() } else { "n/a".to_string() },
+                    if own { c.better_exchange().to_string() } else { "n/a".to_string() },
+                    if vs_ctl { c.beats_control_tradeoff().to_string() } else { "n/a".to_string() },
+                );
+            }
+            let (h1, h2, h3, h4) = ip::readings(&rows);
+            println!("H1_importance25_passes_both_graded={h1}");
+            println!("H2_task_gated_passes_both_graded={h2}");
+            println!("H3_better_exchange_than_1to1={h3}");
+            println!("H4_tradeoff_vs_control={h4}");
             println!(
                 "topology_unchanged={}",
                 rows.iter().all(|r| r.topology_unchanged)

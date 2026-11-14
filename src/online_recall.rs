@@ -74,6 +74,44 @@ impl OnlineRecall {
         self.observe(&engine.active, minimum_active)
     }
 
+    /// Advance a validated synthetic graph and observe each resulting engine state.
+    /// The initial state is not observed. At most 1000 steps are permitted, matching
+    /// the CLI engine bound. A step failure preserves previously completed steps;
+    /// no rollback of engine dynamics is implied. No anatomical edges are created.
+    pub fn observe_engine_steps(
+        &mut self,
+        engine: &mut crate::engine::BooleanEngine,
+        graph: &crate::connectome::Connectome,
+        minimum_active: usize,
+        steps: usize,
+    ) -> std::io::Result<Vec<bool>> {
+        use std::io::{Error, ErrorKind};
+        if steps == 0 || steps > 1000 || minimum_active == 0 {
+            return Err(Error::new(ErrorKind::InvalidInput, "invalid recall budget"));
+        }
+        graph.validate()?;
+        if engine.active.len() != graph.ids.len() || self.circuit.universe_len() != graph.ids.len()
+        {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "graph/state size mismatch",
+            ));
+        }
+        // Validate the recall threshold before any engine mutation.
+        self.circuit
+            .recall(&engine.active, minimum_active)
+            .map_err(|_| Error::new(ErrorKind::InvalidInput, "invalid recall state"))?;
+        let mut matches = Vec::with_capacity(steps);
+        for _ in 0..steps {
+            engine.step(graph)?;
+            let recalled = self
+                .observe_engine_state(engine, minimum_active)
+                .map_err(|_| Error::new(ErrorKind::InvalidData, "recall counter overflow"))?;
+            matches.push(recalled);
+        }
+        Ok(matches)
+    }
+
     /// Aggregate streaming activation counts by caller-provided region labels.
     /// Only selected and explicitly annotated members contribute; no anatomical
     /// classification is inferred. u128 prevents overflow when summing counters.
@@ -249,6 +287,27 @@ impl OnlineRecall {
         Ok((recalled, regions))
     }
 
+    /// Recall the most active explicitly annotated region against the live engine state.
+    /// Selection uses previously observed ticks; the current state is not consumed.
+    /// Returns the selected member indices and whether their recall threshold is met.
+    /// All graph connectivity remains unchanged and no anatomical label is inferred.
+    pub fn recall_selected_region(
+        &self,
+        engine: &crate::engine::BooleanEngine,
+        annotations: &[Option<u32>],
+        minimum_member_ticks: u64,
+        maximum_members: usize,
+        minimum_active: usize,
+    ) -> Result<(Vec<usize>, bool), RecallError> {
+        if minimum_active == 0 {
+            return Err(RecallError::ZeroBudget);
+        }
+        let selected =
+            self.select_region_subcircuit(annotations, minimum_member_ticks, maximum_members)?;
+        let recalled = selected.recall(&engine.active, minimum_active)?;
+        Ok((selected.members().to_vec(), recalled))
+    }
+
     #[must_use]
     pub fn ticks(&self) -> u64 {
         self.ticks
@@ -276,6 +335,45 @@ impl OnlineRecall {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recalls_selected_region_against_live_engine_without_consuming_ticks() {
+        use crate::connectome::Connectome;
+        use crate::engine::BooleanEngine;
+
+        // Synthetic chain; region IDs are explicit experimental labels.
+        let graph = Connectome {
+            ids: vec![10, 20, 30],
+            offsets: vec![0, 1, 2, 2],
+            targets: vec![1, 2],
+            counts: vec![1, 1],
+        };
+        let mut engine = BooleanEngine::new(&graph, 1).unwrap();
+        let mut tracker = OnlineRecall::new(Subcircuit::new(3, vec![0, 1, 2]).unwrap());
+        let regions = [Some(7), Some(7), Some(9)];
+        engine.stimulate(&graph, 10).unwrap();
+        tracker.observe_engine_state(&engine, 1).unwrap();
+        engine.step(&graph).unwrap();
+        tracker.observe_engine_state(&engine, 1).unwrap();
+        assert_eq!(
+            tracker.recall_selected_region(&engine, &regions, 1, 2, 1),
+            Ok((vec![0, 1], true))
+        );
+        engine.step(&graph).unwrap();
+        assert_eq!(
+            tracker.recall_selected_region(&engine, &regions, 1, 2, 1),
+            Ok((vec![0, 1], false))
+        );
+        assert_eq!(tracker.ticks(), 2);
+        assert_eq!(
+            tracker.recall_selected_region(&engine, &regions[..2], 1, 2, 1),
+            Err(RecallError::LengthMismatch)
+        );
+        assert_eq!(
+            tracker.recall_selected_region(&engine, &regions, 1, 2, 0),
+            Err(RecallError::ZeroBudget)
+        );
+    }
 
     #[test]
     fn streams_without_retaining_history_and_preserves_member_order() {
@@ -475,6 +573,48 @@ mod tests {
             Ok((false, vec![]))
         );
         assert_eq!(tracker.ticks(), 2);
+    }
+
+    #[test]
+    fn bounded_engine_steps_observe_propagation_and_reject_bad_budgets() {
+        use crate::connectome::Connectome;
+        use crate::engine::BooleanEngine;
+        let graph = Connectome {
+            ids: vec![10, 20, 30],
+            offsets: vec![0, 1, 2, 2],
+            targets: vec![1, 2],
+            counts: vec![1, 1],
+        };
+        let mut engine = BooleanEngine::new(&graph, 1).unwrap();
+        let mut tracker = OnlineRecall::new(Subcircuit::new(3, vec![1, 2]).unwrap());
+        engine.stimulate(&graph, 10).unwrap();
+        assert!(tracker
+            .observe_engine_steps(&mut engine, &graph, 1, 0)
+            .is_err());
+        assert!(tracker
+            .observe_engine_steps(&mut engine, &graph, 1, 1001)
+            .is_err());
+        assert!(tracker
+            .observe_engine_steps(&mut engine, &graph, 0, 1)
+            .is_err());
+        assert_eq!(tracker.ticks(), 0);
+        assert_eq!(
+            tracker
+                .observe_engine_steps(&mut engine, &graph, 1, 3)
+                .unwrap(),
+            vec![true, true, false]
+        );
+        assert_eq!(tracker.ticks(), 3);
+        assert_eq!(tracker.longest_streak(), 2);
+        assert_eq!(tracker.latest_streak(), 0);
+        assert_eq!(
+            tracker.member_counts().collect::<Vec<_>>(),
+            vec![(1, 1), (2, 1)]
+        );
+        assert_eq!(
+            tracker.regional_occupancy(&[None, Some(7), Some(7)]),
+            Ok(vec![(7, 2, 6)])
+        );
     }
 
     #[test]
