@@ -230,3 +230,5 @@ mod tests {
         assert_eq!(state.words()[1], 1);
     }
 }
+pub mod paired_recall_tradeoff;
+pub mod region_recall_monitor;
