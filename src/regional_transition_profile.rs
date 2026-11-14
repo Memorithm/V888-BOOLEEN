@@ -130,7 +130,7 @@ mod tests {
             Err(TransitionProfileError::EmptyHistory)
         );
         assert_eq!(
-            profile_region_transitions(&[s.clone()], &[None]),
+            profile_region_transitions(std::slice::from_ref(&s), &[None]),
             Err(TransitionProfileError::LengthMismatch)
         );
         assert_eq!(

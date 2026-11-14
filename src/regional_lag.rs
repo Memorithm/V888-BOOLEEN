@@ -113,7 +113,7 @@ mod tests {
     fn rejects_unmatched_lengths_and_unbounded_histories() {
         let a = BooleanState::new(2);
         assert_eq!(
-            regional_lag_one(&[a.clone()], &[Some(1), None]),
+            regional_lag_one(std::slice::from_ref(&a), &[Some(1), None]),
             Err(LagError::InvalidBudget)
         );
         assert_eq!(

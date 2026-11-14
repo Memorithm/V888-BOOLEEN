@@ -112,11 +112,11 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(
-            observe_region_transitions(&[state.clone()], &annotations, 1, 1),
+            observe_region_transitions(std::slice::from_ref(&state), &annotations, 1, 1),
             Err(TransitionError::TooManyRegions)
         );
         assert_eq!(
-            observe_region_transitions(&[state.clone()], &annotations, 0, 2),
+            observe_region_transitions(std::slice::from_ref(&state), &annotations, 0, 2),
             Err(TransitionError::ZeroBudget)
         );
         assert_eq!(
