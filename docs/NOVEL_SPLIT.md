@@ -154,4 +154,108 @@ cargo +1.89 run --release -- bench-novel-split --csv results/novel-split-v1.csv
 
 ## Results
 
-(pending — filled in after the run, below this line only)
+Run after the pre-registration commit 2dbc9f8 had been pushed. The grid
+(480 rows, 3 flips × 40 seeds × 4 arms) takes about 35 s on CPU. Two runs
+produce a byte-identical CSV (sha256 `28dbaa20…28f5a2`) and an identical
+report. Every row keeps the original topology (`topology_unchanged_all=true`).
+Files: `results/novel-split-census-v1.txt` and `results/novel-split-v1.csv`.
+
+### 1. Design-validity gate (reported first)
+
+| flip | TEST pairs per task | seen | **CN min / median / max** | ICN min / median | UE median | pool | cue lines / reach |
+|---|---|---|---|---|---|---|---|
+| 50 | 1301 (median) | 911 (69.8 %) | **130 / 208 / 317** | 99 / 156 | 179 | 91–103 | 4 / 14–22 of 32 |
+
+The CN counts do not depend on the flip. **G passes**: the median of 208
+CN pairs per (seed, task) is ≥ 20, and the minimum is 130. #122 had a
+median of 6. The ICN gate also passes (median 156). H1–H5 are evaluable.
+
+### 2. Arms (flip 50, k = 4, mean over 40 seeds)
+
+| arm | ACC_all | ACC_seen | **ACC_CN** | ACC_ICN | ACC_UE | LEARN_seen | **LEARN_CN** | LEARN_ICN | **FGT_CN** | T1 CN at end | weights changed |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| supervised | 0.615 | 0.630 | 0.587 | 0.618 | 0.538 | 0.879 | 0.706 | 0.802 | 0.158 | 0.546 | 5160 |
+| error-gated | 0.637 | 0.650 | 0.637 | 0.682 | 0.545 | 1.000 | 0.861 | 1.000 | 0.299 | 0.542 | 330 |
+| S/S-cue | 0.611 | 0.625 | 0.585 | 0.615 | 0.533 | 0.851 | 0.695 | 0.786 | 0.147 | 0.545 | 10963 |
+| **E/E-cue** | 0.649 | 0.666 | **0.640** | 0.689 | 0.545 | 1.000 | **0.861** | 1.000 | **0.295** | 0.548 | 485 |
+
+### 3. Hypotheses (flip 50, k = 4, CN pairs, paired by seed, 95 % bootstrap CI, seeds better / tied / worse)
+
+| | statistic | value | result |
+|---|---|---|---|
+| G | median CN pairs per (seed, task) ≥ 20 | 208 (min 130) | **pass** |
+| H1 | `E/E-cue` LEARN_CN,4 − 0.5 | +0.361 ± 0.037 [+0.349, +0.373], 40/0/0 | **pass** |
+| H2 | `E/E-cue` − `error-gated` Δ ACC_CN,4 (Δ LEARN, Δ LAST) | +0.003 ± 0.013 [−0.001, +0.007], 25/3/12 (+0.000, −0.000) | **fail** |
+| H3 | `E/E-cue` − `supervised` Δ ACC_CN,4 (Δ LEARN, Δ LAST) | +0.053 ± 0.032 [+0.043, +0.063], 37/0/3 (+0.155, +0.183) | **pass** (narrowly: mean just over 0.05) |
+| H4 | FGT(`error-gated`) − FGT(`E/E-cue`) on CN, k = 4 | +0.004 ± 0.016 [−0.001, +0.009], 25/3/12 | **fail** |
+| H5 | `E/E-cue` ACC_seen,4 − ACC_CN,4, CI upper bound ≤ 0.10 | +0.026 ± 0.041 [+0.013, +0.038] | **pass** |
+
+### 4. Secondary (no pass/fail)
+
+* **H3 belongs to the error gate, not the cue.** `error-gated` −
+  `supervised` on CN at k = 4 is +0.050 [+0.040, +0.059], 38/0/2. That
+  misses "strong" only because the mean is just under 0.05. `E/E-cue` −
+  `error-gated` is +0.003. The supervised control loses on CN mainly
+  because it learns each task less well (LEARN_CN 0.706 vs 0.861). It
+  forgets less in absolute terms (0.158 vs 0.299) because it has less to
+  forget.
+* **The #122 cue benefit does not carry over to this design.** On all
+  pairs, `E/E-cue` − `error-gated` is +0.011 [+0.009, +0.013] at k = 4
+  (+0.010 at k = 2, +0.011 at k = 3). #122 measured +0.215. At flip 25 it
+  is +0.006, and at flip 100 it is +0.020 (CN +0.013). T1 at the end of the
+  sequence is near chance for every arm (CN 0.542–0.548). The cue no longer
+  protects the first task.
+* **Generalisation is real but has limits.** Both error-gated arms score
+  1.000 on seen pairs and 1.000 on **inferable** novel pairs (ICN) right
+  after each task, at every flip. So whenever the training labels logically
+  fix a novel label, the error-gated rule gets it right. On all CN pairs
+  they reach 0.861, and on unseen-edge pairs 0.550, near chance as
+  expected. Supervised arms reach 0.802 on ICN. Their update reinforces
+  negative edges that co-occur with positive ones under the OR teacher.
+* **`S/S-cue` vs `supervised`:** the cue costs supervised learning a little
+  on every slice (CN Δ ACC −0.003, Δ LAST −0.009 at k = 4; all pairs Δ LAST
+  −0.021), as #120 found.
+* **Gap at other flips:** for `E/E-cue`, seen − CN is +0.033 at flip 25 and
+  −0.005 at flip 100. H5 holds at every flip.
+* **Write cost:** `E/E-cue` changes 485 weights over the 4 tasks,
+  `error-gated` 330, `supervised` 5160 and `S/S-cue` 10963.
+
+### Reading
+
+The design question from #122 is answered. With a wider pattern pool and
+4-line cues, every task has hundreds of never-seen input combinations whose
+labels follow from trained per-edge quantities. On those the error-gated
+rule generalises well above lookup chance (+0.36 balanced accuracy), and it
+is perfect on the logically implied subset. That makes it better than
+supervised training on novel pairs (H3, narrow).
+
+The cue result of #121/#122 does **not** replicate in this design. The
+error gate on cue edges adds nothing measurable on novel pairs (H2 fail)
+and does not reduce forgetting (H4 fail). The likely cause, **not tested
+here**, is that a 4-line cue reaches only 14–22 of 32 targets, while
+#122's 12-line cues reached every target. Many targets therefore have no
+context signal to separate the tasks. A follow-up should vary cue cap and
+reach at a fixed pool before drawing any conclusion about cues and
+generalisation.
+
+## Limitations
+
+- Synthetic graph and artificial OR-rule task only. One primary design
+  (128/32/8, active 6, cue cap 4), threshold 1, init 1. Nothing is measured
+  on the real BANC graph (DOI 10.7910/DVN/7WTH1N), which is not built on
+  this machine.
+- The design was chosen from a label-free census on pilot seeds 1..5. Only
+  the pair counts were looked at, never an accuracy.
+- Cue reach is confounded with pool width: fewer lines per cue widens the
+  pool **and** shrinks cue reach. This cycle cannot separate the two
+  effects.
+- CN pairs share TEST patterns with seen pairs, so they are not
+  independent samples. The pair count is per (seed, task), not per
+  pattern.
+- The cue is assumed known at test time. 40 seeds. No multiplicity
+  correction across H1–H5. H3 passes by a narrow margin (mean +0.053
+  against the 0.05 threshold).
+- The equal budget is in episodes, not weight writes.
+
+B888-3 files (`src/circuit_explorer.rs`, subcircuit recall, activity atlas)
+are untouched. No NVIDIA dependency, no secrets. CPU only.
