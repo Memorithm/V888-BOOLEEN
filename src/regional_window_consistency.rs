@@ -31,9 +31,15 @@ pub fn evaluate_window_consistency(
     members: &[usize],
     windows: &[&[BooleanState]],
 ) -> Result<WindowConsistency, WindowError> {
-    if windows.is_empty() { return Err(WindowError::EmptyWindows); }
-    if windows.len() > 1_000 { return Err(WindowError::TooManyWindows); }
-    if members.is_empty() { return Err(WindowError::EmptyRegion); }
+    if windows.is_empty() {
+        return Err(WindowError::EmptyWindows);
+    }
+    if windows.len() > 1_000 {
+        return Err(WindowError::TooManyWindows);
+    }
+    if members.is_empty() {
+        return Err(WindowError::EmptyRegion);
+    }
     let budget = windows[0].len();
     if budget == 0 || budget > 1_000 {
         return Err(WindowError::UnequalBudget);
@@ -56,25 +62,37 @@ pub fn evaluate_window_consistency(
         total_member_activations: 0,
     };
     for window in windows {
-        if window.len() != budget { return Err(WindowError::UnequalBudget); }
+        if window.len() != budget {
+            return Err(WindowError::UnequalBudget);
+        }
         let mut positives = 0_u64;
         for state in *window {
-            if state.len() != dimension { return Err(WindowError::UnequalBudget); }
+            if state.len() != dimension {
+                return Err(WindowError::UnequalBudget);
+            }
             let mut any = false;
             for &member in &sorted {
                 if state.get(member).map_err(|_| WindowError::OutOfBounds)? {
-                    result.total_member_activations = result.total_member_activations
-                        .checked_add(1).ok_or(WindowError::Overflow)?;
+                    result.total_member_activations = result
+                        .total_member_activations
+                        .checked_add(1)
+                        .ok_or(WindowError::Overflow)?;
                     any = true;
                 }
             }
-            if any { positives = positives.checked_add(1).ok_or(WindowError::Overflow)?; }
+            if any {
+                positives = positives.checked_add(1).ok_or(WindowError::Overflow)?;
+            }
         }
-        if positives > 0 { result.positive_windows += 1; }
+        if positives > 0 {
+            result.positive_windows += 1;
+        }
         result.minimum_positive_ticks = result.minimum_positive_ticks.min(positives);
         result.maximum_positive_ticks = result.maximum_positive_ticks.max(positives);
-        result.total_positive_ticks = result.total_positive_ticks
-            .checked_add(positives).ok_or(WindowError::Overflow)?;
+        result.total_positive_ticks = result
+            .total_positive_ticks
+            .checked_add(positives)
+            .ok_or(WindowError::Overflow)?;
         result.window_positive_ticks.push(positives);
     }
     Ok(result)
@@ -85,7 +103,9 @@ mod tests {
     use super::*;
     fn state(bits: &[usize]) -> BooleanState {
         let mut state = BooleanState::new(4);
-        for &bit in bits { state.set(bit, true).unwrap(); }
+        for &bit in bits {
+            state.set(bit, true).unwrap();
+        }
         state
     }
     #[test]
@@ -96,7 +116,14 @@ mod tests {
         let before = a.clone();
         let r = evaluate_window_consistency(&[1], &[&a, &b, &c]).unwrap();
         assert_eq!(r.window_positive_ticks, vec![1, 0, 2]);
-        assert_eq!((r.positive_windows, r.minimum_positive_ticks, r.maximum_positive_ticks), (2, 0, 2));
+        assert_eq!(
+            (
+                r.positive_windows,
+                r.minimum_positive_ticks,
+                r.maximum_positive_ticks
+            ),
+            (2, 0, 2)
+        );
         assert_eq!((r.total_positive_ticks, r.total_member_activations), (3, 3));
         assert_eq!(a, before);
     }
@@ -104,9 +131,21 @@ mod tests {
     fn rejects_leakage_prone_or_invalid_windows() {
         let a = [state(&[1])];
         let b = [state(&[1]), state(&[])];
-        assert_eq!(evaluate_window_consistency(&[1], &[&a, &b]), Err(WindowError::UnequalBudget));
-        assert_eq!(evaluate_window_consistency(&[1, 1], &[&a]), Err(WindowError::DuplicateNeuron));
-        assert_eq!(evaluate_window_consistency(&[4], &[&a]), Err(WindowError::OutOfBounds));
-        assert_eq!(evaluate_window_consistency(&[], &[&a]), Err(WindowError::EmptyRegion));
+        assert_eq!(
+            evaluate_window_consistency(&[1], &[&a, &b]),
+            Err(WindowError::UnequalBudget)
+        );
+        assert_eq!(
+            evaluate_window_consistency(&[1, 1], &[&a]),
+            Err(WindowError::DuplicateNeuron)
+        );
+        assert_eq!(
+            evaluate_window_consistency(&[4], &[&a]),
+            Err(WindowError::OutOfBounds)
+        );
+        assert_eq!(
+            evaluate_window_consistency(&[], &[&a]),
+            Err(WindowError::EmptyRegion)
+        );
     }
 }

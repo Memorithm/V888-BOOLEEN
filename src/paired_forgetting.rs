@@ -39,7 +39,8 @@ pub fn measure_paired_forgetting(
     if baseline.is_empty() {
         return Err(ForgettingError::EmptyTrace);
     }
-    if baseline.len() != perturbed.len() || baseline.iter().any(|s| s.len() != baseline[0].len())
+    if baseline.len() != perturbed.len()
+        || baseline.iter().any(|s| s.len() != baseline[0].len())
         || perturbed.iter().any(|s| s.len() != baseline[0].len())
     {
         return Err(ForgettingError::LengthMismatch);
@@ -113,16 +114,28 @@ mod tests {
         let base = vec![state(&[0, 1]), state(&[0, 1]), state(&[0, 1])];
         let pert = vec![state(&[0, 1]), state(&[0]), state(&[0, 1])];
         let p = measure_paired_forgetting(&[0, 1], 2, &base, &pert, 1).unwrap();
-        assert_eq!((p.lost_recall, p.recovered_recall, p.first_recovery_tick), (1, 1, Some(2)));
-        assert_eq!((p.baseline_activation_cost, p.perturbed_activation_cost), (4, 3));
+        assert_eq!(
+            (p.lost_recall, p.recovered_recall, p.first_recovery_tick),
+            (1, 1, Some(2))
+        );
+        assert_eq!(
+            (p.baseline_activation_cost, p.perturbed_activation_cost),
+            (4, 3)
+        );
     }
 
     #[test]
     fn rejects_duplicate_members_and_mismatched_dimensions() {
         let trace = vec![state(&[0])];
-        assert_eq!(measure_paired_forgetting(&[0, 0], 1, &trace, &trace, 0), Err(ForgettingError::DuplicateMember));
+        assert_eq!(
+            measure_paired_forgetting(&[0, 0], 1, &trace, &trace, 0),
+            Err(ForgettingError::DuplicateMember)
+        );
         let other = vec![BooleanState::new(5)];
-        assert_eq!(measure_paired_forgetting(&[0], 1, &trace, &other, 0), Err(ForgettingError::LengthMismatch));
+        assert_eq!(
+            measure_paired_forgetting(&[0], 1, &trace, &other, 0),
+            Err(ForgettingError::LengthMismatch)
+        );
     }
 
     #[test]
@@ -130,7 +143,10 @@ mod tests {
         let base = vec![state(&[]), state(&[0])];
         let pert = vec![state(&[0]), state(&[])];
         let p = measure_paired_forgetting(&[0], 1, &base, &pert, 0).unwrap();
-        assert_eq!((p.gained_recall, p.lost_recall, p.recovered_recall), (1, 1, 0));
+        assert_eq!(
+            (p.gained_recall, p.lost_recall, p.recovered_recall),
+            (1, 1, 0)
+        );
         assert_eq!(p.first_recovery_tick, None);
     }
 }

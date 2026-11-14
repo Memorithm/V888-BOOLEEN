@@ -56,7 +56,11 @@ pub fn measure_recovery(
         return Err(RecoveryError::InvalidReleaseTick);
     }
     let dimension = baseline[0].len();
-    if baseline.iter().chain(perturbed).any(|s| s.len() != dimension) {
+    if baseline
+        .iter()
+        .chain(perturbed)
+        .any(|s| s.len() != dimension)
+    {
         return Err(RecoveryError::StateDimensionMismatch);
     }
     let mut sorted = members.to_vec();
@@ -68,7 +72,10 @@ pub fn measure_recovery(
         return Err(RecoveryError::MemberOutOfBounds);
     }
     let count = |state: &BooleanState| -> usize {
-        sorted.iter().filter(|&&member| state.get(member) == Ok(true)).count()
+        sorted
+            .iter()
+            .filter(|&&member| state.get(member) == Ok(true))
+            .count()
     };
     let baseline_recall_ticks = baseline.iter().filter(|s| count(s) >= threshold).count();
     let mut first_recovery_offset = None;
@@ -117,8 +124,12 @@ mod tests {
     fn delayed_sustained_recovery_is_distinct_from_first_recall() {
         let baseline = vec![state(&[0, 1]); 6];
         let perturbed = vec![
-            state(&[]), state(&[]), state(&[0, 1]), state(&[]),
-            state(&[0, 1]), state(&[0, 1]),
+            state(&[]),
+            state(&[]),
+            state(&[0, 1]),
+            state(&[]),
+            state(&[0, 1]),
+            state(&[0, 1]),
         ];
         let p = measure_recovery(&[0, 1], &baseline, &perturbed, 2, 2, 2).unwrap();
         assert_eq!(p.baseline_recall_ticks, 6);
@@ -142,9 +153,21 @@ mod tests {
     #[test]
     fn rejects_ambiguous_or_invalid_experiments() {
         let traces = vec![state(&[0]); 2];
-        assert_eq!(measure_recovery(&[0, 0], &traces, &traces, 1, 0, 1), Err(RecoveryError::DuplicateMember));
-        assert_eq!(measure_recovery(&[4], &traces, &traces, 1, 0, 1), Err(RecoveryError::MemberOutOfBounds));
-        assert_eq!(measure_recovery(&[0], &traces, &traces, 1, 2, 1), Err(RecoveryError::InvalidReleaseTick));
-        assert_eq!(measure_recovery(&[0], &traces, &traces[..1], 1, 0, 1), Err(RecoveryError::UnequalWindows));
+        assert_eq!(
+            measure_recovery(&[0, 0], &traces, &traces, 1, 0, 1),
+            Err(RecoveryError::DuplicateMember)
+        );
+        assert_eq!(
+            measure_recovery(&[4], &traces, &traces, 1, 0, 1),
+            Err(RecoveryError::MemberOutOfBounds)
+        );
+        assert_eq!(
+            measure_recovery(&[0], &traces, &traces, 1, 2, 1),
+            Err(RecoveryError::InvalidReleaseTick)
+        );
+        assert_eq!(
+            measure_recovery(&[0], &traces, &traces[..1], 1, 0, 1),
+            Err(RecoveryError::UnequalWindows)
+        );
     }
 }

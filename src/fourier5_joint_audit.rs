@@ -72,12 +72,19 @@ pub fn audit_disjoint_splits(
     ood: &[RoutingSample],
 ) -> Result<[SplitAccuracy; 3], AuditError> {
     let width = frozen.input_bits();
-    if [train, validation, test, ood].iter().any(|split| split.is_empty()) {
+    if [train, validation, test, ood]
+        .iter()
+        .any(|split| split.is_empty())
+    {
         return Err(AuditError::EmptySplit);
     }
-    if [report.route_only.input_bits(), report.plastic_only.input_bits(), report.joint.input_bits()]
-        .iter()
-        .any(|&candidate_width| candidate_width != width)
+    if [
+        report.route_only.input_bits(),
+        report.plastic_only.input_bits(),
+        report.joint.input_bits(),
+    ]
+    .iter()
+    .any(|&candidate_width| candidate_width != width)
     {
         return Err(AuditError::InvalidWidth);
     }
@@ -112,10 +119,18 @@ pub fn audit_disjoint_splits(
             joint_confusion: Confusion::default(),
         };
         for row in split {
-            scores.frozen_confusion.observe(frozen.infer_scalar(&row.state)?, row.label);
-            scores.route_confusion.observe(report.route_only.infer_scalar(&row.state)?, row.label);
-            scores.plastic_confusion.observe(report.plastic_only.infer_scalar(&row.state)?, row.label);
-            scores.joint_confusion.observe(report.joint.infer_scalar(&row.state)?, row.label);
+            scores
+                .frozen_confusion
+                .observe(frozen.infer_scalar(&row.state)?, row.label);
+            scores
+                .route_confusion
+                .observe(report.route_only.infer_scalar(&row.state)?, row.label);
+            scores
+                .plastic_confusion
+                .observe(report.plastic_only.infer_scalar(&row.state)?, row.label);
+            scores
+                .joint_confusion
+                .observe(report.joint.infer_scalar(&row.state)?, row.label);
         }
         scores.frozen_correct = scores.frozen_confusion.correct();
         scores.route_correct = scores.route_confusion.correct();

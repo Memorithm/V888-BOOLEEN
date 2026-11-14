@@ -1,6 +1,9 @@
 //! Paired held-out recall robustness of frozen experimental subcircuits.
 //! Neither selection nor adaptation occurs on held-out observations.
-use crate::{subcircuit_recall::{RecallError, Subcircuit}, BooleanState};
+use crate::{
+    subcircuit_recall::{RecallError, Subcircuit},
+    BooleanState,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HeldoutAblation {
@@ -30,8 +33,11 @@ pub fn select_heldout_ablation(
     }
     let universe = candidates[0].universe_len();
     let width = candidates[0].members().len();
-    if candidates.iter().any(|c| c.universe_len() != universe || c.members().len() != width)
-        || heldout.iter().any(|s| s.len() != universe) {
+    if candidates
+        .iter()
+        .any(|c| c.universe_len() != universe || c.members().len() != width)
+        || heldout.iter().any(|s| s.len() != universe)
+    {
         return Err(RecallError::LengthMismatch);
     }
     if width == 0 || width > 4096 {
@@ -61,7 +67,9 @@ pub fn select_heldout_ablation(
                 }
             }
         }
-        let (worst_position, &max_loss) = losses.iter().enumerate()
+        let (worst_position, &max_loss) = losses
+            .iter()
+            .enumerate()
             .max_by(|(ia, a), (ib, b)| a.cmp(b).then_with(|| ib.cmp(ia)))
             .expect("nonempty circuit");
         let report = HeldoutAblation {

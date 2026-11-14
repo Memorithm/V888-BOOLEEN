@@ -1,6 +1,9 @@
 //! Paired, bounded comparison of post-perturbation recall on frozen circuits.
 //! These are experimental activity traces, not anatomical or causal evidence.
-use crate::{subcircuit_recall::{RecallError, Subcircuit}, BooleanState};
+use crate::{
+    subcircuit_recall::{RecallError, Subcircuit},
+    BooleanState,
+};
 
 const MAX_STEPS: usize = 1_000;
 const MAX_CANDIDATES: usize = 256;
@@ -51,9 +54,11 @@ pub fn rank_paired_recovery(
     if candidates.len() > MAX_CANDIDATES {
         return Err(RecoveryComparisonError::TooManyCandidates);
     }
-    if heldout.is_empty() || heldout.len() > MAX_STEPS
+    if heldout.is_empty()
+        || heldout.len() > MAX_STEPS
         || suppression_end >= heldout.len()
-        || minimum_active == 0 || sustained_steps == 0
+        || minimum_active == 0
+        || sustained_steps == 0
     {
         return Err(RecoveryComparisonError::InvalidWindow);
     }
@@ -67,7 +72,10 @@ pub fn rank_paired_recovery(
         if !ids.insert(candidate.id) {
             return Err(RecoveryComparisonError::InvalidWindow);
         }
-        if heldout.iter().any(|s| s.len() != candidate.circuit.universe_len()) {
+        if heldout
+            .iter()
+            .any(|s| s.len() != candidate.circuit.universe_len())
+        {
             return Err(RecoveryComparisonError::Recall(RecallError::LengthMismatch));
         }
         let mut recalled_ticks = 0;
@@ -77,11 +85,16 @@ pub fn rank_paired_recovery(
         let mut activation_cost = 0usize;
         for (tick, state) in post.iter().enumerate() {
             for &member in candidate.circuit.members() {
-                if state.get(member).map_err(|_| RecoveryComparisonError::Recall(RecallError::OutOfBounds))? {
+                if state
+                    .get(member)
+                    .map_err(|_| RecoveryComparisonError::Recall(RecallError::OutOfBounds))?
+                {
                     activation_cost += 1;
                 }
             }
-            if candidate.circuit.recall(state, minimum_active)
+            if candidate
+                .circuit
+                .recall(state, minimum_active)
                 .map_err(RecoveryComparisonError::Recall)?
             {
                 recalled_ticks += 1;
@@ -97,12 +110,17 @@ pub fn rank_paired_recovery(
             }
         }
         scores.push(RecoveryScore {
-            id: candidate.id, recalled_ticks, first_recall_tick,
-            sustained_recovery_tick, activation_cost,
+            id: candidate.id,
+            recalled_ticks,
+            first_recall_tick,
+            sustained_recovery_tick,
+            activation_cost,
         });
     }
     scores.sort_by(|a, b| {
-        a.sustained_recovery_tick.is_none().cmp(&b.sustained_recovery_tick.is_none())
+        a.sustained_recovery_tick
+            .is_none()
+            .cmp(&b.sustained_recovery_tick.is_none())
             .then_with(|| a.sustained_recovery_tick.cmp(&b.sustained_recovery_tick))
             .then_with(|| b.recalled_ticks.cmp(&a.recalled_ticks))
             .then_with(|| a.activation_cost.cmp(&b.activation_cost))
@@ -117,17 +135,30 @@ mod tests {
 
     fn state(bits: &[usize]) -> BooleanState {
         let mut s = BooleanState::new(4);
-        for &bit in bits { s.set(bit, true).unwrap(); }
+        for &bit in bits {
+            s.set(bit, true).unwrap();
+        }
         s
     }
 
     #[test]
     fn sustained_recovery_beats_intermitent_recall_on_same_trace() {
-        let trace = vec![state(&[]), state(&[0, 2]), state(&[0, 1]),
-            state(&[0, 1, 2]), state(&[0, 1])];
+        let trace = vec![
+            state(&[]),
+            state(&[0, 2]),
+            state(&[0, 1]),
+            state(&[0, 1, 2]),
+            state(&[0, 1]),
+        ];
         let candidates = vec![
-            RecoveryCandidate { id: 9, circuit: Subcircuit::new(4, vec![0, 2]).unwrap() },
-            RecoveryCandidate { id: 2, circuit: Subcircuit::new(4, vec![0, 1]).unwrap() },
+            RecoveryCandidate {
+                id: 9,
+                circuit: Subcircuit::new(4, vec![0, 2]).unwrap(),
+            },
+            RecoveryCandidate {
+                id: 2,
+                circuit: Subcircuit::new(4, vec![0, 1]).unwrap(),
+            },
         ];
         let ranked = rank_paired_recovery(&candidates, &trace, 1, 2, 2).unwrap();
         assert_eq!(ranked[0].id, 2);
@@ -140,7 +171,10 @@ mod tests {
     fn no_recovery_is_right_censored_and_inputs_unchanged() {
         let trace = vec![state(&[]), state(&[0]), state(&[1])];
         let original = trace.clone();
-        let candidates = [RecoveryCandidate { id: 1, circuit: Subcircuit::new(4, vec![0, 1]).unwrap() }];
+        let candidates = [RecoveryCandidate {
+            id: 1,
+            circuit: Subcircuit::new(4, vec![0, 1]).unwrap(),
+        }];
         let result = rank_paired_recovery(&candidates, &trace, 1, 2, 2).unwrap();
         assert_eq!(result[0].first_recall_tick, None);
         assert_eq!(result[0].sustained_recovery_tick, None);
@@ -149,10 +183,22 @@ mod tests {
 
     #[test]
     fn rejects_invalid_budgets_and_mismatched_dimensions() {
-        let candidates = [RecoveryCandidate { id: 1, circuit: Subcircuit::new(3, vec![0]).unwrap() }];
+        let candidates = [RecoveryCandidate {
+            id: 1,
+            circuit: Subcircuit::new(3, vec![0]).unwrap(),
+        }];
         let trace = [state(&[0])];
-        assert_eq!(rank_paired_recovery(&candidates, &trace, 1, 1, 1), Err(RecoveryComparisonError::InvalidWindow));
-        assert_eq!(rank_paired_recovery(&candidates, &trace, 0, 1, 1), Err(RecoveryComparisonError::Recall(RecallError::LengthMismatch)));
-        assert_eq!(rank_paired_recovery(&[], &trace, 0, 1, 1), Err(RecoveryComparisonError::EmptyCandidates));
+        assert_eq!(
+            rank_paired_recovery(&candidates, &trace, 1, 1, 1),
+            Err(RecoveryComparisonError::InvalidWindow)
+        );
+        assert_eq!(
+            rank_paired_recovery(&candidates, &trace, 0, 1, 1),
+            Err(RecoveryComparisonError::Recall(RecallError::LengthMismatch))
+        );
+        assert_eq!(
+            rank_paired_recovery(&[], &trace, 0, 1, 1),
+            Err(RecoveryComparisonError::EmptyCandidates)
+        );
     }
 }

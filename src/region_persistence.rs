@@ -111,8 +111,12 @@ mod tests {
     #[test]
     fn persistence_resets_after_gap_and_counts_completion_ticks() {
         let states = vec![
-            state(&[0, 1]), state(&[0]), state(&[0, 1]),
-            state(&[0, 1]), state(&[]), state(&[0, 1]),
+            state(&[0, 1]),
+            state(&[0]),
+            state(&[0, 1]),
+            state(&[0, 1]),
+            state(&[]),
+            state(&[0, 1]),
         ];
         let result = observe_region_persistence(&states, &[vec![0, 1]], 2, 2).unwrap();
         assert_eq!(result[0].first_sustained_tick, Some(3));
@@ -124,9 +128,7 @@ mod tests {
     #[test]
     fn distinct_regions_and_no_sustained_recall() {
         let states = vec![state(&[0, 2]), state(&[0, 2]), state(&[2])];
-        let result = observe_region_persistence(
-            &states, &[vec![0, 1], vec![2, 3]], 1, 3,
-        ).unwrap();
+        let result = observe_region_persistence(&states, &[vec![0, 1], vec![2, 3]], 1, 3).unwrap();
         assert_eq!(result[0].first_sustained_tick, None);
         assert_eq!(result[1].first_sustained_tick, Some(2));
         assert_eq!(result[1].sustained_ticks, 1);

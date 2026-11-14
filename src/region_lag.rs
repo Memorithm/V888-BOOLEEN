@@ -52,7 +52,9 @@ pub fn observe_lagged_regions(
     }
     let mut seen = HashSet::new();
     for region in regions {
-        if region.label.is_empty() || region.members.is_empty() || min_active == 0
+        if region.label.is_empty()
+            || region.members.is_empty()
+            || min_active == 0
             || min_active > region.members.len()
             || region.members.iter().any(|&member| member >= neurons)
         {
@@ -67,10 +69,14 @@ pub fn observe_lagged_regions(
     let mut active = vec![vec![false; regions.len()]; trace.len()];
     for (tick, state) in trace.iter().enumerate() {
         for (region_index, region) in regions.iter().enumerate() {
-            let count = region.members.iter().filter(|&&member| {
-                // Bounds validated above.
-                state.get(member) == Ok(true)
-            }).count();
+            let count = region
+                .members
+                .iter()
+                .filter(|&&member| {
+                    // Bounds validated above.
+                    state.get(member) == Ok(true)
+                })
+                .count();
             active[tick][region_index] = count >= min_active;
         }
     }
@@ -78,7 +84,11 @@ pub fn observe_lagged_regions(
     for from in 0..regions.len() {
         for to in 0..regions.len() {
             let mut pair = LaggedPair {
-                from, to, coactive_ticks: 0, source_ticks: 0, target_ticks: 0,
+                from,
+                to,
+                coactive_ticks: 0,
+                source_ticks: 0,
+                target_ticks: 0,
             };
             for tick in 0..trace.len() - lag {
                 let source = active[tick][from];
@@ -104,32 +114,53 @@ mod tests {
     }
     fn regions() -> Vec<AnnotatedRegion> {
         vec![
-            AnnotatedRegion { label: "a".into(), members: vec![0] },
-            AnnotatedRegion { label: "b".into(), members: vec![1] },
+            AnnotatedRegion {
+                label: "a".into(),
+                members: vec![0],
+            },
+            AnnotatedRegion {
+                label: "b".into(),
+                members: vec![1],
+            },
         ]
     }
     #[test]
     fn lag_direction_and_marginals() {
         let trace = [state(true, false), state(false, true), state(false, false)];
         let pairs = observe_lagged_regions(&trace, &regions(), 1, 1).unwrap();
-        assert_eq!(pairs[1], LaggedPair {
-            from: 0, to: 1, coactive_ticks: 1, source_ticks: 1, target_ticks: 1
-        });
+        assert_eq!(
+            pairs[1],
+            LaggedPair {
+                from: 0,
+                to: 1,
+                coactive_ticks: 1,
+                source_ticks: 1,
+                target_ticks: 1
+            }
+        );
         assert_eq!(pairs[2].coactive_ticks, 0);
     }
     #[test]
     fn rejects_overlap_and_invalid_lag() {
         let trace = [state(true, false), state(false, true)];
-        assert_eq!(observe_lagged_regions(&trace, &regions(), 0, 1), Err(LagError::InvalidLag));
+        assert_eq!(
+            observe_lagged_regions(&trace, &regions(), 0, 1),
+            Err(LagError::InvalidLag)
+        );
         let mut overlapping = regions();
         overlapping[1].members = vec![0];
-        assert_eq!(observe_lagged_regions(&trace, &overlapping, 1, 1), Err(LagError::DuplicateMember));
+        assert_eq!(
+            observe_lagged_regions(&trace, &overlapping, 1, 1),
+            Err(LagError::DuplicateMember)
+        );
     }
     #[test]
     fn no_mutation_and_empty_region_set() {
         let trace = [state(true, false), state(false, true)];
         let original = trace.clone();
-        assert!(observe_lagged_regions(&trace, &[], 1, 1).unwrap().is_empty());
+        assert!(observe_lagged_regions(&trace, &[], 1, 1)
+            .unwrap()
+            .is_empty());
         assert_eq!(trace, original);
     }
 }
