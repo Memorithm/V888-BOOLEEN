@@ -26,6 +26,7 @@ pub mod fourier5_population_eligibility;
 pub mod fourier5_recurrent;
 pub mod fourier5_routing_search;
 pub mod fourier5_sequential_adaptive;
+pub mod fourier5_sequential_profile;
 pub mod fourier5_shared_context;
 pub mod fourier5_task_memory;
 pub mod fourier5_wide;
