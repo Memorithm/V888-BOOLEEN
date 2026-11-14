@@ -12,6 +12,7 @@ use v888_booleen::consolidation::{
 };
 use v888_booleen::consolidation_scale as scale;
 use v888_booleen::context_cue as cc;
+use v888_booleen::cue_gating as cgate;
 use v888_booleen::eligibility_trace as et;
 use v888_booleen::engine::BooleanEngine;
 use v888_booleen::error_gated as eg;
@@ -138,6 +139,7 @@ fn help() {
     println!("  bench-importance-protection [--graph brain.v888b] [--seeds 1,..,10] [--init 1] [--csv out.csv]  (importance-weighted freeze of top-credit A edges 25%/50% + task-gated plasticity vs #39 consolidate; equal budget; GENERATED synthetic graph by default)");
     println!("  bench-error-gated [--graph brain.v888b] [--seeds 1,..,20] [--init 1] [--csv out.csv]  (error-gated / margin-gated-4 supervised updates vs matched supervised control; agree/conflict forgetting split; bootstrap CIs; equal budget; GENERATED synthetic graph by default)");
     println!("  bench-context-cue [--graph brain.v888b] [--seeds 1,..,20] [--flips 25,50,100] [--init 1] [--csv out.csv]  (task-context cue on reserved existing input lines vs no cue, supervised and error-gated; conflict-pair floor; structural ceiling; bootstrap CIs; equal budget; GENERATED synthetic graph by default)");
+    println!("  bench-cue-gating [--graph brain.v888b] [--seeds 1,..,40] [--flips 25,50,100] [--init 1] [--csv out.csv]  (separate pattern-edge / cue-edge gates and cue-line count under the task-context cue; S0 structural check; equal budget; bootstrap CIs; GENERATED synthetic graph by default)");
     println!("  bench-graded-reward [--graph brain.v888b] [--seeds 1,..,10] [--init 1] [--csv out.csv]  (graded reward ladder bit/fraction/group-k/per-target through the #36 trace + episode-stamped tags for delayed scalars; GENERATED synthetic graph by default)");
     println!("  train-plasticity --graph brain.v888b --episodes labeled.csv --output weights.v888pls [--epochs 1]");
     println!("  score-plasticity --graph brain.v888b --weights weights.v888pls --episodes labeled.csv [--threshold 1]");
@@ -1300,6 +1302,185 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("H2_error_gated_cue_passes_flip50={h2}");
             println!("H3_conflict_floor_broken_flip50={h3}");
             println!("H4_cue_passes_at_flip25_or_flip100={h4}");
+            println!(
+                "topology_unchanged={}",
+                rows.iter().all(|r| r.topology_unchanged)
+            );
+            println!("evaluation_scope=synthetic_or_unverified_graph_artificial_labels_not_BANC_not_biological");
+        }
+        Some("bench-cue-gating") => {
+            let allowed = ["--graph", "--seeds", "--flips", "--init", "--csv"];
+            for flag in args.iter().skip(1).filter(|arg| arg.starts_with("--")) {
+                if !allowed.contains(&flag.as_str()) {
+                    return Err(format!("unknown bench-cue-gating option: {flag}").into());
+                }
+            }
+            let seeds: Vec<u64> = match optional(&args, "--seeds") {
+                Some(s) => s
+                    .split(',')
+                    .map(str::parse::<u64>)
+                    .collect::<Result<Vec<_>, _>>()?,
+                None => cgate::SEEDS.collect(),
+            };
+            let flips = optional(&args, "--flips")
+                .unwrap_or("25,50,100")
+                .split(',')
+                .map(str::parse::<u32>)
+                .collect::<Result<Vec<_>, _>>()?;
+            let init = optional(&args, "--init").unwrap_or("1").parse::<u8>()?;
+            let shape = genbench::GraphShape {
+                sources: 64,
+                targets: 24,
+                fan_in: 6,
+            };
+            let spec = genbench::GenSpec {
+                active: 4,
+                train_patterns: 32,
+                test_patterns: 64,
+                rounds_a: 8,
+                rounds_b: 8,
+                positive_pct: 50,
+                flip_pct: cgate::PRIMARY_FLIP,
+                init_weight: init,
+            };
+            let owned = match optional(&args, "--graph") {
+                Some(path) => Some(Connectome::load(Path::new(path))?),
+                None => None,
+            };
+            let graph_label = if owned.is_some() {
+                "PROVIDED_GRAPH"
+            } else {
+                "GENERATED_SYNTHETIC"
+            };
+            let rows =
+                cgate::run_grid(owned.as_ref(), &shape, &spec, &flips, &seeds, &cgate::ARMS)?;
+            if let Some(path) = optional(&args, "--csv") {
+                use std::io::Write;
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)?
+                    .write_all(cgate::to_csv(&rows, graph_label).as_bytes())?;
+            }
+            println!("v888_cue_gating_schema=b888-4-cue-gating-v1");
+            if owned.is_some() {
+                println!("graph=PROVIDED_GRAPH (task labels artificial)");
+            } else {
+                println!("graph=GENERATED_SYNTHETIC sources=64 targets=24 fan_in=6 (not BANC; real BANC V888 graph DOI 10.7910/DVN/7WTH1N not available here)");
+            }
+            println!(
+                "seeds={} flips={flips:?} init={init} active=4 train_patterns=32 test_patterns=64 rounds_a=8 rounds_b=8 threshold={} cue_cap={} metric=balanced_accuracy boot_resamples={} boot_seed={:#x}",
+                seeds.len(),
+                cgate::THRESHOLD,
+                cc::CUE_CAP,
+                eg::BOOT_RESAMPLES,
+                eg::BOOT_SEED,
+            );
+            let fmt = |s: genbench::Spread| format!("{:.3}±{:.3}", s.mean, s.sd);
+            let stat = |flip: u32, a: cgate::Arm, f: &dyn Fn(&cgate::Row) -> f64| {
+                let v: Vec<f64> = rows
+                    .iter()
+                    .filter(|r| r.flip == flip && r.arm == a)
+                    .map(f)
+                    .collect();
+                genbench::spread(&v)
+            };
+            println!("arm_summary: flip,arm,cue_lines_a/b,cue_reach_a/b,a_train,a_test_after_a,a_tpr_after_a,a_tnr_after_a,a_test_after_b,a_tpr_after_b,forgetting,b_test,conflict_forgetting,conflict_both_correct,ceiling,weights_changed(A+B),cue_a_weight_after_a,cue_b_weight_after_b,pattern_equals_control_rows");
+            for &flip in &flips {
+                for a in cgate::ARMS {
+                    println!(
+                        "{flip},{},{:.1}/{:.1},{:.1}/{:.1},{},{},{},{},{},{},{},{},{},{},{},{:.1},{:.2},{:.2},{}",
+                        a.label(),
+                        stat(flip, a, &|r| r.cue_lines_a as f64).mean,
+                        stat(flip, a, &|r| r.cue_lines_b as f64).mean,
+                        stat(flip, a, &|r| r.cue_reach_a as f64).mean,
+                        stat(flip, a, &|r| r.cue_reach_b as f64).mean,
+                        fmt(stat(flip, a, &|r| r.a_train_after_a.balanced())),
+                        fmt(stat(flip, a, &|r| r.a_test_after_a.all.balanced())),
+                        fmt(stat(flip, a, &|r| cgate::tpr(&r.a_test_after_a.all))),
+                        fmt(stat(flip, a, &|r| cgate::tnr(&r.a_test_after_a.all))),
+                        fmt(stat(flip, a, &|r| r.a_test_after_b.all.balanced())),
+                        fmt(stat(flip, a, &|r| cgate::tpr(&r.a_test_after_b.all))),
+                        fmt(stat(flip, a, &cgate::Row::forgetting)),
+                        fmt(stat(flip, a, &|r| r.b_test_after_b.all.balanced())),
+                        fmt(stat(flip, a, &cgate::Row::forgetting_conflict)),
+                        fmt(stat(flip, a, &cgate::Row::both_frac)),
+                        fmt(stat(flip, a, &cgate::Row::ceiling_frac)),
+                        stat(
+                            flip,
+                            a,
+                            &|r| (r.cost_a.weights_changed + r.cost_b.weights_changed) as f64
+                        )
+                        .mean,
+                        stat(flip, a, &|r| r.cue_a_after_a).mean,
+                        stat(flip, a, &|r| r.cue_b_after_b).mean,
+                        rows.iter()
+                            .filter(|r| r.flip == flip && r.arm == a && r.pattern_equals_control)
+                            .count(),
+                    );
+                }
+            }
+            let p = |d: &eg::Paired| {
+                format!(
+                    "{:+.3}±{:.3}[{:+.3},{:+.3}]{}/{}/{}",
+                    d.mean, d.sd, d.ci_lo, d.ci_hi, d.better, d.ties, d.worse
+                )
+            };
+            let low: Vec<u64> = seeds.iter().copied().filter(|&s| s <= 20).collect();
+            let high: Vec<u64> = seeds.iter().copied().filter(|&s| s > 20).collect();
+            println!("comparison: flip,seeds,x,base,n,d_forget(+=x_less),d_forget_conflict,d_a_test,d_a_tpr,d_a_tnr,d_retained_a,d_b_test,d_both_correct,passes_rule  (each: mean±sd[boot95_lo,hi]better/tie/worse)");
+            for &flip in &flips {
+                let mut cmps = vec![
+                    (cgate::SS, cgate::SUPERVISED),
+                    (cgate::SE, cgate::SUPERVISED),
+                    (cgate::SS_K1, cgate::SUPERVISED),
+                    (cgate::SS_K2, cgate::SUPERVISED),
+                    (cgate::SS_K4, cgate::SUPERVISED),
+                    (cgate::ES, cgate::ERROR_GATED),
+                    (cgate::EE, cgate::ERROR_GATED),
+                    (cgate::ES, cgate::SUPERVISED),
+                    (cgate::EE, cgate::SUPERVISED),
+                    (cgate::ERROR_GATED, cgate::SUPERVISED),
+                ];
+                cmps.push((cgate::ES, cgate::EE));
+                for (label, subset) in [
+                    ("all", None),
+                    ("1-20", Some(low.as_slice())),
+                    ("21-40", Some(high.as_slice())),
+                ] {
+                    if subset.is_some_and(<[u64]>::is_empty) {
+                        continue;
+                    }
+                    for &(x, base) in &cmps {
+                        let c = cgate::compare(&rows, flip, x, base, subset);
+                        println!(
+                            "{flip},{label},{},{},{},{},{},{},{},{},{},{},{},{}",
+                            x.label(),
+                            base.label(),
+                            c.forget.n,
+                            p(&c.forget),
+                            p(&c.forget_conflict),
+                            p(&c.a_test),
+                            p(&c.a_tpr),
+                            p(&c.a_tnr),
+                            p(&c.retained),
+                            p(&c.b),
+                            p(&c.both),
+                            c.passes(),
+                        );
+                    }
+                    println!(
+                        "{flip},{label},H4_attribution,{}",
+                        p(&cgate::h4_attribution(&rows, flip, subset))
+                    );
+                }
+            }
+            let (s0, h1, h2, h3, h4) = cgate::readings(&rows);
+            println!("S0_structural_supervised_pattern_gate_holds={s0}");
+            println!("H1_S/E-cue_passes_vs_supervised_flip50={h1}");
+            println!("H2_some_S/S-cue-k_passes_vs_supervised_flip50={h2}");
+            println!("H3_E/S-cue_passes_vs_error-gated_flip50={h3}");
+            println!("H4_pattern_gate_carries_cue_benefit_flip50={h4}");
             println!(
                 "topology_unchanged={}",
                 rows.iter().all(|r| r.topology_unchanged)
