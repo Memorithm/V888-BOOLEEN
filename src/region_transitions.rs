@@ -50,9 +50,10 @@ pub fn observe_region_transitions(
                 *counts.entry(region).or_default() += 1;
             }
         }
-        counts.into_iter().filter_map(|(region, count)| {
-            (count >= minimum_active).then_some(region)
-        }).collect::<Vec<_>>()
+        counts
+            .into_iter()
+            .filter_map(|(region, count)| (count >= minimum_active).then_some(region))
+            .collect::<Vec<_>>()
     };
     let mut previous = active_regions(&snapshots[0]);
     let mut transitions = BTreeMap::<(u32, u32), u64>::new();
@@ -66,9 +67,16 @@ pub fn observe_region_transitions(
         }
         previous = current;
     }
-    Ok(transitions.into_iter().map(|((from_region, to_region), observed_steps)| {
-        RegionTransition { from_region, to_region, observed_steps }
-    }).collect())
+    Ok(transitions
+        .into_iter()
+        .map(
+            |((from_region, to_region), observed_steps)| RegionTransition {
+                from_region,
+                to_region,
+                observed_steps,
+            },
+        )
+        .collect())
 }
 
 #[cfg(test)]
@@ -84,23 +92,49 @@ mod tests {
         second.set(2, true).unwrap();
         second.set(3, true).unwrap();
         let annotations = [Some(7), Some(7), Some(9), None];
-        assert_eq!(observe_region_transitions(&[first, second], &annotations, 1, 2).unwrap(),
-            vec![RegionTransition { from_region: 7, to_region: 9, observed_steps: 1 }]);
+        assert_eq!(
+            observe_region_transitions(&[first, second], &annotations, 1, 2).unwrap(),
+            vec![RegionTransition {
+                from_region: 7,
+                to_region: 9,
+                observed_steps: 1
+            }]
+        );
     }
 
     #[test]
     fn threshold_and_budget_are_enforced() {
         let state = BooleanState::new(2);
         let annotations = [Some(1), Some(2)];
-        assert!(observe_region_transitions(&[state.clone(), state.clone()], &annotations, 2, 2).unwrap().is_empty());
-        assert_eq!(observe_region_transitions(&[state.clone()], &annotations, 1, 1), Err(TransitionError::TooManyRegions));
-        assert_eq!(observe_region_transitions(&[state.clone()], &annotations, 0, 2), Err(TransitionError::ZeroBudget));
-        assert_eq!(observe_region_transitions(&[state], &[Some(1)], 1, 2), Err(TransitionError::LengthMismatch));
+        assert!(
+            observe_region_transitions(&[state.clone(), state.clone()], &annotations, 2, 2)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            observe_region_transitions(&[state.clone()], &annotations, 1, 1),
+            Err(TransitionError::TooManyRegions)
+        );
+        assert_eq!(
+            observe_region_transitions(&[state.clone()], &annotations, 0, 2),
+            Err(TransitionError::ZeroBudget)
+        );
+        assert_eq!(
+            observe_region_transitions(&[state], &[Some(1)], 1, 2),
+            Err(TransitionError::LengthMismatch)
+        );
     }
 
     #[test]
     fn one_snapshot_has_no_transitions() {
-        assert!(observe_region_transitions(&[BooleanState::new(0)], &[], 1, 1).unwrap().is_empty());
-        assert_eq!(observe_region_transitions(&[], &[], 1, 1), Err(TransitionError::EmptyHistory));
+        assert!(
+            observe_region_transitions(&[BooleanState::new(0)], &[], 1, 1)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            observe_region_transitions(&[], &[], 1, 1),
+            Err(TransitionError::EmptyHistory)
+        );
     }
 }

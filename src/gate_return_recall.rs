@@ -1,6 +1,9 @@
 //! Observe recall after an explicitly annotated region reactivates.
 //! Temporal co-occurrence is not anatomical connectivity or causality.
-use crate::{subcircuit_recall::{RecallError, Subcircuit}, BooleanState};
+use crate::{
+    subcircuit_recall::{RecallError, Subcircuit},
+    BooleanState,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GateReturnError {
@@ -48,8 +51,14 @@ pub fn rank_gate_return_recall(
     horizon: usize,
 ) -> Result<Vec<GateReturnScore>, GateReturnError> {
     rank_gate_return_sustained_recall(
-        candidates, snapshots, annotations, region, minimum_region_active,
-        minimum_circuit_active, horizon, 1,
+        candidates,
+        snapshots,
+        annotations,
+        region,
+        minimum_region_active,
+        minimum_circuit_active,
+        horizon,
+        1,
     )
 }
 
@@ -67,8 +76,15 @@ pub fn rank_gate_return_sustained_recall(
     minimum_sustained_ticks: usize,
 ) -> Result<Vec<GateReturnScore>, GateReturnError> {
     rank_gate_return_with_window_policy(
-        candidates, snapshots, annotations, region, minimum_region_active,
-        minimum_circuit_active, horizon, minimum_sustained_ticks, false,
+        candidates,
+        snapshots,
+        annotations,
+        region,
+        minimum_region_active,
+        minimum_circuit_active,
+        horizon,
+        minimum_sustained_ticks,
+        false,
     )
 }
 
@@ -87,8 +103,15 @@ pub fn rank_gate_return_disjoint_recall(
     minimum_sustained_ticks: usize,
 ) -> Result<Vec<GateReturnScore>, GateReturnError> {
     rank_gate_return_with_window_policy(
-        candidates, snapshots, annotations, region, minimum_region_active,
-        minimum_circuit_active, horizon, minimum_sustained_ticks, true,
+        candidates,
+        snapshots,
+        annotations,
+        region,
+        minimum_region_active,
+        minimum_circuit_active,
+        horizon,
+        minimum_sustained_ticks,
+        true,
     )
 }
 
@@ -120,7 +143,9 @@ fn rank_gate_return_with_window_policy(
     let len = first.len();
     if annotations.len() != len
         || snapshots.iter().any(|state| state.len() != len)
-        || candidates.iter().any(|candidate| candidate.universe_len() != len)
+        || candidates
+            .iter()
+            .any(|candidate| candidate.universe_len() != len)
     {
         return Err(GateReturnError::LengthMismatch);
     }
@@ -197,10 +222,14 @@ fn rank_gate_return_with_window_policy(
                     if !recovered {
                         score.recovered_events += 1;
                         score.first_recovery_delay = Some(
-                            score.first_recovery_delay.map_or(delay, |old| old.min(delay)),
+                            score
+                                .first_recovery_delay
+                                .map_or(delay, |old| old.min(delay)),
                         );
                         score.worst_recovery_delay = Some(
-                            score.worst_recovery_delay.map_or(delay, |old| old.max(delay)),
+                            score
+                                .worst_recovery_delay
+                                .map_or(delay, |old| old.max(delay)),
                         );
                         recovered = true;
                     }
@@ -223,8 +252,14 @@ fn rank_gate_return_with_window_policy(
         b.sustained_recovered_events
             .cmp(&a.sustained_recovered_events)
             .then_with(|| b.recovered_events.cmp(&a.recovered_events))
-            .then_with(|| a.confirmed_unrecovered_events.cmp(&b.confirmed_unrecovered_events))
-            .then_with(|| a.censored_unrecovered_events.cmp(&b.censored_unrecovered_events))
+            .then_with(|| {
+                a.confirmed_unrecovered_events
+                    .cmp(&b.confirmed_unrecovered_events)
+            })
+            .then_with(|| {
+                a.censored_unrecovered_events
+                    .cmp(&b.censored_unrecovered_events)
+            })
             .then_with(|| a.worst_recovery_delay.cmp(&b.worst_recovery_delay))
             .then_with(|| b.recall_ticks.cmp(&a.recall_ticks))
             .then_with(|| a.activation_cost.cmp(&b.activation_cost))
@@ -245,18 +280,28 @@ mod tests {
         state
     }
 
-
     #[test]
     fn full_horizon_failure_is_distinct_from_censored_non_recovery() {
         let circuit = Subcircuit::new(4, vec![1]).unwrap();
         let history = [
-            state(&[]), state(&[0]), state(&[]), state(&[]),
-            state(&[]), state(&[0]),
+            state(&[]),
+            state(&[0]),
+            state(&[]),
+            state(&[]),
+            state(&[]),
+            state(&[0]),
         ];
         let scores = rank_gate_return_disjoint_recall(
-            &[circuit], &history, &[Some(7), None, None, None],
-            7, 1, 1, 3, 1,
-        ).unwrap();
+            &[circuit],
+            &history,
+            &[Some(7), None, None, None],
+            7,
+            1,
+            1,
+            3,
+            1,
+        )
+        .unwrap();
         assert_eq!(scores[0].return_events, 2);
         assert_eq!(scores[0].unrecovered_events, 2);
         assert_eq!(scores[0].confirmed_unrecovered_events, 1);
@@ -272,7 +317,11 @@ mod tests {
             &[circuit],
             &history,
             &[Some(7), None, None, None],
-            7, 1, 1, 3, 1,
+            7,
+            1,
+            1,
+            3,
+            1,
         )
         .unwrap();
         assert_eq!(scores[0].return_events, 2);
@@ -285,13 +334,25 @@ mod tests {
     fn censored_returns_and_worst_latency_are_recorded() {
         let circuit = Subcircuit::new(4, vec![1]).unwrap();
         let history = [
-            state(&[]), state(&[0, 1]), state(&[]),
-            state(&[0]), state(&[1]), state(&[]), state(&[0]),
+            state(&[]),
+            state(&[0, 1]),
+            state(&[]),
+            state(&[0]),
+            state(&[1]),
+            state(&[]),
+            state(&[0]),
         ];
         let scores = rank_gate_return_disjoint_recall(
-            &[circuit], &history, &[Some(7), None, None, None],
-            7, 1, 1, 2, 1,
-        ).unwrap();
+            &[circuit],
+            &history,
+            &[Some(7), None, None, None],
+            7,
+            1,
+            1,
+            2,
+            1,
+        )
+        .unwrap();
         assert_eq!(scores[0].return_events, 3);
         assert_eq!(scores[0].recovered_events, 2);
         assert_eq!(scores[0].unrecovered_events, 1);
@@ -303,16 +364,27 @@ mod tests {
     fn disjoint_windows_do_not_double_credit_recall() {
         let circuit = Subcircuit::new(4, vec![1]).unwrap();
         let history = [
-            state(&[]), state(&[0]), state(&[]),
-            state(&[0, 1]), state(&[0, 1]),
+            state(&[]),
+            state(&[0]),
+            state(&[]),
+            state(&[0, 1]),
+            state(&[0, 1]),
         ];
         let annotations = [Some(7), None, None, None];
         let overlapping = rank_gate_return_sustained_recall(
-            &[circuit.clone()], &history, &annotations, 7, 1, 1, 4, 2,
-        ).unwrap();
-        let disjoint = rank_gate_return_disjoint_recall(
-            &[circuit], &history, &annotations, 7, 1, 1, 4, 2,
-        ).unwrap();
+            &[circuit.clone()],
+            &history,
+            &annotations,
+            7,
+            1,
+            1,
+            4,
+            2,
+        )
+        .unwrap();
+        let disjoint =
+            rank_gate_return_disjoint_recall(&[circuit], &history, &annotations, 7, 1, 1, 4, 2)
+                .unwrap();
         assert_eq!(overlapping[0].recall_ticks, 4);
         assert_eq!(disjoint[0].recall_ticks, 2);
         assert_eq!(disjoint[0].return_events, 2);
@@ -326,11 +398,16 @@ mod tests {
         let annotations = [Some(7), None, None, None];
         assert_eq!(
             rank_gate_return_disjoint_recall(
-                &[circuit.clone()], &history, &annotations, 7, 1, 1, 2, 2,
+                &[circuit.clone()],
+                &history,
+                &annotations,
+                7,
+                1,
+                1,
+                2,
+                2,
             ),
-            rank_gate_return_sustained_recall(
-                &[circuit], &history, &annotations, 7, 1, 1, 2, 2,
-            )
+            rank_gate_return_sustained_recall(&[circuit], &history, &annotations, 7, 1, 1, 2, 2,)
         );
     }
 
@@ -350,9 +427,16 @@ mod tests {
             state(&[0, 1, 2]),
         ];
         let scores = rank_gate_return_sustained_recall(
-            &circuits, &history, &[Some(7), None, None, None],
-            7, 1, 1, 3, 2,
-        ).unwrap();
+            &circuits,
+            &history,
+            &[Some(7), None, None, None],
+            7,
+            1,
+            1,
+            3,
+            2,
+        )
+        .unwrap();
         assert_eq!(scores[0].candidate, 1);
         assert_eq!(scores[0].sustained_recovered_events, 2);
         assert_eq!(scores[1].sustained_recovered_events, 1);
@@ -362,10 +446,19 @@ mod tests {
     #[test]
     fn sustained_window_must_fit_horizon() {
         let circuit = Subcircuit::new(4, vec![1]).unwrap();
-        assert_eq!(rank_gate_return_sustained_recall(
-            &[circuit], &[state(&[])], &[Some(7), None, None, None],
-            7, 1, 1, 2, 3,
-        ), Err(GateReturnError::InvalidBudget));
+        assert_eq!(
+            rank_gate_return_sustained_recall(
+                &[circuit],
+                &[state(&[])],
+                &[Some(7), None, None, None],
+                7,
+                1,
+                1,
+                2,
+                3,
+            ),
+            Err(GateReturnError::InvalidBudget)
+        );
     }
 
     #[test]
@@ -452,15 +545,7 @@ mod tests {
             Err(GateReturnError::LengthMismatch)
         );
         assert_eq!(
-            rank_gate_return_recall(
-                &[circuit],
-                &[state(&[0])],
-                &[Some(7); 4],
-                7,
-                1,
-                1,
-                0,
-            ),
+            rank_gate_return_recall(&[circuit], &[state(&[0])], &[Some(7); 4], 7, 1, 1, 0,),
             Err(GateReturnError::InvalidBudget)
         );
     }

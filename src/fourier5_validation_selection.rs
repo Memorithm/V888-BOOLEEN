@@ -143,9 +143,7 @@ pub fn select_or_keep_frozen(
     template: CreditConfig,
     seeds: &[u64],
 ) -> Result<GuardedSelection, CreditError> {
-    select_or_keep_frozen_with_class_floor(
-        base, train, validation, template, seeds, 0, 1,
-    )
+    select_or_keep_frozen_with_class_floor(base, train, validation, template, seeds, 0, 1)
 }
 
 /// Opt-in deployment guard: require at least `min_recall_num / min_recall_den`
@@ -213,7 +211,10 @@ fn nondecreasing_class_recall(candidate: &Confusion, frozen: &Confusion) -> bool
     let cn = candidate.tn as u128 + candidate.fp as u128;
     let fp = frozen.tp as u128 + frozen.fn_ as u128;
     let fn_ = frozen.tn as u128 + frozen.fp as u128;
-    cp != 0 && cn != 0 && fp != 0 && fn_ != 0
+    cp != 0
+        && cn != 0
+        && fp != 0
+        && fn_ != 0
         && (candidate.tp as u128) * fp >= (frozen.tp as u128) * cp
         && (candidate.tn as u128) * fn_ >= (frozen.tn as u128) * cn
 }
@@ -223,7 +224,6 @@ fn strictly_better_balanced(candidate: &Confusion, reference: &Confusion) -> boo
     let (c, d) = reference.score();
     a * d > c * b
 }
-
 
 /// Exact integer comparison, avoiding floating-point threshold drift.
 fn meets_class_floor(c: &Confusion, numerator: usize, denominator: usize) -> bool {
@@ -246,8 +246,18 @@ mod tests {
     fn pareto_guard_rejects_class_regression_despite_balanced_gain() {
         // Candidate has better balanced accuracy (0.75 vs 0.70), but
         // positive recall falls from 0.8 to 0.7.
-        let frozen = Confusion { tp: 8, fn_: 2, tn: 6, fp: 4 };
-        let candidate = Confusion { tp: 7, fn_: 3, tn: 8, fp: 2 };
+        let frozen = Confusion {
+            tp: 8,
+            fn_: 2,
+            tn: 6,
+            fp: 4,
+        };
+        let candidate = Confusion {
+            tp: 7,
+            fn_: 3,
+            tn: 8,
+            fp: 2,
+        };
         assert!(strictly_better_balanced(&candidate, &frozen));
         assert!(!nondecreasing_class_recall(&candidate, &frozen));
         assert!(nondecreasing_class_recall(&frozen, &frozen));
@@ -255,16 +265,36 @@ mod tests {
 
     #[test]
     fn pareto_guard_accepts_nondecreasing_both_classes() {
-        let frozen = Confusion { tp: 6, fn_: 4, tn: 6, fp: 4 };
-        let candidate = Confusion { tp: 7, fn_: 3, tn: 8, fp: 2 };
+        let frozen = Confusion {
+            tp: 6,
+            fn_: 4,
+            tn: 6,
+            fp: 4,
+        };
+        let candidate = Confusion {
+            tp: 7,
+            fn_: 3,
+            tn: 8,
+            fp: 2,
+        };
         assert!(strictly_better_balanced(&candidate, &frozen));
         assert!(nondecreasing_class_recall(&candidate, &frozen));
     }
 
     #[test]
     fn class_floor_blocks_single_class_collapse() {
-        let collapsed = Confusion { tp: 8, tn: 0, fp: 2, fn_: 0 };
-        let balanced = Confusion { tp: 7, tn: 1, fp: 1, fn_: 1 };
+        let collapsed = Confusion {
+            tp: 8,
+            tn: 0,
+            fp: 2,
+            fn_: 0,
+        };
+        let balanced = Confusion {
+            tp: 7,
+            tn: 1,
+            fp: 1,
+            fn_: 1,
+        };
         assert!(!meets_class_floor(&collapsed, 1, 2));
         assert!(meets_class_floor(&balanced, 1, 2));
         assert!(meets_class_floor(&collapsed, 0, 1));
@@ -272,9 +302,8 @@ mod tests {
 
     #[test]
     fn class_floor_rejects_invalid_ratio_before_training() {
-        let base = FiveCircleHierarchy::from_modes(
-            &[GateKind::Majority], LeafRouting::Contiguous,
-        ).unwrap();
+        let base = FiveCircleHierarchy::from_modes(&[GateKind::Majority], LeafRouting::Contiguous)
+            .unwrap();
         let config = CreditConfig {
             scope: CreditScope::OutputParameters,
             policy: CreditPolicy::Greedy,
@@ -283,18 +312,31 @@ mod tests {
             seed: 1,
         };
         assert!(matches!(
-            select_or_keep_frozen_with_class_floor(
-                &base, &[], &[], config, &[1], 2, 1,
-            ),
+            select_or_keep_frozen_with_class_floor(&base, &[], &[], config, &[1], 2, 1,),
             Err(CreditError::InvalidBudget)
         ));
     }
 
     #[test]
     fn frozen_control_wins_ties_and_loses_to_better_balanced_model() {
-        let frozen = Confusion { tp: 2, tn: 2, fp: 2, fn_: 2 };
-        let equal = Confusion { tp: 2, tn: 2, fp: 2, fn_: 2 };
-        let better = Confusion { tp: 3, tn: 3, fp: 1, fn_: 1 };
+        let frozen = Confusion {
+            tp: 2,
+            tn: 2,
+            fp: 2,
+            fn_: 2,
+        };
+        let equal = Confusion {
+            tp: 2,
+            tn: 2,
+            fp: 2,
+            fn_: 2,
+        };
+        let better = Confusion {
+            tp: 3,
+            tn: 3,
+            fp: 1,
+            fn_: 1,
+        };
         assert!(!strictly_better_balanced(&equal, &frozen));
         assert!(strictly_better_balanced(&better, &frozen));
         assert!(!strictly_better_balanced(&frozen, &better));
@@ -303,8 +345,10 @@ mod tests {
     #[test]
     fn frozen_guard_preserves_base_when_training_cannot_improve_validation() {
         let base = FiveCircleHierarchy::from_modes(
-            &[GateKind::Majority, GateKind::Parity], LeafRouting::Contiguous
-        ).unwrap();
+            &[GateKind::Majority, GateKind::Parity],
+            LeafRouting::Contiguous,
+        )
+        .unwrap();
         let mut train = Vec::new();
         let mut validation = Vec::new();
         for n in 0..128_usize {
@@ -314,7 +358,11 @@ mod tests {
             }
             let label = base.infer_scalar(&state).unwrap();
             let row = RoutingSample { state, label };
-            if n < 64 { train.push(row); } else { validation.push(row); }
+            if n < 64 {
+                train.push(row);
+            } else {
+                validation.push(row);
+            }
         }
         // The oracle labels are the frozen circuit itself: no trained
         // candidate can strictly improve its perfect VALID accuracy.
@@ -332,14 +380,19 @@ mod tests {
 
     #[test]
     fn empty_training_split_is_rejected_before_fitting() {
-        let model = FiveCircleHierarchy::from_modes(
-            &[GateKind::Majority], LeafRouting::Contiguous
-        ).unwrap();
+        let model = FiveCircleHierarchy::from_modes(&[GateKind::Majority], LeafRouting::Contiguous)
+            .unwrap();
         let mut state = BooleanState::new(5);
         state.set(0, true).unwrap();
         let validation = [
-            RoutingSample { state: state.clone(), label: true },
-            RoutingSample { state: BooleanState::new(5), label: false },
+            RoutingSample {
+                state: state.clone(),
+                label: true,
+            },
+            RoutingSample {
+                state: BooleanState::new(5),
+                label: false,
+            },
         ];
         let config = CreditConfig {
             scope: CreditScope::OutputParameters,
@@ -356,18 +409,28 @@ mod tests {
 
     #[test]
     fn independent_balanced_score_and_disjoint_validation() {
-        let confusion = Confusion { tp: 1, tn: 3, fp: 1, fn_: 3 };
+        let confusion = Confusion {
+            tp: 1,
+            tn: 3,
+            fp: 1,
+            fn_: 3,
+        };
         assert_eq!(confusion.score(), (16, 32));
         let model = FiveCircleHierarchy::from_modes(
-            &[GateKind::Majority, GateKind::Parity], LeafRouting::Contiguous
-        ).unwrap();
+            &[GateKind::Majority, GateKind::Parity],
+            LeafRouting::Contiguous,
+        )
+        .unwrap();
         let mut rows = Vec::new();
         for n in 0..128 {
             let mut state = BooleanState::new(25);
             for bit in 0..25 {
                 state.set(bit, (n >> (bit % 7)) & 1 != 0).unwrap();
             }
-            rows.push(RoutingSample { state, label: n % 2 == 0 });
+            rows.push(RoutingSample {
+                state,
+                label: n % 2 == 0,
+            });
         }
         let config = CreditConfig {
             scope: CreditScope::OutputParameters,

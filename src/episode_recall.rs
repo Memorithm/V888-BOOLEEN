@@ -76,7 +76,11 @@ pub fn evaluate_episode_recall(
         }
         if episode.baseline.len() != episode.perturbed.len()
             || episode.baseline.len() - episode.boundary != budget
-            || episode.baseline.iter().chain(episode.perturbed.iter()).any(|s| s.len() != dimension)
+            || episode
+                .baseline
+                .iter()
+                .chain(episode.perturbed.iter())
+                .any(|s| s.len() != dimension)
         {
             return Err(EpisodeError::LengthMismatch);
         }
@@ -91,7 +95,8 @@ pub fn evaluate_episode_recall(
         };
         let mut jointly_recalled = Vec::with_capacity(budget);
         for tick in episode.boundary..episode.baseline.len() {
-            let active = |s: &BooleanState| indices.iter().filter(|&&i| s.get(i) == Ok(true)).count();
+            let active =
+                |s: &BooleanState| indices.iter().filter(|&&i| s.get(i) == Ok(true)).count();
             let b = active(&episode.baseline[tick]);
             let p = active(&episode.perturbed[tick]);
             profile.baseline_activation += b as u64;
@@ -124,22 +129,43 @@ mod tests {
 
     fn state(bits: &[usize]) -> BooleanState {
         let mut s = BooleanState::new(4);
-        for &i in bits { s.set(i, true).unwrap(); }
+        for &i in bits {
+            s.set(i, true).unwrap();
+        }
         s
     }
 
     #[test]
     fn measures_independent_equal_budget_episodes() {
-        let b = vec![state(&[0,1]), state(&[0,1]), state(&[0,1])];
-        let p = vec![state(&[0]), state(&[0,1]), state(&[0,1])];
+        let b = vec![state(&[0, 1]), state(&[0, 1]), state(&[0, 1])];
+        let p = vec![state(&[0]), state(&[0, 1]), state(&[0, 1])];
         let episodes = [
-            RecallEpisode { baseline: &b, perturbed: &p, boundary: 0 },
-            RecallEpisode { baseline: &b, perturbed: &b, boundary: 0 },
+            RecallEpisode {
+                baseline: &b,
+                perturbed: &p,
+                boundary: 0,
+            },
+            RecallEpisode {
+                baseline: &b,
+                perturbed: &b,
+                boundary: 0,
+            },
         ];
-        let r = evaluate_episode_recall(&[0,1], 2, &episodes).unwrap();
-        assert_eq!((r[0].lost, r[0].retained, r[0].first_recovered_tick, r[0].sustained_recovery_tick), (1,2,Some(1),Some(1)));
-        assert_eq!((r[1].lost, r[1].sustained_recovery_tick), (0,Some(0)));
-        assert_eq!((r[0].baseline_activation, r[0].perturbed_activation), (6,5));
+        let r = evaluate_episode_recall(&[0, 1], 2, &episodes).unwrap();
+        assert_eq!(
+            (
+                r[0].lost,
+                r[0].retained,
+                r[0].first_recovered_tick,
+                r[0].sustained_recovery_tick
+            ),
+            (1, 2, Some(1), Some(1))
+        );
+        assert_eq!((r[1].lost, r[1].sustained_recovery_tick), (0, Some(0)));
+        assert_eq!(
+            (r[0].baseline_activation, r[0].perturbed_activation),
+            (6, 5)
+        );
     }
 
     #[test]
@@ -147,18 +173,36 @@ mod tests {
         let a = vec![state(&[0]), state(&[0])];
         let b = vec![state(&[0])];
         let episodes = [
-            RecallEpisode { baseline: &a, perturbed: &a, boundary: 0 },
-            RecallEpisode { baseline: &b, perturbed: &b, boundary: 0 },
+            RecallEpisode {
+                baseline: &a,
+                perturbed: &a,
+                boundary: 0,
+            },
+            RecallEpisode {
+                baseline: &b,
+                perturbed: &b,
+                boundary: 0,
+            },
         ];
-        assert_eq!(evaluate_episode_recall(&[0], 1, &episodes).err(), Some(EpisodeError::LengthMismatch));
-        assert_eq!(evaluate_episode_recall(&[0,0], 1, &episodes).err(), Some(EpisodeError::DuplicateMember));
+        assert_eq!(
+            evaluate_episode_recall(&[0], 1, &episodes).err(),
+            Some(EpisodeError::LengthMismatch)
+        );
+        assert_eq!(
+            evaluate_episode_recall(&[0, 0], 1, &episodes).err(),
+            Some(EpisodeError::DuplicateMember)
+        );
     }
 
     #[test]
     fn intermittent_recall_is_not_sustained() {
         let b = vec![state(&[0]), state(&[0]), state(&[0])];
         let p = vec![state(&[0]), state(&[]), state(&[])];
-        let e = [RecallEpisode { baseline: &b, perturbed: &p, boundary: 0 }];
+        let e = [RecallEpisode {
+            baseline: &b,
+            perturbed: &p,
+            boundary: 0,
+        }];
         let r = evaluate_episode_recall(&[0], 1, &e).unwrap();
         assert_eq!(r[0].first_recovered_tick, Some(0));
         assert_eq!(r[0].sustained_recovery_tick, None);

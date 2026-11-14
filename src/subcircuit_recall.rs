@@ -199,7 +199,10 @@ impl Subcircuit {
         if snapshots.len() > 1000 || self.members.len() > 4096 {
             return Err(RecallError::ZeroBudget);
         }
-        if snapshots.iter().any(|state| state.len() != self.universe_len) {
+        if snapshots
+            .iter()
+            .any(|state| state.len() != self.universe_len)
+        {
             return Err(RecallError::LengthMismatch);
         }
         let mut baseline = 0usize;
@@ -223,10 +226,7 @@ impl Subcircuit {
                 }
             }
         }
-        Ok((
-            baseline,
-            self.members.iter().copied().zip(losses).collect(),
-        ))
+        Ok((baseline, self.members.iter().copied().zip(losses).collect()))
     }
 
     /// Count observed activations for each explicitly selected member, in sorted index order.
@@ -508,7 +508,10 @@ mod tests {
     #[test]
     fn ablation_validates_budget_and_dimensions() {
         let circuit = Subcircuit::new(2, vec![0]).unwrap();
-        assert_eq!(circuit.single_member_ablation(&[], 1), Err(RecallError::EmptyHistory));
+        assert_eq!(
+            circuit.single_member_ablation(&[], 1),
+            Err(RecallError::EmptyHistory)
+        );
         assert_eq!(
             circuit.single_member_ablation(&[BooleanState::new(2)], 0),
             Err(RecallError::ZeroBudget)
@@ -522,5 +525,4 @@ mod tests {
             Err(RecallError::ZeroBudget)
         );
     }
-
 }

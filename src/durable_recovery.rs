@@ -34,25 +34,41 @@ pub fn rank_durable_recovery(
     sustained_ticks: usize,
 ) -> Result<Vec<DurableRecovery>, DurableRecoveryError> {
     use DurableRecoveryError as E;
-    if candidates.is_empty() || episodes.is_empty() { return Err(E::EmptyInput); }
-    if candidates.len() > 256 || episodes.len() > 64 { return Err(E::BudgetExceeded); }
+    if candidates.is_empty() || episodes.is_empty() {
+        return Err(E::EmptyInput);
+    }
+    if candidates.len() > 256 || episodes.len() > 64 {
+        return Err(E::BudgetExceeded);
+    }
     let horizon = episodes[0].len();
     if horizon == 0 || horizon > 1000 || sustained_ticks == 0 || sustained_ticks > horizon {
         return Err(E::BudgetExceeded);
     }
     let width = episodes[0][0].len();
-    if episodes.iter().any(|e| e.len() != horizon) { return Err(E::UnequalEpisodeLength); }
-    if episodes.iter().flat_map(|e| e.iter()).any(|s| s.len() != width) {
+    if episodes.iter().any(|e| e.len() != horizon) {
+        return Err(E::UnequalEpisodeLength);
+    }
+    if episodes
+        .iter()
+        .flat_map(|e| e.iter())
+        .any(|s| s.len() != width)
+    {
         return Err(E::DimensionMismatch);
     }
-    if threshold == 0 { return Err(E::InvalidThreshold); }
+    if threshold == 0 {
+        return Err(E::InvalidThreshold);
+    }
     for members in candidates {
-        if members.is_empty() || members.len() > 4096 { return Err(E::InvalidCandidate); }
+        if members.is_empty() || members.len() > 4096 {
+            return Err(E::InvalidCandidate);
+        }
         if threshold > members.len() || members.iter().any(|&m| m >= width) {
             return Err(E::InvalidThreshold);
         }
         let unique: HashSet<_> = members.iter().collect();
-        if unique.len() != members.len() { return Err(E::DuplicateMember); }
+        if unique.len() != members.len() {
+            return Err(E::DuplicateMember);
+        }
     }
     let mut ranked = Vec::with_capacity(candidates.len());
     for (candidate_index, members) in candidates.iter().enumerate() {
@@ -64,7 +80,10 @@ pub fn rank_durable_recovery(
             let mut streak = 0usize;
             let mut first_sustained = None;
             for (tick, state) in episode.iter().enumerate() {
-                let active = members.iter().filter(|&&m| state.get(m) == Ok(true)).count();
+                let active = members
+                    .iter()
+                    .filter(|&&m| state.get(m) == Ok(true))
+                    .count();
                 active_member_ticks += active;
                 if active >= threshold {
                     total_recalled_ticks += 1;
@@ -78,18 +97,26 @@ pub fn rank_durable_recovery(
             }
             if let Some(delay) = first_sustained {
                 recovered_episodes += 1;
-                worst_recovery_delay = Some(worst_recovery_delay.map_or(delay, |prev| prev.max(delay)));
+                worst_recovery_delay =
+                    Some(worst_recovery_delay.map_or(delay, |prev| prev.max(delay)));
             }
         }
         ranked.push(DurableRecovery {
-            candidate_index, recovered_episodes, worst_recovery_delay,
-            total_recalled_ticks, active_member_ticks,
+            candidate_index,
+            recovered_episodes,
+            worst_recovery_delay,
+            total_recalled_ticks,
+            active_member_ticks,
         });
     }
     ranked.sort_by(|a, b| {
-        b.recovered_episodes.cmp(&a.recovered_episodes)
-            .then_with(|| a.worst_recovery_delay.unwrap_or(usize::MAX)
-                .cmp(&b.worst_recovery_delay.unwrap_or(usize::MAX)))
+        b.recovered_episodes
+            .cmp(&a.recovered_episodes)
+            .then_with(|| {
+                a.worst_recovery_delay
+                    .unwrap_or(usize::MAX)
+                    .cmp(&b.worst_recovery_delay.unwrap_or(usize::MAX))
+            })
             .then_with(|| b.total_recalled_ticks.cmp(&a.total_recalled_ticks))
             .then_with(|| a.active_member_ticks.cmp(&b.active_member_ticks))
             .then_with(|| a.candidate_index.cmp(&b.candidate_index))
@@ -102,7 +129,9 @@ mod tests {
     use super::*;
     fn state(bits: &[usize]) -> BooleanState {
         let mut s = BooleanState::new(4);
-        for &bit in bits { s.set(bit, true).unwrap(); }
+        for &bit in bits {
+            s.set(bit, true).unwrap();
+        }
         s
     }
     #[test]
@@ -119,10 +148,14 @@ mod tests {
     }
     #[test]
     fn rejects_leakage_and_invalid_dimensions() {
-        assert_eq!(rank_durable_recovery(&[vec![0]], &[vec![state(&[])], vec![]], 1, 1),
-            Err(DurableRecoveryError::UnequalEpisodeLength));
-        assert_eq!(rank_durable_recovery(&[vec![0, 0]], &[vec![state(&[])]], 1, 1),
-            Err(DurableRecoveryError::DuplicateMember));
+        assert_eq!(
+            rank_durable_recovery(&[vec![0]], &[vec![state(&[])], vec![]], 1, 1),
+            Err(DurableRecoveryError::UnequalEpisodeLength)
+        );
+        assert_eq!(
+            rank_durable_recovery(&[vec![0, 0]], &[vec![state(&[])]], 1, 1),
+            Err(DurableRecoveryError::DuplicateMember)
+        );
     }
     #[test]
     fn sustained_run_must_be_consecutive() {
