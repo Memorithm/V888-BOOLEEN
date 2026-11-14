@@ -19,6 +19,7 @@ pub mod fourier5_incremental;
 pub mod fourier5_joint_search;
 pub mod fourier5_local_learning;
 pub mod fourier5_mask_learning;
+pub mod fourier5_online_policy;
 pub mod fourier5_persistent_session;
 pub mod fourier5_population_eligibility;
 pub mod fourier5_recurrent;
