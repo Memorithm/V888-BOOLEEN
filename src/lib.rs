@@ -249,3 +249,4 @@ pub mod episode_recall;
 pub mod episode_robust_selection;
 pub mod durable_recovery;
 pub mod region_transitions;
+pub mod region_lag;
