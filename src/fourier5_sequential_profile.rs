@@ -68,12 +68,20 @@ impl SequentialProfile {
         let mut elapsed = 0_u128;
         for sample in &self.samples {
             if sample.accepted {
-                accepted = accepted.checked_add(1).ok_or(TraceIntegrityError::Overflow)?;
+                accepted = accepted
+                    .checked_add(1)
+                    .ok_or(TraceIntegrityError::Overflow)?;
             } else {
-                rejected = rejected.checked_add(1).ok_or(TraceIntegrityError::Overflow)?;
+                rejected = rejected
+                    .checked_add(1)
+                    .ok_or(TraceIntegrityError::Overflow)?;
             }
-            gates = gates.checked_add(sample.updated_gates).ok_or(TraceIntegrityError::Overflow)?;
-            elapsed = elapsed.checked_add(sample.elapsed_ns).ok_or(TraceIntegrityError::Overflow)?;
+            gates = gates
+                .checked_add(sample.updated_gates)
+                .ok_or(TraceIntegrityError::Overflow)?;
+            elapsed = elapsed
+                .checked_add(sample.elapsed_ns)
+                .ok_or(TraceIntegrityError::Overflow)?;
         }
         if accepted != self.accepted_count || rejected != self.rejected_count {
             return Err(TraceIntegrityError::CountMismatch);
@@ -277,8 +285,18 @@ mod tests {
     fn integrity_oracle_rejects_corrupt_and_overflowed_traces() {
         let mut trace = SequentialProfile {
             samples: vec![
-                SequentialSample { accepted: true, output: 1, updated_gates: 3, elapsed_ns: 11 },
-                SequentialSample { accepted: false, output: 0, updated_gates: 0, elapsed_ns: 7 },
+                SequentialSample {
+                    accepted: true,
+                    output: 1,
+                    updated_gates: 3,
+                    elapsed_ns: 11,
+                },
+                SequentialSample {
+                    accepted: false,
+                    output: 0,
+                    updated_gates: 0,
+                    elapsed_ns: 7,
+                },
             ],
             total_ns: 18,
             accepted_count: 1,
@@ -288,16 +306,28 @@ mod tests {
         };
         assert_eq!(trace.validate_integrity(), Ok(()));
         trace.accepted_count = 2;
-        assert_eq!(trace.validate_integrity(), Err(TraceIntegrityError::CountMismatch));
+        assert_eq!(
+            trace.validate_integrity(),
+            Err(TraceIntegrityError::CountMismatch)
+        );
         trace.accepted_count = 1;
         trace.updated_gates = 4;
-        assert_eq!(trace.validate_integrity(), Err(TraceIntegrityError::GateMismatch));
+        assert_eq!(
+            trace.validate_integrity(),
+            Err(TraceIntegrityError::GateMismatch)
+        );
         trace.updated_gates = 3;
         trace.total_ns = 19;
-        assert_eq!(trace.validate_integrity(), Err(TraceIntegrityError::TimeMismatch));
+        assert_eq!(
+            trace.validate_integrity(),
+            Err(TraceIntegrityError::TimeMismatch)
+        );
         trace.total_ns = 18;
         trace.samples[0].elapsed_ns = u128::MAX;
-        assert_eq!(trace.validate_integrity(), Err(TraceIntegrityError::Overflow));
+        assert_eq!(
+            trace.validate_integrity(),
+            Err(TraceIntegrityError::Overflow)
+        );
     }
 
     use crate::fourier5_hierarchy::{FiveCircleHierarchy, GateKind, LeafRouting};
