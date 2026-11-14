@@ -232,6 +232,85 @@ impl PersistentSession {
         })
     }
 
+    /// Measure both exact engines on this frozen session and choose the faster
+    /// observed path. Timing includes candidate construction and input
+    /// reconstruction for Full; neither path commits an intervention.
+    ///
+    /// This is an on-demand diagnostic selector, not a claim that timing every
+    /// proposal is faster than a pre-calibrated policy. Measurements are local
+    /// to the caller's CPU and must not be reused across machines.
+    pub fn propose_measured(
+        &self,
+        proposal: PackedIntervention,
+        repetitions: usize,
+    ) -> Result<crate::fourier5_sequential_adaptive::ProposalResult, HierarchyError> {
+        use crate::fourier5_sequential_adaptive::{Engine, ProposalResult};
+        use std::time::Instant;
+
+        if repetitions == 0 || repetitions > 64 {
+            return Err(HierarchyError::InvalidInput);
+        }
+        // Validate the intervention and construct the independent full oracle.
+        let candidate = match proposal {
+            PackedIntervention::LeafSwap { first, second } => {
+                if first >= self.model.input_bits()
+                    || second >= self.model.input_bits()
+                    || first == second
+                {
+                    return Err(HierarchyError::InvalidRouting);
+                }
+                let mut routing = self.model.routing().to_vec();
+                routing.swap(first, second);
+                self.model.rerouted(routing)?
+            }
+            PackedIntervention::Parameter { layer, neuron, model } => {
+                let old = self.model.layer_model(layer, neuron)?;
+                if old.circles().iter().zip(model.circles()).any(|(a, b)| a.mask != b.mask) {
+                    return Err(HierarchyError::InvalidLayerShape);
+                }
+                self.model.with_neuron_parameters(layer, neuron, model)?
+            }
+        };
+        let mut planes = vec![0u64; self.model.input_bits()];
+        for (position, &source) in self.model.routing().iter().enumerate() {
+            planes[usize::from(source)] = self.stages[0][position];
+        }
+        let mut full_ns = 0u128;
+        let mut incremental_ns = 0u128;
+        let mut full_output = 0;
+        let mut incremental_output = 0;
+        // Alternate measurement order to reduce systematic warm-cache bias.
+        for round in 0..repetitions {
+            if round % 2 == 0 {
+                let start = Instant::now();
+                full_output = std::hint::black_box(candidate.infer_bitplanes(std::hint::black_box(&planes))?);
+                full_ns = full_ns.saturating_add(start.elapsed().as_nanos());
+                let start = Instant::now();
+                incremental_output = std::hint::black_box(self.propose(std::hint::black_box(proposal))?);
+                incremental_ns = incremental_ns.saturating_add(start.elapsed().as_nanos());
+            } else {
+                let start = Instant::now();
+                incremental_output = std::hint::black_box(self.propose(std::hint::black_box(proposal))?);
+                incremental_ns = incremental_ns.saturating_add(start.elapsed().as_nanos());
+                let start = Instant::now();
+                full_output = std::hint::black_box(candidate.infer_bitplanes(std::hint::black_box(&planes))?);
+                full_ns = full_ns.saturating_add(start.elapsed().as_nanos());
+            }
+            if full_output != incremental_output {
+                return Err(HierarchyError::InvalidInput);
+            }
+        }
+        let use_incremental = incremental_ns < full_ns;
+        Ok(ProposalResult {
+            output: full_output,
+            engine: if use_incremental { Engine::Incremental } else { Engine::Full },
+            full_gates: self.model.neuron_count(),
+            // This diagnostic does not claim a gate-count estimate.
+            cone_gates: 0,
+            accepted: false,
+        })
+    }
+
     /// Atomic acceptance: validate and construct the candidate first, then
     /// refresh only changed leaves/ancestors. Failed changes leave state intact.
     pub fn accept(&mut self, proposal: PackedIntervention) -> Result<usize, HierarchyError> {
@@ -294,6 +373,29 @@ mod tests {
     use super::*;
     use crate::fourier5::FiveCircle;
     use crate::fourier5_hierarchy::{GateKind, LeafRouting};
+
+    #[test]
+    fn measured_selector_preserves_exact_output_and_rejects_invalid_budget() {
+        let model = FiveCircleHierarchy::from_modes(
+            &[GateKind::Majority, GateKind::Parity],
+            LeafRouting::SeededShuffle(19),
+        )
+        .unwrap();
+        let planes: Vec<u64> = (0..model.input_bits())
+            .map(|i| (i as u64 + 3).wrapping_mul(0x9e3779b97f4a7c15))
+            .collect();
+        let session = PersistentSession::new(model.clone(), planes.clone()).unwrap();
+        let proposal = PackedIntervention::LeafSwap { first: 0, second: 7 };
+        let mut routing = model.routing().to_vec();
+        routing.swap(0, 7);
+        let expected = model.rerouted(routing).unwrap().infer_bitplanes(&planes).unwrap();
+        let result = session.propose_measured(proposal, 3).unwrap();
+        assert_eq!(result.output, expected);
+        assert!(!result.accepted);
+        assert_eq!(session.output(), model.infer_bitplanes(&planes).unwrap());
+        assert!(matches!(session.propose_measured(proposal, 0), Err(HierarchyError::InvalidInput)));
+        assert!(matches!(session.propose_measured(proposal, 65), Err(HierarchyError::InvalidInput)));
+    }
 
     #[test]
     fn adaptive_persistent_engine_matches_full_after_sequential_acceptance() {
