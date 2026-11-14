@@ -22,6 +22,7 @@ use v888_booleen::graded_reward as gr;
 use v888_booleen::importance_protection as ip;
 use v888_booleen::learning_bench::benchmark;
 use v888_booleen::learning_strategies::compare_strategies;
+use v888_booleen::novel_split as ns;
 use v888_booleen::plasticity::PlasticCircuit;
 use v888_booleen::reward_limits as rl;
 use v888_booleen::source_holdout::benchmark_disjoint_sources;
@@ -141,6 +142,7 @@ fn help() {
     println!("  bench-error-gated [--graph brain.v888b] [--seeds 1,..,20] [--init 1] [--csv out.csv]  (error-gated / margin-gated-4 supervised updates vs matched supervised control; agree/conflict forgetting split; bootstrap CIs; equal budget; GENERATED synthetic graph by default)");
     println!("  bench-context-cue [--graph brain.v888b] [--seeds 1,..,20] [--flips 25,50,100] [--init 1] [--csv out.csv]  (task-context cue on reserved existing input lines vs no cue, supervised and error-gated; conflict-pair floor; structural ceiling; bootstrap CIs; equal budget; GENERATED synthetic graph by default)");
     println!("  bench-task-sequence [--graph brain.v888b] [--seeds 41,..,80] [--flips 25,50,100] [--init 1] [--csv out.csv]  (A->B->C->D task sequences with one context cue per task; #121 gates and a margin-gate sweep; novel-configuration TEST slice; equal budget; bootstrap CIs; GENERATED synthetic graph by default)");
+    println!("  bench-novel-split [--graph brain.v888b] [--seeds 81,..,120] [--flips 25,50,100] [--census] [--csv out.csv]  (B888-4 cycle 12: wider pattern pool, cue cap 4, TEST pairs split into seen / compositional-novel / unseen-edge per task; design-validity gate on novel-pair count; E/E-cue vs error-gated vs supervised at equal budget; GENERATED synthetic graph by default)");
     println!("  bench-cue-gating [--graph brain.v888b] [--seeds 1,..,40] [--flips 25,50,100] [--init 1] [--csv out.csv]  (separate pattern-edge / cue-edge gates and cue-line count under the task-context cue; S0 structural check; equal budget; bootstrap CIs; GENERATED synthetic graph by default)");
     println!("  bench-graded-reward [--graph brain.v888b] [--seeds 1,..,10] [--init 1] [--csv out.csv]  (graded reward ladder bit/fraction/group-k/per-target through the #36 trace + episode-stamped tags for delayed scalars; GENERATED synthetic graph by default)");
     println!("  train-plasticity --graph brain.v888b --episodes labeled.csv --output weights.v888pls [--epochs 1]");
@@ -1485,6 +1487,100 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("H4_pattern_gate_carries_cue_benefit_flip50={h4}");
             println!(
                 "topology_unchanged={}",
+                rows.iter().all(|r| r.topology_unchanged)
+            );
+            println!("evaluation_scope=synthetic_or_unverified_graph_artificial_labels_not_BANC_not_biological");
+        }
+        Some("bench-novel-split") => {
+            let allowed = ["--graph", "--seeds", "--flips", "--census", "--csv"];
+            for flag in args.iter().skip(1).filter(|arg| arg.starts_with("--")) {
+                if !allowed.contains(&flag.as_str()) {
+                    return Err(format!("unknown bench-novel-split option: {flag}").into());
+                }
+            }
+            let seeds: Vec<u64> = match optional(&args, "--seeds") {
+                Some(s) => s
+                    .split(',')
+                    .map(str::parse::<u64>)
+                    .collect::<Result<Vec<_>, _>>()?,
+                None => ns::SEEDS.collect(),
+            };
+            let flips = optional(&args, "--flips")
+                .unwrap_or("25,50,100")
+                .split(',')
+                .map(str::parse::<u32>)
+                .collect::<Result<Vec<_>, _>>()?;
+            let owned = match optional(&args, "--graph") {
+                Some(path) => Some(Connectome::load(Path::new(path))?),
+                None => None,
+            };
+            let graph_label = if owned.is_some() {
+                "PROVIDED_GRAPH"
+            } else {
+                "GENERATED_SYNTHETIC"
+            };
+            let d = ns::DESIGN;
+            println!("v888_novel_split_schema=b888-4-novel-split-v1");
+            if owned.is_some() {
+                println!("graph=PROVIDED_GRAPH (task labels artificial)");
+            } else {
+                println!(
+                    "graph=GENERATED_SYNTHETIC sources={} targets={} fan_in={} (not BANC; real BANC V888 graph DOI 10.7910/DVN/7WTH1N not available here)",
+                    d.shape.sources, d.shape.targets, d.shape.fan_in
+                );
+            }
+            println!(
+                "seeds={} flips={flips:?} tasks={} active={} train_patterns_per_task={} test_patterns={} rounds_per_task={} init={} threshold={} cue_cap={} min_novel_pairs={} metric=balanced_accuracy boot_resamples={} boot_seed={:#x}",
+                seeds.len(),
+                ts::K_MAX,
+                d.spec.active,
+                d.spec.train_patterns,
+                d.spec.test_patterns,
+                d.spec.rounds_a,
+                d.spec.init_weight,
+                eg::THRESHOLD,
+                d.cue_cap,
+                ns::MIN_NOVEL_PAIRS,
+                eg::BOOT_RESAMPLES,
+                eg::BOOT_SEED,
+            );
+            if args.iter().any(|a| a == "--census") {
+                println!("census: flip,seed,task,pool,cue_reach_min,test_pairs,seen,cn,icn,ue");
+                for &flip in &flips {
+                    for &seed in &seeds {
+                        for (j, c) in ns::census(owned.as_ref(), &d, flip, seed)?
+                            .iter()
+                            .enumerate()
+                        {
+                            println!(
+                                "{flip},{seed},{},{},{},{},{},{},{},{}",
+                                j + 1,
+                                c.pool,
+                                c.cue_reach_min,
+                                c.all,
+                                c.seen,
+                                c.cn,
+                                c.icn,
+                                c.ue
+                            );
+                        }
+                    }
+                }
+                println!("evaluation_scope=synthetic_or_unverified_graph_artificial_labels_not_BANC_not_biological");
+                return Ok(());
+            }
+            let rows = ns::run_grid(owned.as_ref(), &d, &flips, &seeds, &ns::ARMS)?;
+            if let Some(path) = optional(&args, "--csv") {
+                use std::io::Write;
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)?
+                    .write_all(ns::to_csv(&rows, graph_label).as_bytes())?;
+            }
+            print!("{}", ns::report(&rows, &flips));
+            println!(
+                "topology_unchanged_all={}",
                 rows.iter().all(|r| r.topology_unchanged)
             );
             println!("evaluation_scope=synthetic_or_unverified_graph_artificial_labels_not_BANC_not_biological");
