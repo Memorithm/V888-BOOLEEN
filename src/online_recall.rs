@@ -11,6 +11,9 @@ pub struct OnlineRecall {
     ticks: u64,
     current_streak: u64,
     longest_streak: u64,
+    quiet_streak: u64,
+    last_recovery_delay: Option<u64>,
+    recovery_events: u64,
 }
 
 impl OnlineRecall {
@@ -22,6 +25,9 @@ impl OnlineRecall {
             ticks: 0,
             current_streak: 0,
             longest_streak: 0,
+            quiet_streak: 0,
+            last_recovery_delay: None,
+            recovery_events: 0,
         }
     }
 
@@ -45,6 +51,21 @@ impl OnlineRecall {
         } else {
             0
         };
+        let next_quiet = if matches {
+            0
+        } else {
+            self.quiet_streak
+                .checked_add(1)
+                .ok_or(RecallError::ZeroBudget)?
+        };
+        let recovered = matches && self.quiet_streak > 0;
+        let next_recoveries = if recovered {
+            self.recovery_events
+                .checked_add(1)
+                .ok_or(RecallError::ZeroBudget)?
+        } else {
+            self.recovery_events
+        };
         let mut increments = Vec::with_capacity(self.counts.len());
         for (position, &member) in self.circuit.members().iter().enumerate() {
             if state.get(member) == Ok(true) {
@@ -55,6 +76,11 @@ impl OnlineRecall {
             }
         }
         self.ticks = next_ticks;
+        if recovered {
+            self.last_recovery_delay = Some(self.quiet_streak);
+        }
+        self.quiet_streak = next_quiet;
+        self.recovery_events = next_recoveries;
         self.current_streak = next_streak;
         self.longest_streak = self.longest_streak.max(next_streak);
         for position in increments {
@@ -310,6 +336,24 @@ impl OnlineRecall {
         Ok((selected.members().to_vec(), recalled))
     }
 
+    /// Consecutive simulated observations without circuit recall.
+    #[must_use]
+    pub fn quiet_streak(&self) -> u64 {
+        self.quiet_streak
+    }
+
+    /// Last completed silence-to-recall interval, measured in observation ticks.
+    #[must_use]
+    pub fn last_recovery_delay(&self) -> Option<u64> {
+        self.last_recovery_delay
+    }
+
+    /// Number of transitions from a nonempty silent interval to a matching recall.
+    #[must_use]
+    pub fn recovery_events(&self) -> u64 {
+        self.recovery_events
+    }
+
     #[must_use]
     pub fn ticks(&self) -> u64 {
         self.ticks
@@ -375,6 +419,30 @@ mod tests {
             tracker.recall_selected_region(&engine, &regions, 1, 2, 0),
             Err(RecallError::ZeroBudget)
         );
+    }
+
+    #[test]
+    fn recovery_latency_tracks_silence_and_reactivation_without_snapshots() {
+        let mut tracker = OnlineRecall::new(Subcircuit::new(2, vec![0]).unwrap());
+        let quiet = BooleanState::new(2);
+        let mut active = BooleanState::new(2);
+        active.set(0, true).unwrap();
+        assert_eq!(tracker.last_recovery_delay(), None);
+        assert_eq!(tracker.observe(&quiet, 1), Ok(false));
+        assert_eq!(tracker.observe(&quiet, 1), Ok(false));
+        assert_eq!(tracker.quiet_streak(), 2);
+        assert_eq!(tracker.observe(&active, 1), Ok(true));
+        assert_eq!(tracker.last_recovery_delay(), Some(2));
+        assert_eq!(tracker.recovery_events(), 1);
+        assert_eq!(tracker.quiet_streak(), 0);
+        assert_eq!(tracker.observe(&active, 1), Ok(true));
+        assert_eq!(tracker.recovery_events(), 1);
+        assert_eq!(tracker.observe(&quiet, 1), Ok(false));
+        assert_eq!(tracker.observe(&active, 1), Ok(true));
+        assert_eq!(tracker.last_recovery_delay(), Some(1));
+        assert_eq!(tracker.recovery_events(), 2);
+        assert_eq!(tracker.observe(&quiet, 0), Err(RecallError::ZeroBudget));
+        assert_eq!(tracker.recovery_events(), 2);
     }
 
     #[test]
