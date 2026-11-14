@@ -8,6 +8,7 @@ pub mod consolidation;
 pub mod consolidation_scale;
 pub mod context_cue;
 pub mod cue_gating;
+pub mod cue_init;
 pub mod cue_reach;
 pub mod eligibility_trace;
 pub mod engine;
