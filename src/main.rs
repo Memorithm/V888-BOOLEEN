@@ -13,6 +13,7 @@ use v888_booleen::consolidation::{
 use v888_booleen::consolidation_scale as scale;
 use v888_booleen::context_cue as cc;
 use v888_booleen::cue_gating as cgate;
+use v888_booleen::cue_init as ci;
 use v888_booleen::cue_reach as cr;
 use v888_booleen::eligibility_trace as et;
 use v888_booleen::engine::BooleanEngine;
@@ -146,6 +147,7 @@ fn help() {
     println!("  bench-context-cue [--graph brain.v888b] [--seeds 1,..,20] [--flips 25,50,100] [--init 1] [--csv out.csv]  (task-context cue on reserved existing input lines vs no cue, supervised and error-gated; conflict-pair floor; structural ceiling; bootstrap CIs; equal budget; GENERATED synthetic graph by default)");
     println!("  bench-task-sequence [--graph brain.v888b] [--seeds 41,..,80] [--flips 25,50,100] [--init 1] [--csv out.csv]  (A->B->C->D task sequences with one context cue per task; #121 gates and a margin-gate sweep; novel-configuration TEST slice; equal budget; bootstrap CIs; GENERATED synthetic graph by default)");
     println!("  bench-novel-split [--graph brain.v888b] [--seeds 81,..,120] [--flips 25,50,100] [--census] [--csv out.csv]  (B888-4 cycle 12: wider pattern pool, cue cap 4, TEST pairs split into seen / compositional-novel / unseen-edge per task; design-validity gate on novel-pair count; E/E-cue vs error-gated vs supervised at equal budget; GENERATED synthetic graph by default)");
+    println!("  bench-cue-init [--graph brain.v888b] [--seeds 241,..,280] [--flips 25,50,100] [--budgets free,paced100] [--csv out.csv] [--census]  (B888-4 cycle 16: CUE EDGES START SILENT — E/E-cue@16 with cue-line edges at initial weight 0 (source-major, + pattern-first secondary) vs #127 E/E-cue (init 1), error-gated, supervised and per-target reward under an equal weight-write budget paced to uncapped error-gated; CN generalisation and forgetting; --census = writes/cue writes/refusals only, no accuracy; GENERATED synthetic graph by default)");
     println!("  bench-write-allocation [--graph brain.v888b] [--seeds 201,..,240] [--flips 25,50,100] [--budgets free,paced100] [--csv out.csv] [--census]  (B888-4 cycle 15: WRITE ALLOCATION of E/E-cue@16 under an equal weight-write budget paced to uncapped error-gated — source-major (#126) / pattern-first / cue-first funding of the offered steps, vs error-gated / supervised / per-target reward, plus secondary E-tag (task-local negative tags); CN generalisation and forgetting; --census = writes/cue writes/refusals only, no accuracy; GENERATED synthetic graph by default)");
     println!("  bench-write-budget [--graph brain.v888b] [--seeds 161,..,200] [--flips 25,50,75,100] [--budgets free,paced100,total100,paced50] [--csv out.csv]  (B888-4 cycle 14: EQUAL WEIGHT-WRITE budget per task, capped at a fraction of the uncapped error-gated writes; supervised / error-gated / E/E-cue@16 / per-target reward on the #124 fixed-pool novel-split design over a flip sweep; CN generalisation and forgetting; bootstrap CIs; GENERATED synthetic graph by default)");
     println!("  bench-cue-reach [--graph brain.v888b] [--seeds 121,..,160] [--flips 25,50,100] [--levels 2,4,8,16] [--census] [--no-coupled] [--csv out.csv]  (B888-4 cycle 13: cue size / target reach varied at a FIXED pattern pool on the #123 novel-split design; E/E-cue minus error-gated gain on all / novel pairs and forgetting per level; coupled #123-style pool-vs-reach trade-off; equal budget; bootstrap CIs; GENERATED synthetic graph by default)");
@@ -1733,6 +1735,107 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!(
                 "topology_unchanged_all={}",
                 rows.iter().all(|r| r.topology_unchanged)
+            );
+            println!("evaluation_scope=synthetic_or_unverified_graph_artificial_labels_not_BANC_not_biological");
+        }
+        Some("bench-cue-init") => {
+            let allowed = [
+                "--graph",
+                "--seeds",
+                "--flips",
+                "--budgets",
+                "--csv",
+                "--census",
+            ];
+            for flag in args.iter().skip(1).filter(|arg| arg.starts_with("--")) {
+                if !allowed.contains(&flag.as_str()) {
+                    return Err(format!("unknown bench-cue-init option: {flag}").into());
+                }
+            }
+            let census = args.iter().any(|a| a == "--census");
+            let seeds: Vec<u64> = match optional(&args, "--seeds") {
+                Some(s) => s
+                    .split(',')
+                    .map(str::parse::<u64>)
+                    .collect::<Result<Vec<_>, _>>()?,
+                None if census => ci::PILOT_SEEDS.collect(),
+                None => ci::SEEDS.collect(),
+            };
+            let flips = optional(&args, "--flips")
+                .unwrap_or(if census { "50" } else { "25,50,100" })
+                .split(',')
+                .map(str::parse::<u32>)
+                .collect::<Result<Vec<_>, _>>()?;
+            let budgets: Vec<wb::Budget> = match optional(&args, "--budgets") {
+                Some(s) => s
+                    .split(',')
+                    .map(wb::Budget::parse)
+                    .collect::<Result<Vec<_>, _>>()?,
+                None => ci::BUDGETS.to_vec(),
+            };
+            let owned = match optional(&args, "--graph") {
+                Some(path) => Some(Connectome::load(Path::new(path))?),
+                None => None,
+            };
+            let graph_label = if owned.is_some() {
+                "PROVIDED_GRAPH"
+            } else {
+                "GENERATED_SYNTHETIC"
+            };
+            let d = ci::DESIGN;
+            println!("v888_cue_init_schema=b888-4-cue-zero-init-v1");
+            if owned.is_some() {
+                println!("graph=PROVIDED_GRAPH (task labels artificial)");
+            } else {
+                println!(
+                    "graph=GENERATED_SYNTHETIC sources={} targets={} fan_in={} (not BANC; real BANC V888 graph DOI 10.7910/DVN/7WTH1N not available here)",
+                    d.shape.sources, d.shape.targets, d.shape.fan_in
+                );
+            }
+            if census {
+                println!("census(writes, cue writes, refusals and cue state only; no accuracy computed): flip,seed,arm,budget,writes_total,cue_writes,refused,cue_refused,cue_nonzero_end");
+                for &flip in &flips {
+                    for (seed, a, b, w, cw, r, cr_, nz) in
+                        ci::census(owned.as_ref(), flip, &seeds, &budgets)?
+                    {
+                        println!(
+                            "{flip},{seed},{},{},{w},{cw},{r},{cr_},{nz}",
+                            a.name(),
+                            b.name()
+                        );
+                    }
+                }
+                return Ok(());
+            }
+            let names: Vec<String> = budgets.iter().map(|b| b.name()).collect();
+            println!(
+                "seeds={} flips={flips:?} budgets={names:?} (percent of uncapped error-gated effective writes per task; paced = per-episode cumulative curve) cue_level={} tasks={} active={} train_patterns_per_task={} test_patterns={} rounds_per_task={} init={} cue_init(E/E-cue0*)=0 threshold={} min_novel_pairs={} metric=balanced_accuracy boot_resamples={} boot_seed={:#x}",
+                seeds.len(),
+                ci::CUE_LEVEL,
+                ts::K_MAX,
+                d.spec.active,
+                d.spec.train_patterns,
+                d.spec.test_patterns,
+                d.spec.rounds_a,
+                d.spec.init_weight,
+                eg::THRESHOLD,
+                ns::MIN_NOVEL_PAIRS,
+                eg::BOOT_RESAMPLES,
+                eg::BOOT_SEED,
+            );
+            let rows = ci::run_grid(owned.as_ref(), &flips, &seeds, &budgets)?;
+            if let Some(path) = optional(&args, "--csv") {
+                use std::io::Write;
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)?
+                    .write_all(ci::to_csv(&rows, graph_label).as_bytes())?;
+            }
+            print!("{}", ci::report(&rows, &flips, &budgets));
+            println!(
+                "topology_unchanged_all={}",
+                rows.iter().all(|r| r.inner.topology_unchanged)
             );
             println!("evaluation_scope=synthetic_or_unverified_graph_artificial_labels_not_BANC_not_biological");
         }
