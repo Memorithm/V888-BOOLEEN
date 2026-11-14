@@ -40,6 +40,7 @@ pub mod heldout_ablation;
 pub mod importance_protection;
 pub mod learning_bench;
 pub mod learning_strategies;
+pub mod novel_split;
 pub mod nt_gates;
 pub mod online_recall;
 pub mod paired_recovery;

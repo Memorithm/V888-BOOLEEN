@@ -67,9 +67,18 @@ fn out_targets(graph: &Connectome, s: usize) -> Vec<usize> {
 }
 
 fn greedy_cover(graph: &Connectome, all_targets: &[usize], taken: &[usize]) -> Vec<usize> {
+    greedy_cover_capped(graph, all_targets, taken, CUE_CAP)
+}
+
+fn greedy_cover_capped(
+    graph: &Connectome,
+    all_targets: &[usize],
+    taken: &[usize],
+    cap: usize,
+) -> Vec<usize> {
     let mut covered: Vec<usize> = Vec::new();
     let mut chosen: Vec<usize> = Vec::new();
-    while chosen.len() < CUE_CAP && covered.len() < all_targets.len() {
+    while chosen.len() < cap && covered.len() < all_targets.len() {
         let mut best: Option<(usize, usize)> = None;
         for s in 0..graph.ids.len() {
             if taken.contains(&s) || chosen.contains(&s) {
@@ -128,7 +137,21 @@ pub fn choose_cues(graph: &Connectome) -> io::Result<Cue> {
 /// the inputs not taken by earlier cues (B888-4 cycle 11 task sequences).
 /// The first two cues are exactly [`choose_cues`]'s A and B (tested).
 pub fn choose_n_cues(graph: &Connectome, n: usize) -> io::Result<Vec<Vec<usize>>> {
+    choose_n_cues_capped(graph, n, CUE_CAP)
+}
+
+/// [`choose_n_cues`] with a per-cue line cap (B888-4 cycle 12 uses fewer
+/// lines per cue to leave a wider pattern pool). With `cap == CUE_CAP` this
+/// is exactly [`choose_n_cues`] (tested).
+pub fn choose_n_cues_capped(
+    graph: &Connectome,
+    n: usize,
+    cap: usize,
+) -> io::Result<Vec<Vec<usize>>> {
     graph.validate()?;
+    if cap == 0 {
+        return Err(bad("cue cap must be positive"));
+    }
     let mut all_targets: Vec<usize> = (0..graph.edges())
         .filter(|&e| gb::usable(graph, e))
         .map(|e| graph.targets[e] as usize)
@@ -138,7 +161,7 @@ pub fn choose_n_cues(graph: &Connectome, n: usize) -> io::Result<Vec<Vec<usize>>
     let mut cues: Vec<Vec<usize>> = Vec::with_capacity(n);
     let mut taken: Vec<usize> = Vec::new();
     for _ in 0..n {
-        let c = greedy_cover(graph, &all_targets, &taken);
+        let c = greedy_cover_capped(graph, &all_targets, &taken, cap);
         if c.is_empty() {
             return Err(bad("graph has no input usable as a cue line"));
         }
