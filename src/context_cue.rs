@@ -124,6 +124,30 @@ pub fn choose_cues(graph: &Connectome) -> io::Result<Cue> {
     })
 }
 
+/// `n` greedy-cover cues (cap [`CUE_CAP`] lines each), chosen in order over
+/// the inputs not taken by earlier cues (B888-4 cycle 11 task sequences).
+/// The first two cues are exactly [`choose_cues`]'s A and B (tested).
+pub fn choose_n_cues(graph: &Connectome, n: usize) -> io::Result<Vec<Vec<usize>>> {
+    graph.validate()?;
+    let mut all_targets: Vec<usize> = (0..graph.edges())
+        .filter(|&e| gb::usable(graph, e))
+        .map(|e| graph.targets[e] as usize)
+        .collect();
+    all_targets.sort_unstable();
+    all_targets.dedup();
+    let mut cues: Vec<Vec<usize>> = Vec::with_capacity(n);
+    let mut taken: Vec<usize> = Vec::new();
+    for _ in 0..n {
+        let c = greedy_cover(graph, &all_targets, &taken);
+        if c.is_empty() {
+            return Err(bad("graph has no input usable as a cue line"));
+        }
+        taken.extend(&c);
+        cues.push(c);
+    }
+    Ok(cues)
+}
+
 /// One compared arm: a #117 gate, with or without the context cue.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Arm {
@@ -686,6 +710,32 @@ pub fn readings(rows: &[Row]) -> (bool, bool, bool, bool) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn choose_n_cues_prefix_matches_choose_cues() {
+        for seed in 1..=6 {
+            let g = crate::reward_limits::graph_for(
+                None,
+                &super::gb::GraphShape {
+                    sources: 64,
+                    targets: 24,
+                    fan_in: 6,
+                },
+                seed,
+            )
+            .unwrap();
+            let two = super::choose_cues(&g).unwrap();
+            let n = super::choose_n_cues(&g, 4).unwrap();
+            assert_eq!(n.len(), 4);
+            assert_eq!(n[0], two.a);
+            assert_eq!(n[1], two.b);
+            let mut all: Vec<usize> = n.concat();
+            let len = all.len();
+            all.sort_unstable();
+            all.dedup();
+            assert_eq!(all.len(), len, "cues must be disjoint");
+        }
+    }
+
     use super::*;
     use crate::generalization_bench::build_task;
     use std::fs;

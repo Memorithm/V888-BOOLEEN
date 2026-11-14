@@ -26,6 +26,7 @@ use v888_booleen::plasticity::PlasticCircuit;
 use v888_booleen::reward_limits as rl;
 use v888_booleen::source_holdout::benchmark_disjoint_sources;
 use v888_booleen::synapse_pairs::{pack, propagate_one_step, SynapsePairsReader};
+use v888_booleen::task_sequence as ts;
 fn require<'a>(args: &'a [String], name: &str) -> Result<&'a str, Box<dyn Error>> {
     let ix = args
         .iter()
@@ -139,6 +140,7 @@ fn help() {
     println!("  bench-importance-protection [--graph brain.v888b] [--seeds 1,..,10] [--init 1] [--csv out.csv]  (importance-weighted freeze of top-credit A edges 25%/50% + task-gated plasticity vs #39 consolidate; equal budget; GENERATED synthetic graph by default)");
     println!("  bench-error-gated [--graph brain.v888b] [--seeds 1,..,20] [--init 1] [--csv out.csv]  (error-gated / margin-gated-4 supervised updates vs matched supervised control; agree/conflict forgetting split; bootstrap CIs; equal budget; GENERATED synthetic graph by default)");
     println!("  bench-context-cue [--graph brain.v888b] [--seeds 1,..,20] [--flips 25,50,100] [--init 1] [--csv out.csv]  (task-context cue on reserved existing input lines vs no cue, supervised and error-gated; conflict-pair floor; structural ceiling; bootstrap CIs; equal budget; GENERATED synthetic graph by default)");
+    println!("  bench-task-sequence [--graph brain.v888b] [--seeds 41,..,80] [--flips 25,50,100] [--init 1] [--csv out.csv]  (A->B->C->D task sequences with one context cue per task; #121 gates and a margin-gate sweep; novel-configuration TEST slice; equal budget; bootstrap CIs; GENERATED synthetic graph by default)");
     println!("  bench-cue-gating [--graph brain.v888b] [--seeds 1,..,40] [--flips 25,50,100] [--init 1] [--csv out.csv]  (separate pattern-edge / cue-edge gates and cue-line count under the task-context cue; S0 structural check; equal budget; bootstrap CIs; GENERATED synthetic graph by default)");
     println!("  bench-graded-reward [--graph brain.v888b] [--seeds 1,..,10] [--init 1] [--csv out.csv]  (graded reward ladder bit/fraction/group-k/per-target through the #36 trace + episode-stamped tags for delayed scalars; GENERATED synthetic graph by default)");
     println!("  train-plasticity --graph brain.v888b --episodes labeled.csv --output weights.v888pls [--epochs 1]");
@@ -1481,6 +1483,214 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("H2_some_S/S-cue-k_passes_vs_supervised_flip50={h2}");
             println!("H3_E/S-cue_passes_vs_error-gated_flip50={h3}");
             println!("H4_pattern_gate_carries_cue_benefit_flip50={h4}");
+            println!(
+                "topology_unchanged={}",
+                rows.iter().all(|r| r.topology_unchanged)
+            );
+            println!("evaluation_scope=synthetic_or_unverified_graph_artificial_labels_not_BANC_not_biological");
+        }
+        Some("bench-task-sequence") => {
+            let allowed = ["--graph", "--seeds", "--flips", "--init", "--csv"];
+            for flag in args.iter().skip(1).filter(|arg| arg.starts_with("--")) {
+                if !allowed.contains(&flag.as_str()) {
+                    return Err(format!("unknown bench-task-sequence option: {flag}").into());
+                }
+            }
+            let seeds: Vec<u64> = match optional(&args, "--seeds") {
+                Some(s) => s
+                    .split(',')
+                    .map(str::parse::<u64>)
+                    .collect::<Result<Vec<_>, _>>()?,
+                None => ts::SEEDS.collect(),
+            };
+            let flips = optional(&args, "--flips")
+                .unwrap_or("25,50,100")
+                .split(',')
+                .map(str::parse::<u32>)
+                .collect::<Result<Vec<_>, _>>()?;
+            let init = optional(&args, "--init").unwrap_or("1").parse::<u8>()?;
+            let shape = genbench::GraphShape {
+                sources: 64,
+                targets: 24,
+                fan_in: 6,
+            };
+            let spec = genbench::GenSpec {
+                active: 4,
+                train_patterns: 32,
+                test_patterns: 64,
+                rounds_a: 8,
+                rounds_b: 8,
+                positive_pct: 50,
+                flip_pct: ts::PRIMARY_FLIP,
+                init_weight: init,
+            };
+            let owned = match optional(&args, "--graph") {
+                Some(path) => Some(Connectome::load(Path::new(path))?),
+                None => None,
+            };
+            let graph_label = if owned.is_some() {
+                "PROVIDED_GRAPH"
+            } else {
+                "GENERATED_SYNTHETIC"
+            };
+            let rows = ts::run_grid(owned.as_ref(), &shape, &spec, &flips, &seeds, &ts::ARMS)?;
+            if let Some(path) = optional(&args, "--csv") {
+                use std::io::Write;
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)?
+                    .write_all(ts::to_csv(&rows, graph_label).as_bytes())?;
+            }
+            println!("v888_task_sequence_schema=b888-4-task-sequence-v1");
+            if owned.is_some() {
+                println!("graph=PROVIDED_GRAPH (task labels artificial)");
+            } else {
+                println!("graph=GENERATED_SYNTHETIC sources=64 targets=24 fan_in=6 (not BANC; real BANC V888 graph DOI 10.7910/DVN/7WTH1N not available here)");
+            }
+            println!(
+                "seeds={} flips={flips:?} init={init} tasks={} active=4 train_patterns_per_task=32 test_patterns=64 rounds_per_task=8 threshold={} cue_cap={} metric=balanced_accuracy boot_resamples={} boot_seed={:#x}",
+                seeds.len(),
+                ts::K_MAX,
+                eg::THRESHOLD,
+                cc::CUE_CAP,
+                eg::BOOT_RESAMPLES,
+                eg::BOOT_SEED,
+            );
+            let fmt = |s: genbench::Spread| format!("{:.3}±{:.3}", s.mean, s.sd);
+            let stat = |flip: u32, a: ts::Arm, f: &dyn Fn(&ts::Row) -> f64| {
+                let v: Vec<f64> = rows
+                    .iter()
+                    .filter(|r| r.flip == flip && r.arm == a)
+                    .map(f)
+                    .collect();
+                genbench::spread(&v)
+            };
+            for &flip in &flips {
+                println!(
+                    "flip={flip} median_novel_pairs_per_task={} test_pairs_mean={:.1} cue_lines_mean={:?} cue_reach_mean={:?}",
+                    ts::median_novel_pairs(&rows, flip),
+                    stat(flip, ts::SUPERVISED, &|r| r.all[0][0].total() as f64).mean,
+                    (0..ts::K_MAX)
+                        .map(|j| format!("{:.1}", stat(flip, ts::EE, &|r| r.cue_lines[j] as f64).mean))
+                        .collect::<Vec<_>>(),
+                    (0..ts::K_MAX)
+                        .map(|j| format!("{:.1}", stat(flip, ts::EE, &|r| r.cue_reach[j] as f64).mean))
+                        .collect::<Vec<_>>(),
+                );
+            }
+            println!("arm_summary: flip,k,arm,acc,acc_novel,learn,forgetting,last,first_retained,weights_changed_total,saturated_end");
+            for &flip in &flips {
+                for k in 2..=ts::K_MAX {
+                    for a in ts::ARMS {
+                        println!(
+                            "{flip},{k},{},{},{},{},{},{},{},{:.1},{:.1}",
+                            a.label(),
+                            fmt(stat(flip, a, &|r| r.acc(k))),
+                            fmt(stat(flip, a, &|r| r.acc_novel(k))),
+                            fmt(stat(flip, a, &|r| r.learn(k))),
+                            fmt(stat(flip, a, &|r| r.forgetting(k))),
+                            fmt(stat(flip, a, &|r| r.last(k))),
+                            fmt(stat(flip, a, &|r| r.r(k - 1, 0))),
+                            stat(flip, a, &|r| r.cost[..k]
+                                .iter()
+                                .map(|c| c.weights_changed as f64)
+                                .sum())
+                            .mean,
+                            stat(flip, a, &|r| r.saturated_end as f64).mean,
+                        );
+                    }
+                }
+            }
+            println!(
+                "matrix: flip,arm,i,R[i][1..4] (task j on TEST after task i, mean over seeds)"
+            );
+            for &flip in &flips {
+                for a in ts::ARMS {
+                    for i in 0..ts::K_MAX {
+                        let cells: Vec<String> = (0..ts::K_MAX)
+                            .map(|j| format!("{:.3}", stat(flip, a, &|r| r.r(i, j)).mean))
+                            .collect();
+                        println!("{flip},{},{},{}", a.label(), i + 1, cells.join(","));
+                    }
+                }
+            }
+            let p = |d: &eg::Paired| {
+                format!(
+                    "{:+.3}±{:.3}[{:+.3},{:+.3}]{}/{}/{}",
+                    d.mean, d.sd, d.ci_lo, d.ci_hi, d.better, d.ties, d.worse
+                )
+            };
+            let low: Vec<u64> = seeds.iter().copied().filter(|&s| s <= 60).collect();
+            let high: Vec<u64> = seeds.iter().copied().filter(|&s| s > 60).collect();
+            let cmps = [
+                (ts::EE, ts::ERROR_GATED),
+                (ts::EE, ts::SUPERVISED),
+                (ts::ERROR_GATED, ts::SUPERVISED),
+                (ts::SE, ts::SUPERVISED),
+                (ts::ES, ts::ERROR_GATED),
+                (ts::ES, ts::EE),
+                (ts::MARGIN4, ts::ERROR_GATED),
+                (ts::MM2, ts::EE),
+                (ts::MM4, ts::EE),
+                (ts::MM8, ts::EE),
+                (ts::MM2, ts::SUPERVISED),
+                (ts::MM4, ts::SUPERVISED),
+                (ts::MM8, ts::SUPERVISED),
+            ];
+            println!("comparison: flip,seeds,k,x,base,n,d_acc,d_acc_novel,d_learn,d_last,d_forget(+=x_less),d_first_retained,d_first_learn,passes_seq_rule,passes_pair_rule  (each: mean±sd[boot95_lo,hi]better/tie/worse)");
+            for &flip in &flips {
+                for (label, subset) in [
+                    ("all", None),
+                    ("41-60", Some(low.as_slice())),
+                    ("61-80", Some(high.as_slice())),
+                ] {
+                    if subset.is_some_and(<[u64]>::is_empty) {
+                        continue;
+                    }
+                    for k in 2..=ts::K_MAX {
+                        for &(x, base) in &cmps {
+                            let c = ts::compare(&rows, flip, k, x, base, subset);
+                            println!(
+                                "{flip},{label},{k},{},{},{},{},{},{},{},{},{},{},{},{}",
+                                x.label(),
+                                base.label(),
+                                c.acc.n,
+                                p(&c.acc),
+                                p(&c.acc_novel),
+                                p(&c.learn),
+                                p(&c.last),
+                                p(&c.forget),
+                                p(&c.first_retained),
+                                p(&c.first_learn),
+                                c.passes(),
+                                c.passes_pair_rule(),
+                            );
+                        }
+                    }
+                }
+            }
+            let rd = ts::readings(&rows);
+            println!(
+                "H1_E/E-cue_vs_error-gated_two_task_rule_heldout_seeds_flip50={}",
+                rd.h1
+            );
+            println!(
+                "H2_E/E-cue_vs_error-gated_seq_rule_k3_and_k4_flip50={}",
+                rd.h2
+            );
+            println!(
+                "H3_E/E-cue_vs_supervised_seq_rule_k3_and_k4_flip50={}",
+                rd.h3
+            );
+            println!(
+                "H4_E/E-cue_vs_error-gated_novel_config_acc_k3_and_k4_flip50={}",
+                rd.h4.map_or("not_evaluable".to_string(), |b| b.to_string())
+            );
+            println!(
+                "H5_some_margin_arm_beats_E/E-cue_seq_rule_k3_flip50={}",
+                rd.h5
+            );
             println!(
                 "topology_unchanged={}",
                 rows.iter().all(|r| r.topology_unchanged)
