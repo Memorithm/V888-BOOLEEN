@@ -380,10 +380,18 @@ fn experiment(tree: &WideFiveTree, seed: u64) -> Result<(), String> {
             return Err("checkpoint mutation detected".into());
         }
         report(Report {
-            seed, phase: task, primary: &primary, control: &no_replay,
-            tasks: &tasks, fit, elapsed_us: elapsed,
-            pretest: before, past: &previous_test, null: &shuffled,
-            frozen: &original, feature_layer: layer as u32,
+            seed,
+            phase: task,
+            primary: &primary,
+            control: &no_replay,
+            tasks: &tasks,
+            fit,
+            elapsed_us: elapsed,
+            pretest: before,
+            past: &previous_test,
+            null: &shuffled,
+            frozen: &original,
+            feature_layer: layer as u32,
         })?;
     }
     // Explicit incompatible fifth task: exactly the same input/context
