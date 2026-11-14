@@ -49,20 +49,29 @@ pub fn profile_region_transitions(
             rising_edges: 0,
             falling_edges: 0,
         });
-        entry.members = entry.members.checked_add(1).ok_or(TransitionProfileError::CountOverflow)?;
+        entry.members = entry
+            .members
+            .checked_add(1)
+            .ok_or(TransitionProfileError::CountOverflow)?;
         let mut previous = false;
         for (tick, snapshot) in snapshots.iter().enumerate() {
             let active = snapshot.get(index).expect("validated dimensions");
             if active {
-                entry.active_member_ticks = entry.active_member_ticks.checked_add(1)
+                entry.active_member_ticks = entry
+                    .active_member_ticks
+                    .checked_add(1)
                     .ok_or(TransitionProfileError::CountOverflow)?;
             }
             if tick != 0 {
                 if !previous && active {
-                    entry.rising_edges = entry.rising_edges.checked_add(1)
+                    entry.rising_edges = entry
+                        .rising_edges
+                        .checked_add(1)
                         .ok_or(TransitionProfileError::CountOverflow)?;
                 } else if previous && !active {
-                    entry.falling_edges = entry.falling_edges.checked_add(1)
+                    entry.falling_edges = entry
+                        .falling_edges
+                        .checked_add(1)
                         .ok_or(TransitionProfileError::CountOverflow)?;
                 }
             }
@@ -88,30 +97,58 @@ mod tests {
         c.set(1, true).unwrap();
         let history = [a, b, c];
         let original = history.clone();
-        let regions = profile_region_transitions(
-            &history,
-            &[Some(8), Some(8), None, Some(3), Some(8)],
-        ).unwrap();
-        assert_eq!(regions, vec![
-            RegionTransitionProfile { region_id: 3, members: 1, active_member_ticks: 0, rising_edges: 0, falling_edges: 0 },
-            RegionTransitionProfile { region_id: 8, members: 3, active_member_ticks: 5, rising_edges: 2, falling_edges: 2 },
-        ]);
+        let regions =
+            profile_region_transitions(&history, &[Some(8), Some(8), None, Some(3), Some(8)])
+                .unwrap();
+        assert_eq!(
+            regions,
+            vec![
+                RegionTransitionProfile {
+                    region_id: 3,
+                    members: 1,
+                    active_member_ticks: 0,
+                    rising_edges: 0,
+                    falling_edges: 0
+                },
+                RegionTransitionProfile {
+                    region_id: 8,
+                    members: 3,
+                    active_member_ticks: 5,
+                    rising_edges: 2,
+                    falling_edges: 2
+                },
+            ]
+        );
         assert_eq!(history, original);
     }
 
     #[test]
     fn rejects_invalid_input_before_any_result() {
         let s = BooleanState::new(2);
-        assert_eq!(profile_region_transitions(&[], &[None, None]), Err(TransitionProfileError::EmptyHistory));
-        assert_eq!(profile_region_transitions(&[s.clone()], &[None]), Err(TransitionProfileError::LengthMismatch));
-        assert_eq!(profile_region_transitions(&[s.clone(), BooleanState::new(3)], &[None, None]), Err(TransitionProfileError::LengthMismatch));
-        assert_eq!(profile_region_transitions(&vec![s; 1_001], &[None, None]), Err(TransitionProfileError::InvalidBudget));
+        assert_eq!(
+            profile_region_transitions(&[], &[None, None]),
+            Err(TransitionProfileError::EmptyHistory)
+        );
+        assert_eq!(
+            profile_region_transitions(&[s.clone()], &[None]),
+            Err(TransitionProfileError::LengthMismatch)
+        );
+        assert_eq!(
+            profile_region_transitions(&[s.clone(), BooleanState::new(3)], &[None, None]),
+            Err(TransitionProfileError::LengthMismatch)
+        );
+        assert_eq!(
+            profile_region_transitions(&vec![s; 1_001], &[None, None]),
+            Err(TransitionProfileError::InvalidBudget)
+        );
     }
 
     #[test]
     fn unannotated_neurons_are_not_inferred() {
         let mut s = BooleanState::new(2);
         s.set(1, true).unwrap();
-        assert!(profile_region_transitions(&[s], &[None, None]).unwrap().is_empty());
+        assert!(profile_region_transitions(&[s], &[None, None])
+            .unwrap()
+            .is_empty());
     }
 }

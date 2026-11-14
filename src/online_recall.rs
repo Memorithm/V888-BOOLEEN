@@ -60,7 +60,9 @@ impl OnlineRecall {
         };
         let recovered = matches && self.quiet_streak > 0;
         let next_recoveries = if recovered {
-            self.recovery_events.checked_add(1).ok_or(RecallError::ZeroBudget)?
+            self.recovery_events
+                .checked_add(1)
+                .ok_or(RecallError::ZeroBudget)?
         } else {
             self.recovery_events
         };
@@ -219,11 +221,13 @@ impl OnlineRecall {
         });
         // Rank by measured inactivity fraction, not by the arbitrary region ID.
         // Exact cross-products avoid floating-point rounding; region ID breaks ties.
-        candidates.sort_unstable_by(|a, b| {
-            (b.1 * a.2).cmp(&(a.1 * b.2)).then_with(|| a.0.cmp(&b.0))
-        });
+        candidates
+            .sort_unstable_by(|a, b| (b.1 * a.2).cmp(&(a.1 * b.2)).then_with(|| a.0.cmp(&b.0)));
         candidates.truncate(maximum_regions);
-        Ok(candidates.into_iter().map(|(region, _, _)| region).collect())
+        Ok(candidates
+            .into_iter()
+            .map(|(region, _, _)| region)
+            .collect())
     }
 
     /// Construct a bounded recall circuit from the most inactive annotated region.
@@ -338,8 +342,11 @@ impl OnlineRecall {
         minimum_active: usize,
         consecutive: usize,
     ) -> Result<Option<usize>, RecallError> {
-        if states.is_empty() || states.len() > 1000 || consecutive == 0
-            || consecutive > states.len() || minimum_active == 0
+        if states.is_empty()
+            || states.len() > 1000
+            || consecutive == 0
+            || consecutive > states.len()
+            || minimum_active == 0
         {
             return Err(RecallError::ZeroBudget);
         }
@@ -519,10 +526,16 @@ impl OnlineRecall {
             return Err(RecallError::ZeroBudget);
         }
         let a = self.select_inactive_region_subcircuit(
-            annotations, thresholds.0, minimum_members, maximum_members,
+            annotations,
+            thresholds.0,
+            minimum_members,
+            maximum_members,
         )?;
         let b = self.select_inactive_region_subcircuit(
-            annotations, thresholds.1, minimum_members, maximum_members,
+            annotations,
+            thresholds.1,
+            minimum_members,
+            maximum_members,
         )?;
         // Validate both candidates against every state, even after early recovery.
         for trial in trials {
@@ -542,12 +555,24 @@ impl OnlineRecall {
             let mut hit_b = None;
             for (tick, state) in trial.iter().enumerate() {
                 if hit_a.is_none() {
-                    streak_a = if a.recall(state, minimum_active)? { streak_a + 1 } else { 0 };
-                    if streak_a == consecutive { hit_a = Some(tick); }
+                    streak_a = if a.recall(state, minimum_active)? {
+                        streak_a + 1
+                    } else {
+                        0
+                    };
+                    if streak_a == consecutive {
+                        hit_a = Some(tick);
+                    }
                 }
                 if hit_b.is_none() {
-                    streak_b = if b.recall(state, minimum_active)? { streak_b + 1 } else { 0 };
-                    if streak_b == consecutive { hit_b = Some(tick); }
+                    streak_b = if b.recall(state, minimum_active)? {
+                        streak_b + 1
+                    } else {
+                        0
+                    };
+                    if streak_b == consecutive {
+                        hit_b = Some(tick);
+                    }
                 }
             }
             match (hit_a, hit_b) {
@@ -584,10 +609,16 @@ impl OnlineRecall {
             return Err(RecallError::ZeroBudget);
         }
         let a = self.select_inactive_region_subcircuit(
-            annotations, thresholds.0, minimum_members, maximum_members,
+            annotations,
+            thresholds.0,
+            minimum_members,
+            maximum_members,
         )?;
         let b = self.select_inactive_region_subcircuit(
-            annotations, thresholds.1, minimum_members, maximum_members,
+            annotations,
+            thresholds.1,
+            minimum_members,
+            maximum_members,
         )?;
         for trial in trials {
             if trial.len() != horizon {
@@ -604,13 +635,21 @@ impl OnlineRecall {
             let (mut hit_a, mut hit_b) = (None, None);
             for (tick, state) in trial.iter().enumerate() {
                 if hit_a.is_none() {
-                    streak_a = if a.recall(state, minimum_active)? { streak_a + 1 } else { 0 };
+                    streak_a = if a.recall(state, minimum_active)? {
+                        streak_a + 1
+                    } else {
+                        0
+                    };
                     if streak_a == consecutive {
                         hit_a = Some(tick);
                     }
                 }
                 if hit_b.is_none() {
-                    streak_b = if b.recall(state, minimum_active)? { streak_b + 1 } else { 0 };
+                    streak_b = if b.recall(state, minimum_active)? {
+                        streak_b + 1
+                    } else {
+                        0
+                    };
                     if streak_b == consecutive {
                         hit_b = Some(tick);
                     }
@@ -643,8 +682,13 @@ impl OnlineRecall {
             return Err(RecallError::ZeroBudget);
         }
         let paired = self.paired_inactive_region_recovery_latencies(
-            training_trials, annotations, thresholds, minimum_members,
-            maximum_members, minimum_active, consecutive,
+            training_trials,
+            annotations,
+            thresholds,
+            minimum_members,
+            maximum_members,
+            minimum_active,
+            consecutive,
         )?;
         let (mut wins_a, mut wins_b) = (0usize, 0usize);
         for (a, b) in paired {
@@ -727,8 +771,13 @@ impl OnlineRecall {
             return Err(RecallError::ZeroBudget);
         }
         let paired = self.paired_inactive_region_recovery_latencies(
-            held_out_trials, annotations, thresholds, minimum_members,
-            maximum_members, minimum_active, consecutive,
+            held_out_trials,
+            annotations,
+            thresholds,
+            minimum_members,
+            maximum_members,
+            minimum_active,
+            consecutive,
         )?;
         let horizon = held_out_trials.first().map_or(0, Vec::len);
         let mut result = Vec::with_capacity(horizon);
@@ -772,8 +821,13 @@ impl OnlineRecall {
             return Err(RecallError::ZeroBudget);
         }
         let paired = self.paired_inactive_region_recovery_latencies(
-            held_out_trials, annotations, thresholds, minimum_members,
-            maximum_members, minimum_active, consecutive,
+            held_out_trials,
+            annotations,
+            thresholds,
+            minimum_members,
+            maximum_members,
+            minimum_active,
+            consecutive,
         )?;
         let penalty = (held_out_trials[0].len() + 1) as u64;
         let mut costs = (0u64, 0u64);
@@ -962,11 +1016,13 @@ impl OnlineRecall {
         });
         // Compare rational occupancies without floating point. Each region's
         // denominator is ticks * member_count, so compare per-member activity.
-        candidates.sort_unstable_by(|a, b| {
-            (a.1 * b.2).cmp(&(b.1 * a.2)).then_with(|| a.0.cmp(&b.0))
-        });
+        candidates
+            .sort_unstable_by(|a, b| (a.1 * b.2).cmp(&(b.1 * a.2)).then_with(|| a.0.cmp(&b.0)));
         candidates.truncate(maximum_regions);
-        Ok(candidates.into_iter().map(|(region, _, _)| region).collect())
+        Ok(candidates
+            .into_iter()
+            .map(|(region, _, _)| region)
+            .collect())
     }
 
     /// Atomically observe one simulated state and select the most active annotated regions.
@@ -1049,11 +1105,14 @@ impl OnlineRecall {
         required_streak: u64,
         maximum_steps: usize,
     ) -> Result<Option<usize>, RecallError> {
-        if minimum_active == 0 || required_streak == 0 || maximum_steps == 0 || maximum_steps > 1000 {
-
+        if minimum_active == 0 || required_streak == 0 || maximum_steps == 0 || maximum_steps > 1000
+        {
             return Err(RecallError::ZeroBudget);
         }
-        if usize::try_from(required_streak).ok().is_none_or(|n| n > maximum_steps) {
+        if usize::try_from(required_streak)
+            .ok()
+            .is_none_or(|n| n > maximum_steps)
+        {
             return Err(RecallError::ZeroBudget);
         }
         if self.circuit.members().len() < minimum_active {
@@ -1150,14 +1209,20 @@ impl OnlineRecall {
     ) -> std::io::Result<Vec<Vec<(u32, usize, usize)>>> {
         use std::io::{Error, ErrorKind};
         if steps == 0 || steps > 1000 || minimum_active == 0 {
-            return Err(Error::new(ErrorKind::InvalidInput, "invalid regional recall budget"));
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "invalid regional recall budget",
+            ));
         }
         graph.validate()?;
         if engine.active.len() != graph.ids.len()
             || self.circuit.universe_len() != graph.ids.len()
             || annotations.len() != graph.ids.len()
         {
-            return Err(Error::new(ErrorKind::InvalidInput, "regional graph size mismatch"));
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "regional graph size mismatch",
+            ));
         }
         self.live_regional_recall(&engine.active, annotations, minimum_active)
             .map_err(|_| Error::new(ErrorKind::InvalidInput, "invalid regional recall state"))?;
@@ -1166,7 +1231,8 @@ impl OnlineRecall {
             engine.step(graph)?;
             self.observe_engine_state(engine, minimum_active)
                 .map_err(|_| Error::new(ErrorKind::InvalidData, "recall counter overflow"))?;
-            let regions = self.live_regional_recall(&engine.active, annotations, minimum_active)
+            let regions = self
+                .live_regional_recall(&engine.active, annotations, minimum_active)
                 .map_err(|_| Error::new(ErrorKind::InvalidData, "regional recall failed"))?;
             output.push(regions);
         }
@@ -1278,15 +1344,22 @@ mod tests {
         active.set(0, true).unwrap();
         let trials = vec![vec![quiet.clone(), active.clone(), active.clone()]];
         let before = tracker.member_counts().collect::<Vec<_>>();
-        let curve = tracker.evaluate_inactive_region_policy_by_horizon(
-            &trials, &labels, (100, 100), 1, 2, 1, 2, 0,
-        ).unwrap();
+        let curve = tracker
+            .evaluate_inactive_region_policy_by_horizon(&trials, &labels, (100, 100), 1, 2, 1, 2, 0)
+            .unwrap();
         assert_eq!(curve, vec![(0, 0, 0, 1), (0, 0, 0, 1), (0, 0, 1, 0)]);
         assert_eq!(tracker.member_counts().collect::<Vec<_>>(), before);
         assert_eq!(tracker.ticks(), 1);
         assert_eq!(
             tracker.evaluate_inactive_region_policy_by_horizon(
-                &trials, &labels, (100, 100), 1, 2, 1, 2, 2,
+                &trials,
+                &labels,
+                (100, 100),
+                1,
+                2,
+                1,
+                2,
+                2,
             ),
             Err(RecallError::ZeroBudget)
         );
@@ -1296,18 +1369,26 @@ mod tests {
     fn regional_inactive_ticks_count_only_annotated_selected_members() {
         let mut tracker = OnlineRecall::new(Subcircuit::new(4, vec![0, 1, 3]).unwrap());
         let labels = [Some(7), Some(7), Some(9), None];
-        assert_eq!(tracker.regional_inactive_member_ticks(&labels), Ok(vec![(7, 0, 0)]));
+        assert_eq!(
+            tracker.regional_inactive_member_ticks(&labels),
+            Ok(vec![(7, 0, 0)])
+        );
         let mut first = BooleanState::new(4);
         first.set(0, true).unwrap();
         first.set(2, true).unwrap(); // Not selected; must not contribute.
         tracker.observe(&first, 1).unwrap();
         let second = BooleanState::new(4);
         tracker.observe(&second, 1).unwrap();
-        assert_eq!(tracker.regional_inactive_member_ticks(&labels), Ok(vec![(7, 3, 4)]));
+        assert_eq!(
+            tracker.regional_inactive_member_ticks(&labels),
+            Ok(vec![(7, 3, 4)])
+        );
         assert_eq!(tracker.ticks(), 2);
-        assert_eq!(tracker.regional_inactive_member_ticks(&labels[..3]), Err(RecallError::LengthMismatch));
+        assert_eq!(
+            tracker.regional_inactive_member_ticks(&labels[..3]),
+            Err(RecallError::LengthMismatch)
+        );
     }
-
 
     #[test]
     fn inactive_region_selection_ranks_by_fraction_before_region_id() {
@@ -1317,8 +1398,14 @@ mod tests {
         state.set(0, true).unwrap();
         tracker.observe(&state, 1).unwrap();
         // Region 2: 1/2 inactive; region 9: 2/2 inactive.
-        assert_eq!(tracker.select_inactive_regions(&labels, 50, 2, 1), Ok(vec![9]));
-        assert_eq!(tracker.select_inactive_regions(&labels, 50, 2, 2), Ok(vec![9, 2]));
+        assert_eq!(
+            tracker.select_inactive_regions(&labels, 50, 2, 1),
+            Ok(vec![9])
+        );
+        assert_eq!(
+            tracker.select_inactive_regions(&labels, 50, 2, 2),
+            Ok(vec![9, 2])
+        );
         assert_eq!(tracker.ticks(), 1);
     }
 
@@ -1344,7 +1431,10 @@ mod tests {
             Err(RecallError::ZeroBudget)
         );
         assert_eq!(tracker.ticks(), 1);
-        assert_eq!(tracker.member_counts().collect::<Vec<_>>(), vec![(0, 0), (1, 0)]);
+        assert_eq!(
+            tracker.member_counts().collect::<Vec<_>>(),
+            vec![(0, 0), (1, 0)]
+        );
     }
 
     #[test]
@@ -1388,18 +1478,14 @@ mod tests {
         ];
         let before = tracker.ticks();
         assert_eq!(
-            tracker.inactive_region_recovery_histogram(
-                &trials, &annotations, 100, 1, 2, 1, 2
-            ),
+            tracker.inactive_region_recovery_histogram(&trials, &annotations, 100, 1, 2, 1, 2),
             Ok((vec![0, 0, 1], 2))
         );
         assert_eq!(tracker.ticks(), before);
         let mut invalid = trials.clone();
         invalid[2].pop();
         assert_eq!(
-            tracker.inactive_region_recovery_histogram(
-                &invalid, &annotations, 100, 1, 2, 1, 2
-            ),
+            tracker.inactive_region_recovery_histogram(&invalid, &annotations, 100, 1, 2, 1, 2),
             Err(RecallError::LengthMismatch)
         );
     }
@@ -1475,11 +1561,20 @@ mod tests {
         let quiet = BooleanState::new(2);
         tracker.observe(&active, 1).unwrap();
         tracker.observe(&active, 1).unwrap();
-        assert_eq!(tracker.measure_recovery_latency([&quiet, &active, &quiet, &active, &active], 1, 2, 5), Ok(Some((4, 5))));
+        assert_eq!(
+            tracker.measure_recovery_latency([&quiet, &active, &quiet, &active, &active], 1, 2, 5),
+            Ok(Some((4, 5)))
+        );
         assert_eq!(tracker.ticks(), 7);
-        assert_eq!(tracker.measure_recovery_latency([&active], 1, 2, 1), Err(RecallError::ZeroBudget));
+        assert_eq!(
+            tracker.measure_recovery_latency([&active], 1, 2, 1),
+            Err(RecallError::ZeroBudget)
+        );
         assert_eq!(tracker.ticks(), 7);
-        assert_eq!(tracker.measure_recovery_latency([&quiet, &active], 1, 2, 2), Ok(None));
+        assert_eq!(
+            tracker.measure_recovery_latency([&quiet, &active], 1, 2, 2),
+            Ok(None)
+        );
         assert_eq!(tracker.ticks(), 9);
     }
 
@@ -1490,13 +1585,25 @@ mod tests {
         active.set(0, true).unwrap();
         let quiet = BooleanState::new(2);
         let sequence = [&quiet, &active, &quiet, &active, &active, &active, &quiet];
-        assert_eq!(tracker.observe_until_durable(sequence, 1, 3, 7), Ok(Some(6)));
+        assert_eq!(
+            tracker.observe_until_durable(sequence, 1, 3, 7),
+            Ok(Some(6))
+        );
         assert_eq!(tracker.ticks(), 6);
         assert_eq!(tracker.latest_streak(), 3);
-        assert_eq!(tracker.member_counts().collect::<Vec<_>>(), vec![(0, 4), (1, 0)]);
-        assert_eq!(tracker.observe_until_durable([&quiet], 1, 1, 0), Err(RecallError::ZeroBudget));
+        assert_eq!(
+            tracker.member_counts().collect::<Vec<_>>(),
+            vec![(0, 4), (1, 0)]
+        );
+        assert_eq!(
+            tracker.observe_until_durable([&quiet], 1, 1, 0),
+            Err(RecallError::ZeroBudget)
+        );
         assert_eq!(tracker.ticks(), 6);
-        assert_eq!(tracker.observe_until_durable([&quiet, &active], 1, 2, 2), Ok(None));
+        assert_eq!(
+            tracker.observe_until_durable([&quiet, &active], 1, 2, 2),
+            Ok(None)
+        );
         assert_eq!(tracker.latest_streak(), 1);
     }
 
@@ -1746,7 +1853,10 @@ mod tests {
     fn quiet_region_selection_is_bounded_and_annotation_only() {
         let mut tracker = OnlineRecall::new(Subcircuit::new(5, vec![0, 1, 2, 3, 4]).unwrap());
         let labels = [Some(8), Some(8), Some(3), Some(3), None];
-        assert_eq!(tracker.select_quiet_regions(&labels, 50, 1, 2), Err(RecallError::ZeroBudget));
+        assert_eq!(
+            tracker.select_quiet_regions(&labels, 50, 1, 2),
+            Err(RecallError::ZeroBudget)
+        );
         let mut state = BooleanState::new(5);
         state.set(0, true).unwrap();
         state.set(1, true).unwrap();
@@ -1754,12 +1864,24 @@ mod tests {
         tracker.observe(&state, 1).unwrap();
         tracker.observe(&BooleanState::new(5), 1).unwrap();
         // Region 3: 1/4; region 8: 2/4; unannotated index 4 excluded.
-        assert_eq!(tracker.select_quiet_regions(&labels, 50, 2, 2), Ok(vec![3, 8]));
+        assert_eq!(
+            tracker.select_quiet_regions(&labels, 50, 2, 2),
+            Ok(vec![3, 8])
+        );
         assert_eq!(tracker.select_quiet_regions(&labels, 25, 2, 2), Ok(vec![3]));
         assert_eq!(tracker.select_quiet_regions(&labels, 0, 2, 2), Ok(vec![]));
-        assert_eq!(tracker.select_quiet_regions(&labels, 100, 2, 1), Ok(vec![3]));
-        assert_eq!(tracker.select_quiet_regions(&labels[..4], 50, 2, 2), Err(RecallError::LengthMismatch));
-        assert_eq!(tracker.select_quiet_regions(&labels, 101, 2, 2), Err(RecallError::ZeroBudget));
+        assert_eq!(
+            tracker.select_quiet_regions(&labels, 100, 2, 1),
+            Ok(vec![3])
+        );
+        assert_eq!(
+            tracker.select_quiet_regions(&labels[..4], 50, 2, 2),
+            Err(RecallError::LengthMismatch)
+        );
+        assert_eq!(
+            tracker.select_quiet_regions(&labels, 101, 2, 2),
+            Err(RecallError::ZeroBudget)
+        );
         assert_eq!(tracker.ticks(), 2);
     }
 
@@ -1772,15 +1894,33 @@ mod tests {
         state.set(1, true).unwrap();
         state.set(3, true).unwrap();
         state.set(4, true).unwrap();
-        assert_eq!(tracker.live_regional_recall(&state, &labels, 2), Ok(vec![(9, 2, 2)]));
-        assert_eq!(tracker.live_regional_recall(&state, &labels, 1), Ok(vec![(2, 1, 1), (9, 2, 2)]));
-        assert_eq!(tracker.live_regional_recall(&state, &labels, 0), Err(RecallError::ZeroBudget));
-        assert_eq!(tracker.live_regional_recall(&state, &labels[..4], 1), Err(RecallError::LengthMismatch));
-        assert_eq!(tracker.live_regional_recall(&BooleanState::new(4), &labels, 1), Err(RecallError::LengthMismatch));
+        assert_eq!(
+            tracker.live_regional_recall(&state, &labels, 2),
+            Ok(vec![(9, 2, 2)])
+        );
+        assert_eq!(
+            tracker.live_regional_recall(&state, &labels, 1),
+            Ok(vec![(2, 1, 1), (9, 2, 2)])
+        );
+        assert_eq!(
+            tracker.live_regional_recall(&state, &labels, 0),
+            Err(RecallError::ZeroBudget)
+        );
+        assert_eq!(
+            tracker.live_regional_recall(&state, &labels[..4], 1),
+            Err(RecallError::LengthMismatch)
+        );
+        assert_eq!(
+            tracker.live_regional_recall(&BooleanState::new(4), &labels, 1),
+            Err(RecallError::LengthMismatch)
+        );
         assert_eq!(tracker.ticks(), 0);
         tracker.observe(&state, 1).unwrap();
         assert_eq!(tracker.ticks(), 1);
-        assert_eq!(tracker.live_regional_recall(&state, &labels, 2), Ok(vec![(9, 2, 2)]));
+        assert_eq!(
+            tracker.live_regional_recall(&state, &labels, 2),
+            Ok(vec![(9, 2, 2)])
+        );
         assert_eq!(tracker.ticks(), 1);
     }
 
@@ -1798,15 +1938,24 @@ mod tests {
         let mut tracker = OnlineRecall::new(Subcircuit::new(3, vec![0, 1, 2]).unwrap());
         let labels = [Some(7), Some(7), Some(9)];
         engine.stimulate(&graph, 10).unwrap();
-        assert!(tracker.observe_engine_regional_steps(&mut engine, &graph, &labels[..2], 1, 3).is_err());
-        assert!(tracker.observe_engine_regional_steps(&mut engine, &graph, &labels, 1, 0).is_err());
+        assert!(tracker
+            .observe_engine_regional_steps(&mut engine, &graph, &labels[..2], 1, 3)
+            .is_err());
+        assert!(tracker
+            .observe_engine_regional_steps(&mut engine, &graph, &labels, 1, 0)
+            .is_err());
         assert_eq!(tracker.ticks(), 0);
         assert_eq!(
-            tracker.observe_engine_regional_steps(&mut engine, &graph, &labels, 1, 3).unwrap(),
+            tracker
+                .observe_engine_regional_steps(&mut engine, &graph, &labels, 1, 3)
+                .unwrap(),
             vec![vec![(7, 1, 2)], vec![(9, 1, 1)], vec![]]
         );
         assert_eq!(tracker.ticks(), 3);
-        assert_eq!(tracker.regional_activity_totals(&labels), Ok(vec![(7, 1, 2), (9, 1, 1)]));
+        assert_eq!(
+            tracker.regional_activity_totals(&labels),
+            Ok(vec![(7, 1, 2), (9, 1, 1)])
+        );
     }
 
     #[test]
@@ -1820,10 +1969,22 @@ mod tests {
         let mut state = BooleanState::new(4);
         state.set(0, true).unwrap();
         tracker.observe(&state, 1).unwrap();
-        assert_eq!(tracker.select_inactive_regions(&annotations, 50, 1, 2), Ok(vec![3, 7]));
-        assert_eq!(tracker.select_inactive_regions(&annotations, 100, 1, 2), Ok(vec![3]));
-        assert_eq!(tracker.select_inactive_regions(&annotations, 50, 2, 2), Ok(vec![7]));
-        assert_eq!(tracker.select_inactive_regions(&annotations, 50, 1, 1), Ok(vec![3]));
+        assert_eq!(
+            tracker.select_inactive_regions(&annotations, 50, 1, 2),
+            Ok(vec![3, 7])
+        );
+        assert_eq!(
+            tracker.select_inactive_regions(&annotations, 100, 1, 2),
+            Ok(vec![3])
+        );
+        assert_eq!(
+            tracker.select_inactive_regions(&annotations, 50, 2, 2),
+            Ok(vec![7])
+        );
+        assert_eq!(
+            tracker.select_inactive_regions(&annotations, 50, 1, 1),
+            Ok(vec![3])
+        );
         assert_eq!(
             tracker.select_inactive_regions(&annotations[..3], 50, 1, 2),
             Err(RecallError::LengthMismatch)
@@ -1839,7 +2000,9 @@ mod tests {
         state.set(0, true).unwrap();
         state.set(3, true).unwrap();
         tracker.observe(&state, 1).unwrap();
-        let selected = tracker.select_inactive_region_subcircuit(&labels, 50, 2, 2).unwrap();
+        let selected = tracker
+            .select_inactive_region_subcircuit(&labels, 50, 2, 2)
+            .unwrap();
         assert_eq!(selected.members(), &[1, 2]);
         // Never return a circuit smaller than the caller's minimum budget.
         assert_eq!(
@@ -1896,14 +2059,22 @@ mod tests {
         active.set(1, true).unwrap();
         let quiet = BooleanState::new(3);
         let states = [active.clone(), quiet, active.clone(), active.clone()];
-        assert_eq!(tracker.first_durable_inactive_region_recovery(
-            &states, &labels, 100, 2, 2, 2, 2), Ok(Some(3)));
-        assert_eq!(tracker.first_durable_inactive_region_recovery(
-            &states[..3], &labels, 100, 2, 2, 2, 2), Ok(None));
-        assert_eq!(tracker.first_durable_inactive_region_recovery(
-            &states, &labels, 100, 2, 2, 2, 0), Err(RecallError::ZeroBudget));
-        assert_eq!(tracker.first_durable_inactive_region_recovery(
-            &states, &labels[..2], 100, 2, 2, 2, 2), Err(RecallError::LengthMismatch));
+        assert_eq!(
+            tracker.first_durable_inactive_region_recovery(&states, &labels, 100, 2, 2, 2, 2),
+            Ok(Some(3))
+        );
+        assert_eq!(
+            tracker.first_durable_inactive_region_recovery(&states[..3], &labels, 100, 2, 2, 2, 2),
+            Ok(None)
+        );
+        assert_eq!(
+            tracker.first_durable_inactive_region_recovery(&states, &labels, 100, 2, 2, 2, 0),
+            Err(RecallError::ZeroBudget)
+        );
+        assert_eq!(
+            tracker.first_durable_inactive_region_recovery(&states, &labels[..2], 100, 2, 2, 2, 2),
+            Err(RecallError::LengthMismatch)
+        );
         assert_eq!(tracker.ticks(), 1);
     }
 
@@ -1955,19 +2126,37 @@ mod tests {
         ];
         assert_eq!(
             tracker.paired_inactive_region_recovery_latencies(
-                &trials, &labels, (50, 100), 2, 2, 2, 2,
+                &trials,
+                &labels,
+                (50, 100),
+                2,
+                2,
+                2,
+                2,
             ),
             Ok(vec![(Some(1), Some(1)), (None, None), (Some(2), Some(2))])
         );
         assert_eq!(
             tracker.paired_inactive_region_recovery_latencies(
-                &trials[..2], &labels, (50, 100), 2, 2, 2, 4,
+                &trials[..2],
+                &labels,
+                (50, 100),
+                2,
+                2,
+                2,
+                4,
             ),
             Err(RecallError::ZeroBudget)
         );
         assert_eq!(
             tracker.paired_inactive_region_recovery_latencies(
-                &trials, &labels[..3], (50, 100), 2, 2, 2, 2,
+                &trials,
+                &labels[..3],
+                (50, 100),
+                2,
+                2,
+                2,
+                2,
             ),
             Err(RecallError::LengthMismatch)
         );
@@ -1991,19 +2180,40 @@ mod tests {
         ];
         assert_eq!(
             tracker.select_inactive_region_recovery_policy(
-                &training, &labels, (50, 100), 2, 2, 2, 2, 1,
+                &training,
+                &labels,
+                (50, 100),
+                2,
+                2,
+                2,
+                2,
+                1,
             ),
             Ok(None)
         );
         assert_eq!(
             tracker.select_inactive_region_recovery_policy(
-                &training, &labels, (50, 100), 2, 2, 2, 2, 0,
+                &training,
+                &labels,
+                (50, 100),
+                2,
+                2,
+                2,
+                2,
+                0,
             ),
             Err(RecallError::ZeroBudget)
         );
         assert_eq!(
             tracker.select_inactive_region_recovery_policy(
-                &training, &labels, (50, 100), 2, 2, 2, 2, 3,
+                &training,
+                &labels,
+                (50, 100),
+                2,
+                2,
+                2,
+                2,
+                3,
             ),
             Err(RecallError::ZeroBudget)
         );
@@ -2027,25 +2237,53 @@ mod tests {
         ];
         assert_eq!(
             tracker.evaluate_inactive_region_recovery_policy(
-                &held_out, &labels, (50, 100), 2, 2, 2, 2, 0,
+                &held_out,
+                &labels,
+                (50, 100),
+                2,
+                2,
+                2,
+                2,
+                0,
             ),
             Ok((0, 0, 1, 1))
         );
         assert_eq!(
             tracker.evaluate_inactive_region_recovery_policy(
-                &held_out, &labels, (50, 100), 2, 2, 2, 2, 1,
+                &held_out,
+                &labels,
+                (50, 100),
+                2,
+                2,
+                2,
+                2,
+                1,
             ),
             Ok((0, 0, 1, 1))
         );
         assert_eq!(
             tracker.evaluate_inactive_region_recovery_policy(
-                &held_out, &labels, (50, 100), 2, 2, 2, 2, 2,
+                &held_out,
+                &labels,
+                (50, 100),
+                2,
+                2,
+                2,
+                2,
+                2,
             ),
             Err(RecallError::ZeroBudget)
         );
         assert_eq!(
             tracker.evaluate_inactive_region_recovery_policy(
-                &held_out, &labels[..3], (50, 100), 2, 2, 2, 2, 0,
+                &held_out,
+                &labels[..3],
+                (50, 100),
+                2,
+                2,
+                2,
+                2,
+                0,
             ),
             Err(RecallError::LengthMismatch)
         );
@@ -2070,21 +2308,15 @@ mod tests {
         // Both thresholds select the same region: first hit at tick 1
         // costs 2, while a censored three-tick trial costs 4.
         assert_eq!(
-            tracker.held_out_recovery_latency_costs(
-                &trials, &labels, (50, 100), 2, 2, 2, 2, 0,
-            ),
+            tracker.held_out_recovery_latency_costs(&trials, &labels, (50, 100), 2, 2, 2, 2, 0,),
             Ok((6, 6))
         );
         assert_eq!(
-            tracker.held_out_recovery_latency_costs(
-                &trials, &labels, (50, 100), 2, 2, 2, 2, 1,
-            ),
+            tracker.held_out_recovery_latency_costs(&trials, &labels, (50, 100), 2, 2, 2, 2, 1,),
             Ok((6, 6))
         );
         assert_eq!(
-            tracker.held_out_recovery_latency_costs(
-                &trials, &labels, (50, 100), 2, 2, 2, 2, 2,
-            ),
+            tracker.held_out_recovery_latency_costs(&trials, &labels, (50, 100), 2, 2, 2, 2, 2,),
             Err(RecallError::ZeroBudget)
         );
         assert_eq!(tracker.ticks(), 1);
@@ -2106,21 +2338,15 @@ mod tests {
             vec![quiet.clone(), quiet.clone(), quiet],
         ];
         assert_eq!(
-            tracker.held_out_recovery_trial_costs(
-                &trials, &labels, (50, 100), 2, 2, 2, 2, 0,
-            ),
+            tracker.held_out_recovery_trial_costs(&trials, &labels, (50, 100), 2, 2, 2, 2, 0,),
             Ok(vec![(2, 2), (4, 4)])
         );
         assert_eq!(
-            tracker.held_out_recovery_trial_costs(
-                &trials, &labels, (50, 100), 2, 2, 2, 2, 1,
-            ),
+            tracker.held_out_recovery_trial_costs(&trials, &labels, (50, 100), 2, 2, 2, 2, 1,),
             Ok(vec![(2, 2), (4, 4)])
         );
         assert_eq!(
-            tracker.held_out_recovery_trial_costs(
-                &trials, &labels, (50, 100), 2, 2, 2, 2, 2,
-            ),
+            tracker.held_out_recovery_trial_costs(&trials, &labels, (50, 100), 2, 2, 2, 2, 2,),
             Err(RecallError::ZeroBudget)
         );
         assert_eq!(tracker.ticks(), 1);
@@ -2137,20 +2363,13 @@ mod tests {
         active.set(0, true).unwrap();
         active.set(1, true).unwrap();
         let quiet = BooleanState::new(4);
-        let trials = vec![
-            vec![active.clone(), active],
-            vec![quiet.clone(), quiet],
-        ];
+        let trials = vec![vec![active.clone(), active], vec![quiet.clone(), quiet]];
         assert_eq!(
-            tracker.held_out_recovery_cost_comparison(
-                &trials, &labels, (50, 100), 2, 2, 2, 2, 0,
-            ),
+            tracker.held_out_recovery_cost_comparison(&trials, &labels, (50, 100), 2, 2, 2, 2, 0,),
             Ok((0, 0, 2, 5, 5))
         );
         assert_eq!(
-            tracker.held_out_recovery_cost_comparison(
-                &trials, &labels, (50, 100), 2, 2, 2, 2, 2,
-            ),
+            tracker.held_out_recovery_cost_comparison(&trials, &labels, (50, 100), 2, 2, 2, 2, 2,),
             Err(RecallError::ZeroBudget)
         );
         assert_eq!(tracker.ticks(), 1);

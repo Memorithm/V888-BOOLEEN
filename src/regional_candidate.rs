@@ -31,8 +31,12 @@ pub fn select_lag_candidates(
     minimum_joint: u64,
     maximum_candidates: usize,
 ) -> Result<Vec<LagCandidate>, CandidateError> {
-    if states.len() < 2 || states.len() > 1000 || annotations.is_empty()
-        || minimum_joint == 0 || maximum_candidates == 0 || maximum_candidates > 4096
+    if states.len() < 2
+        || states.len() > 1000
+        || annotations.is_empty()
+        || minimum_joint == 0
+        || maximum_candidates == 0
+        || maximum_candidates > 4096
     {
         return Err(CandidateError::InvalidBudget);
     }
@@ -74,7 +78,8 @@ pub fn select_lag_candidates(
                 target += u64::from(b);
                 joint += u64::from(a && b);
             }
-            if joint >= minimum_joint && source > 0
+            if joint >= minimum_joint
+                && source > 0
                 && u128::from(joint) * u128::from(transitions)
                     > u128::from(source) * u128::from(target)
             {
@@ -124,21 +129,41 @@ mod tests {
         let result = select_lag_candidates(&states, &[Some(10), Some(20), None], 2, 4).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!((result[0].source_region, result[0].target_region), (10, 20));
-        assert_eq!((result[0].joint_exposures, result[0].source_exposures), (2, 2));
+        assert_eq!(
+            (result[0].joint_exposures, result[0].source_exposures),
+            (2, 2)
+        );
         assert_eq!(result[0].transitions, 4);
     }
 
     #[test]
     fn rejects_invalid_budgets_and_dimensions() {
         let states = [state(false, false), state(true, false)];
-        assert_eq!(select_lag_candidates(&states, &[None], 1, 1), Err(CandidateError::LengthMismatch));
-        assert_eq!(select_lag_candidates(&states, &[Some(1), None, None], 0, 1), Err(CandidateError::InvalidBudget));
-        assert_eq!(select_lag_candidates(&states[..1], &[Some(1), None, None], 1, 1), Err(CandidateError::InvalidBudget));
+        assert_eq!(
+            select_lag_candidates(&states, &[None], 1, 1),
+            Err(CandidateError::LengthMismatch)
+        );
+        assert_eq!(
+            select_lag_candidates(&states, &[Some(1), None, None], 0, 1),
+            Err(CandidateError::InvalidBudget)
+        );
+        assert_eq!(
+            select_lag_candidates(&states[..1], &[Some(1), None, None], 1, 1),
+            Err(CandidateError::InvalidBudget)
+        );
     }
 
     #[test]
     fn excludes_independent_or_unobserved_regions() {
-        let states = [state(false, false), state(false, false), state(false, false)];
-        assert!(select_lag_candidates(&states, &[Some(1), Some(2), None], 1, 4).unwrap().is_empty());
+        let states = [
+            state(false, false),
+            state(false, false),
+            state(false, false),
+        ];
+        assert!(
+            select_lag_candidates(&states, &[Some(1), Some(2), None], 1, 4)
+                .unwrap()
+                .is_empty()
+        );
     }
 }

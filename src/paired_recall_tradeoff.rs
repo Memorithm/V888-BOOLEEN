@@ -19,7 +19,6 @@ pub struct RecallTradeoff {
 }
 
 impl RegionRecallMonitor {
-
     /// Return accepted, confirmed regions on the three-objective Pareto frontier.
     /// Smaller confirmation tick, active-member ticks and transition count are
     /// preferred. Censored candidates are excluded, never treated as instant
@@ -35,9 +34,10 @@ impl RegionRecallMonitor {
                         if !other.accepted {
                             return false;
                         }
-                        let (Some(a), Some(b)) =
-                            (other.candidate_confirmation, candidate.candidate_confirmation)
-                        else {
+                        let (Some(a), Some(b)) = (
+                            other.candidate_confirmation,
+                            candidate.candidate_confirmation,
+                        ) else {
                             return false;
                         };
                         a <= b
@@ -90,41 +90,46 @@ impl RegionRecallMonitor {
         activity_allowance: u128,
         transition_allowance: u128,
     ) -> Result<Vec<RecallTradeoff>, RegionMonitorError> {
-        let durable = self.paired_durable_recall_activity(
-            baseline, candidate, minimum_active, consecutive,
-        )?;
+        let durable =
+            self.paired_durable_recall_activity(baseline, candidate, minimum_active, consecutive)?;
         let transitions = self.paired_region_transition_cost(baseline, candidate)?;
         if durable.len() != transitions.len() {
             return Err(RegionMonitorError::InvalidDimensions);
         }
-        durable.into_iter().zip(transitions).map(
-            |((region, before, after, active_before, active_after),
-              (transition_region, flips_before, flips_after))| {
-                if region != transition_region {
-                    return Err(RegionMonitorError::InvalidDimensions);
-                }
-                let earlier = match (before, after) {
-                    (_, None) => false,
-                    (None, Some(_)) => true,
-                    (Some(b), Some(c)) => c < b,
-                };
-                // Saturating comparison treats overflowed allowances as an
-                // unbounded cap, rather than wrapping to a false rejection.
-                let accepted = earlier
-                    && active_after <= active_before.saturating_add(activity_allowance)
-                    && flips_after <= flips_before.saturating_add(transition_allowance);
-                Ok(RecallTradeoff {
-                    region,
-                    baseline_confirmation: before,
-                    candidate_confirmation: after,
-                    baseline_active_ticks: active_before,
-                    candidate_active_ticks: active_after,
-                    baseline_transitions: flips_before,
-                    candidate_transitions: flips_after,
-                    accepted,
-                })
-            },
-        ).collect()
+        durable
+            .into_iter()
+            .zip(transitions)
+            .map(
+                |(
+                    (region, before, after, active_before, active_after),
+                    (transition_region, flips_before, flips_after),
+                )| {
+                    if region != transition_region {
+                        return Err(RegionMonitorError::InvalidDimensions);
+                    }
+                    let earlier = match (before, after) {
+                        (_, None) => false,
+                        (None, Some(_)) => true,
+                        (Some(b), Some(c)) => c < b,
+                    };
+                    // Saturating comparison treats overflowed allowances as an
+                    // unbounded cap, rather than wrapping to a false rejection.
+                    let accepted = earlier
+                        && active_after <= active_before.saturating_add(activity_allowance)
+                        && flips_after <= flips_before.saturating_add(transition_allowance);
+                    Ok(RecallTradeoff {
+                        region,
+                        baseline_confirmation: before,
+                        candidate_confirmation: after,
+                        baseline_active_ticks: active_before,
+                        candidate_active_ticks: active_after,
+                        baseline_transitions: flips_before,
+                        candidate_transitions: flips_after,
+                        accepted,
+                    })
+                },
+            )
+            .collect()
     }
 }
 
@@ -132,15 +137,11 @@ impl RegionRecallMonitor {
 mod tests {
     use super::*;
 
-
     #[test]
     fn paired_frontier_integrates_durable_recall_and_cost_limits() {
-        let monitor = RegionRecallMonitor::new(
-            4,
-            &[0, 1, 2, 3],
-            &[Some(3), Some(3), Some(8), Some(8)],
-        )
-        .unwrap();
+        let monitor =
+            RegionRecallMonitor::new(4, &[0, 1, 2, 3], &[Some(3), Some(3), Some(8), Some(8)])
+                .unwrap();
         let baseline = vec![BooleanState::new(4); 3];
         let mut candidate = baseline.clone();
         for tick in [1, 2] {
@@ -154,12 +155,10 @@ mod tests {
                 .unwrap(),
             vec![3],
         );
-        assert!(
-            monitor
-                .paired_recall_frontier(&baseline, &candidate, 2, 2, 0, 0)
-                .unwrap()
-                .is_empty()
-        );
+        assert!(monitor
+            .paired_recall_frontier(&baseline, &candidate, 2, 2, 0, 0)
+            .unwrap()
+            .is_empty());
         assert_eq!(
             monitor.paired_recall_frontier(&baseline[..2], &candidate, 2, 2, 4, 2),
             Err(RegionMonitorError::InvalidDimensions),
@@ -181,11 +180,11 @@ mod tests {
         };
         let observations = vec![
             row(8, Some(4), 3, 2, true),
-            row(2, Some(3), 3, 2, true), // Dominates region 8.
-            row(4, Some(5), 1, 1, true), // Lower cost, slower recovery.
-            row(9, None, 0, 0, true),    // Censored, not a winner.
+            row(2, Some(3), 3, 2, true),  // Dominates region 8.
+            row(4, Some(5), 1, 1, true),  // Lower cost, slower recovery.
+            row(9, None, 0, 0, true),     // Censored, not a winner.
             row(1, Some(1), 0, 0, false), // Rejected by policy.
-            row(6, Some(3), 3, 2, true), // Equal objective values.
+            row(6, Some(3), 3, 2, true),  // Equal objective values.
         ];
         let original = observations.clone();
         assert_eq!(
@@ -199,9 +198,11 @@ mod tests {
     #[test]
     fn tradeoff_requires_confirmed_improvement_and_explicit_cost_allowances() {
         let monitor = RegionRecallMonitor::new(
-            5, &[0, 1, 2, 3, 4],
+            5,
+            &[0, 1, 2, 3, 4],
             &[Some(7), Some(7), Some(9), Some(9), None],
-        ).unwrap();
+        )
+        .unwrap();
         let baseline = vec![BooleanState::new(5); 3];
         let mut candidate = baseline.clone();
         for tick in [1, 2] {
@@ -209,9 +210,9 @@ mod tests {
             candidate[tick].set(1, true).unwrap();
         }
         candidate[0].set(4, true).unwrap(); // Unannotated, excluded.
-        let strict = monitor.select_paired_recall_tradeoffs(
-            &baseline, &candidate, 2, 2, 0, 0,
-        ).unwrap();
+        let strict = monitor
+            .select_paired_recall_tradeoffs(&baseline, &candidate, 2, 2, 0, 0)
+            .unwrap();
         assert_eq!(strict.len(), 2);
         assert_eq!(strict[0].region, 7);
         assert_eq!(strict[0].candidate_confirmation, Some(3));
@@ -220,15 +221,13 @@ mod tests {
         assert_eq!(strict[0].candidate_transitions, 2);
         assert!(!strict[0].accepted);
         assert!(!strict[1].accepted);
-        let allowed = monitor.select_paired_recall_tradeoffs(
-            &baseline, &candidate, 2, 2, 4, 2,
-        ).unwrap();
+        let allowed = monitor
+            .select_paired_recall_tradeoffs(&baseline, &candidate, 2, 2, 4, 2)
+            .unwrap();
         assert!(allowed[0].accepted);
         assert!(!allowed[1].accepted);
         assert_eq!(
-            monitor.select_paired_recall_tradeoffs(
-                &baseline[..2], &candidate, 2, 2, 4, 2,
-            ),
+            monitor.select_paired_recall_tradeoffs(&baseline[..2], &candidate, 2, 2, 4, 2,),
             Err(RegionMonitorError::InvalidDimensions),
         );
     }

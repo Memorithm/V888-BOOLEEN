@@ -53,7 +53,10 @@ pub fn evaluate_regional_retention(
     }
     let universe = annotations.len();
     if universe == 0
-        || baseline.iter().chain(disruption).chain(recovery)
+        || baseline
+            .iter()
+            .chain(disruption)
+            .chain(recovery)
             .any(|state| state.len() != universe)
     {
         return Err(RetentionError::InvalidDimensions);
@@ -75,10 +78,13 @@ pub fn evaluate_regional_retention(
     let mut output = Vec::with_capacity(regions.len());
     for (region, members) in regions {
         let count = |state: &BooleanState| -> usize {
-            members.iter().filter(|&&member| {
-                // All indices and state dimensions were validated above.
-                state.get(member) == Ok(true)
-            }).count()
+            members
+                .iter()
+                .filter(|&&member| {
+                    // All indices and state dimensions were validated above.
+                    state.get(member) == Ok(true)
+                })
+                .count()
         };
         let baseline_recalled = count(&baseline[baseline.len() - 1]) >= minimum_active;
         let disrupted = disruption.iter().any(|state| count(state) < minimum_active);
@@ -90,7 +96,11 @@ pub fn evaluate_regional_retention(
             active_ticks += active as u128;
             if active >= minimum_active {
                 streak += 1;
-                if baseline_recalled && disrupted && streak == durable_ticks && confirmation.is_none() {
+                if baseline_recalled
+                    && disrupted
+                    && streak == durable_ticks
+                    && confirmation.is_none()
+                {
                     confirmation = Some(index + 1);
                 }
             } else {
@@ -130,8 +140,13 @@ mod tests {
         let results = evaluate_regional_retention(
             &[0, 1, 2, 3, 4],
             &[Some(7), Some(7), Some(9), Some(9), None],
-            &baseline, &disruption, &recovery, 2, 2,
-        ).unwrap();
+            &baseline,
+            &disruption,
+            &recovery,
+            2,
+            2,
+        )
+        .unwrap();
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].region, 7);
         assert!(results[0].baseline_recalled);
@@ -148,12 +163,18 @@ mod tests {
     fn refuses_invalid_dimensions_and_budgets() {
         let b = [state(&[0])];
         let a = [Some(1), None, None, None, None];
-        assert_eq!(evaluate_regional_retention(&[0, 0], &a, &b, &b, &b, 1, 1),
-            Err(RetentionError::InvalidDimensions));
-        assert_eq!(evaluate_regional_retention(&[0], &a, &b, &b, &b, 1, 2),
-            Err(RetentionError::InvalidBudget));
-        assert_eq!(evaluate_regional_retention(&[0], &a[..4], &b, &b, &b, 1, 1),
-            Err(RetentionError::InvalidDimensions));
+        assert_eq!(
+            evaluate_regional_retention(&[0, 0], &a, &b, &b, &b, 1, 1),
+            Err(RetentionError::InvalidDimensions)
+        );
+        assert_eq!(
+            evaluate_regional_retention(&[0], &a, &b, &b, &b, 1, 2),
+            Err(RetentionError::InvalidBudget)
+        );
+        assert_eq!(
+            evaluate_regional_retention(&[0], &a[..4], &b, &b, &b, 1, 1),
+            Err(RetentionError::InvalidDimensions)
+        );
     }
 
     #[test]
@@ -161,9 +182,15 @@ mod tests {
         let empty = [state(&[])];
         let active = [state(&[0]), state(&[0])];
         let result = evaluate_regional_retention(
-            &[0], &[Some(1), None, None, None, None],
-            &empty, &empty, &active, 1, 2,
-        ).unwrap();
+            &[0],
+            &[Some(1), None, None, None, None],
+            &empty,
+            &empty,
+            &active,
+            1,
+            2,
+        )
+        .unwrap();
         assert!(!result[0].baseline_recalled);
         assert_eq!(result[0].recovery_confirmation, None);
     }
