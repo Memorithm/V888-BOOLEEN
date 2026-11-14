@@ -326,6 +326,7 @@ mod tests {
         );
         profile.total_ns = 40;
         profile.samples[0].updated_gates = usize::MAX;
+        profile.samples[1].updated_gates = 1;
         assert_eq!(profile.checked_statistics(), Err(TraceIntegrityError::Overflow));
     }
 
