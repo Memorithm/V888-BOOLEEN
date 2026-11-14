@@ -237,3 +237,4 @@ pub mod regional_episodes;
 pub mod regional_transition_profile;
 pub mod regional_lag;
 pub mod regional_candidate;
+pub mod heldout_regional_recall;
