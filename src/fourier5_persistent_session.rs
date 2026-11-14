@@ -477,6 +477,53 @@ mod tests {
     use crate::fourier5_hierarchy::{GateKind, LeafRouting};
 
     #[test]
+    fn sequential_trace_matches_independent_full_with_mixed_acceptance() {
+        let model = FiveCircleHierarchy::from_modes(
+            &[GateKind::Majority, GateKind::Parity, GateKind::Or],
+            LeafRouting::SeededShuffle(53),
+        )
+        .unwrap();
+        let planes: Vec<u64> = (0..model.input_bits())
+            .map(|i| (i as u64 + 17).wrapping_mul(0x9e3779b97f4a7c15))
+            .collect();
+        let mut session = PersistentSession::new(model.clone(), planes.clone()).unwrap();
+        let steps: Vec<_> = (0..18)
+            .map(|i| {
+                (
+                    PackedIntervention::LeafSwap {
+                        first: i,
+                        second: i + 19,
+                    },
+                    i % 3 != 1,
+                )
+            })
+            .collect();
+        assert!(matches!(
+            session.execute_verified_sequence(&steps, 17),
+            Err(HierarchyError::InvalidInput)
+        ));
+        assert_eq!(session.output(), model.infer_bitplanes(&planes).unwrap());
+        let trace = session.execute_verified_sequence(&steps, 18).unwrap();
+        let mut independent = model;
+        for ((proposal, accepted), (output, updated)) in steps.iter().zip(trace) {
+            let PackedIntervention::LeafSwap { first, second } = *proposal else {
+                unreachable!()
+            };
+            let mut routing = independent.routing().to_vec();
+            routing.swap(first, second);
+            let candidate = independent.rerouted(routing).unwrap();
+            assert_eq!(output, candidate.infer_bitplanes(&planes).unwrap());
+            if *accepted {
+                assert!(updated > 0);
+                independent = candidate;
+            } else {
+                assert_eq!(updated, 0);
+            }
+        }
+        assert_eq!(session.output(), independent.infer_bitplanes(&planes).unwrap());
+    }
+
+    #[test]
     fn verified_adaptive_matches_full_after_sequential_acceptances() {
         use crate::fourier5_sequential_adaptive::EngineCalibration;
         let base = FiveCircleHierarchy::from_modes(
