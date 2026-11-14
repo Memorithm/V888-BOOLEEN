@@ -26,16 +26,25 @@ pub fn phase_costs(samples: &[SequentialSample], window: usize) -> Option<Vec<Ph
         let start = phase.checked_mul(window)?;
         let end = start.checked_add(chunk.len())?;
         let accepted = chunk.iter().filter(|s| s.accepted).count();
-        let updated_gates = chunk.iter().try_fold(0usize, |a, s| a.checked_add(s.updated_gates))?;
-        let elapsed_ns = chunk.iter().try_fold(0u128, |a, s| a.checked_add(s.elapsed_ns))?;
+        let updated_gates = chunk
+            .iter()
+            .try_fold(0usize, |a, s| a.checked_add(s.updated_gates))?;
+        let elapsed_ns = chunk
+            .iter()
+            .try_fold(0u128, |a, s| a.checked_add(s.elapsed_ns))?;
         let verified_steps_per_second = if elapsed_ns == 0 {
             None
         } else {
             Some((chunk.len() as u128).checked_mul(1_000_000_000)? / elapsed_ns)
         };
         phases.push(PhaseCost {
-            start, end, accepted, rejected: chunk.len() - accepted,
-            updated_gates, elapsed_ns, verified_steps_per_second,
+            start,
+            end,
+            accepted,
+            rejected: chunk.len() - accepted,
+            updated_gates,
+            elapsed_ns,
+            verified_steps_per_second,
         });
     }
     Some(phases)
@@ -45,21 +54,47 @@ pub fn phase_costs(samples: &[SequentialSample], window: usize) -> Option<Vec<Ph
 mod tests {
     use super::*;
     fn sample(accepted: bool, ns: u128, gates: usize) -> SequentialSample {
-        SequentialSample { accepted, output: 0, updated_gates: gates, elapsed_ns: ns }
+        SequentialSample {
+            accepted,
+            output: 0,
+            updated_gates: gates,
+            elapsed_ns: ns,
+        }
     }
 
     #[test]
     fn phases_preserve_order_and_detect_regime_shift() {
         let trace = [
-            sample(true, 100, 7), sample(false, 100, 0),
-            sample(true, 10, 2), sample(true, 10, 3),
+            sample(true, 100, 7),
+            sample(false, 100, 0),
+            sample(true, 10, 2),
+            sample(true, 10, 3),
             sample(false, 5, 0),
         ];
         let phases = phase_costs(&trace, 2).unwrap();
         assert_eq!(phases.len(), 3);
-        assert_eq!((phases[0].start, phases[0].end, phases[0].accepted, phases[0].updated_gates), (0, 2, 1, 7));
-        assert_eq!((phases[1].start, phases[1].end, phases[1].accepted, phases[1].updated_gates), (2, 4, 2, 5));
-        assert_eq!((phases[2].start, phases[2].end, phases[2].rejected), (4, 5, 1));
+        assert_eq!(
+            (
+                phases[0].start,
+                phases[0].end,
+                phases[0].accepted,
+                phases[0].updated_gates
+            ),
+            (0, 2, 1, 7)
+        );
+        assert_eq!(
+            (
+                phases[1].start,
+                phases[1].end,
+                phases[1].accepted,
+                phases[1].updated_gates
+            ),
+            (2, 4, 2, 5)
+        );
+        assert_eq!(
+            (phases[2].start, phases[2].end, phases[2].rejected),
+            (4, 5, 1)
+        );
         assert_eq!(phases[0].verified_steps_per_second, Some(10_000_000));
         assert_eq!(phases[1].verified_steps_per_second, Some(100_000_000));
         // Independent scalar oracle for total measured time and gate work.
@@ -77,7 +112,13 @@ mod tests {
 
     #[test]
     fn arithmetic_overflow_is_rejected_not_silently_saturated() {
-        assert_eq!(phase_costs(&[sample(true, u128::MAX, 0), sample(true, 1, 0)], 2), None);
-        assert_eq!(phase_costs(&[sample(true, 1, usize::MAX), sample(true, 1, 1)], 2), None);
+        assert_eq!(
+            phase_costs(&[sample(true, u128::MAX, 0), sample(true, 1, 0)], 2),
+            None
+        );
+        assert_eq!(
+            phase_costs(&[sample(true, 1, usize::MAX), sample(true, 1, 1)], 2),
+            None
+        );
     }
 }

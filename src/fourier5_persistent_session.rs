@@ -150,9 +150,11 @@ impl PersistentSession {
                     routing.swap(first, second);
                     self.model.rerouted(routing)?
                 }
-                PackedIntervention::Parameter { layer, neuron, model } => {
-                    self.model.with_neuron_parameters(layer, neuron, model)?
-                }
+                PackedIntervention::Parameter {
+                    layer,
+                    neuron,
+                    model,
+                } => self.model.with_neuron_parameters(layer, neuron, model)?,
             };
             let oracle = candidate.infer_bitplanes(&planes)?;
             if predicted != oracle {
@@ -520,7 +522,10 @@ mod tests {
                 assert_eq!(updated, 0);
             }
         }
-        assert_eq!(session.output(), independent.infer_bitplanes(&planes).unwrap());
+        assert_eq!(
+            session.output(),
+            independent.infer_bitplanes(&planes).unwrap()
+        );
     }
 
     #[test]

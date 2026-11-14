@@ -54,11 +54,15 @@ impl SequentialProfile {
     /// the overall trace duration. Empty subsets have no statistics.
     pub fn statistics_by_acceptance(&self) -> AcceptanceStatistics {
         let subset = |accepted: bool| {
-            let samples: Vec<SequentialSample> = self.samples.iter().copied()
-                .filter(|sample| sample.accepted == accepted).collect();
-            let total_ns = samples.iter().fold(0_u128, |sum, sample| {
-                sum.saturating_add(sample.elapsed_ns)
-            });
+            let samples: Vec<SequentialSample> = self
+                .samples
+                .iter()
+                .copied()
+                .filter(|sample| sample.accepted == accepted)
+                .collect();
+            let total_ns = samples
+                .iter()
+                .fold(0_u128, |sum, sample| sum.saturating_add(sample.elapsed_ns));
             SequentialProfile {
                 samples,
                 total_ns,
@@ -66,7 +70,8 @@ impl SequentialProfile {
                 rejected_count: 0,
                 updated_gates: 0,
                 vm_hwm_kib: None,
-            }.statistics()
+            }
+            .statistics()
         };
         AcceptanceStatistics {
             accepted: subset(true),
@@ -118,11 +123,7 @@ impl ColdSequentialProfile {
         if self.trace.samples.is_empty() || self.end_to_end_ns == 0 {
             return None;
         }
-        Some(
-            (self.trace.samples.len() as u128)
-                .saturating_mul(1_000_000_000)
-                / self.end_to_end_ns,
-        )
+        Some((self.trace.samples.len() as u128).saturating_mul(1_000_000_000) / self.end_to_end_ns)
     }
 
     /// Fraction of end-to-end time spent constructing the cold cache,
@@ -132,9 +133,7 @@ impl ColdSequentialProfile {
         if self.end_to_end_ns == 0 || self.cache_build_ns > self.end_to_end_ns {
             return None;
         }
-        let share = self.cache_build_ns
-            .saturating_mul(1_000_000)
-            / self.end_to_end_ns;
+        let share = self.cache_build_ns.saturating_mul(1_000_000) / self.end_to_end_ns;
         Some(share.min(1_000_000) as u32)
     }
 }
@@ -241,7 +240,10 @@ mod tests {
     #[test]
     fn cold_metrics_include_setup_and_reject_inconsistent_time() {
         let sample = SequentialSample {
-            accepted: true, output: 1, updated_gates: 3, elapsed_ns: 200,
+            accepted: true,
+            output: 1,
+            updated_gates: 3,
+            elapsed_ns: 200,
         };
         let trace = SequentialProfile {
             samples: vec![sample],
@@ -258,11 +260,17 @@ mod tests {
         };
         assert_eq!(cold.end_to_end_steps_per_second(), Some(1_000_000));
         assert_eq!(cold.cache_build_share_ppm(), Some(800_000));
-        assert_eq!(cold.trace.statistics().unwrap().steps_per_second, Some(5_000_000));
+        assert_eq!(
+            cold.trace.statistics().unwrap().steps_per_second,
+            Some(5_000_000)
+        );
         let empty = ColdSequentialProfile {
             cache_build_ns: 0,
             end_to_end_ns: 0,
-            trace: SequentialProfile { samples: vec![], ..trace.clone() },
+            trace: SequentialProfile {
+                samples: vec![],
+                ..trace.clone()
+            },
         };
         assert_eq!(empty.end_to_end_steps_per_second(), None);
         assert_eq!(empty.cache_build_share_ppm(), None);
@@ -284,23 +292,39 @@ mod tests {
             updated_gates: 0,
             vm_hwm_kib: None,
         };
-        assert_eq!(profile.statistics_by_acceptance(), AcceptanceStatistics {
-            accepted: None, rejected: None,
-        });
+        assert_eq!(
+            profile.statistics_by_acceptance(),
+            AcceptanceStatistics {
+                accepted: None,
+                rejected: None,
+            }
+        );
         for (accepted, elapsed_ns) in [(true, 100_u128), (false, 2), (true, 300), (false, 4)] {
             profile.samples.push(SequentialSample {
-                accepted, output: 0, updated_gates: 0, elapsed_ns,
+                accepted,
+                output: 0,
+                updated_gates: 0,
+                elapsed_ns,
             });
             profile.total_ns += elapsed_ns;
         }
         let stats = profile.statistics_by_acceptance();
         let accepted = stats.accepted.unwrap();
         let rejected = stats.rejected.unwrap();
-        assert_eq!((accepted.steps, accepted.min_ns, accepted.max_ns), (2, 100, 300));
-        assert_eq!((rejected.steps, rejected.min_ns, rejected.max_ns), (2, 2, 4));
+        assert_eq!(
+            (accepted.steps, accepted.min_ns, accepted.max_ns),
+            (2, 100, 300)
+        );
+        assert_eq!(
+            (rejected.steps, rejected.min_ns, rejected.max_ns),
+            (2, 2, 4)
+        );
         assert_eq!(accepted.steps_per_second, Some(5_000_000));
         assert_eq!(rejected.steps_per_second, Some(333_333_333));
-        assert_ne!(accepted.steps_per_second, profile.statistics().unwrap().steps_per_second);
+        assert_ne!(
+            accepted.steps_per_second,
+            profile.statistics().unwrap().steps_per_second
+        );
     }
 
     #[test]
@@ -314,7 +338,9 @@ mod tests {
             vm_hwm_kib: None,
         };
         assert_eq!(profile.statistics(), None);
-        for duration in [100_u128, 1, 50, 10, 20, 5, 2, 3, 4, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17] {
+        for duration in [
+            100_u128, 1, 50, 10, 20, 5, 2, 3, 4, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17,
+        ] {
             profile.samples.push(SequentialSample {
                 accepted: false,
                 output: 0,
@@ -329,7 +355,10 @@ mod tests {
         assert_eq!(stats.median_ns, 10);
         assert_eq!(stats.p95_ns, 50);
         assert_eq!(stats.max_ns, 100);
-        assert_eq!(stats.steps_per_second, Some(20_000_000_000 / profile.total_ns));
+        assert_eq!(
+            stats.steps_per_second,
+            Some(20_000_000_000 / profile.total_ns)
+        );
         profile.total_ns = 0;
         assert_eq!(profile.statistics().unwrap().steps_per_second, None);
     }
@@ -339,26 +368,43 @@ mod tests {
         let model = FiveCircleHierarchy::from_modes(
             &[GateKind::Majority, GateKind::Parity],
             LeafRouting::SeededShuffle(71),
-        ).unwrap();
+        )
+        .unwrap();
         let planes = vec![0x55aa_55aa_55aa_55aa; model.input_bits()];
-        let steps = [(PackedIntervention::LeafSwap { first: 0, second: 1 }, true)];
+        let steps = [(
+            PackedIntervention::LeafSwap {
+                first: 0,
+                second: 1,
+            },
+            true,
+        )];
         assert!(matches!(
             profile_cold_verified_sequence(model.clone(), planes.clone(), &steps, 0),
             Err(HierarchyError::InvalidInput)
         ));
-        let cold = profile_cold_verified_sequence(model.clone(), planes.clone(), &steps, 1).unwrap();
+        let cold =
+            profile_cold_verified_sequence(model.clone(), planes.clone(), &steps, 1).unwrap();
         assert_eq!(cold.trace.samples.len(), 1);
         assert_eq!(cold.trace.accepted_count, 1);
-        assert_eq!(cold.end_to_end_ns, cold.cache_build_ns + cold.trace.total_ns);
+        assert_eq!(
+            cold.end_to_end_ns,
+            cold.cache_build_ns + cold.trace.total_ns
+        );
         let mut oracle_routing = model.routing().to_vec();
         oracle_routing.swap(0, 1);
         let oracle = model.rerouted(oracle_routing).unwrap();
-        assert_eq!(cold.trace.samples[0].output, oracle.infer_bitplanes(&planes).unwrap());
+        assert_eq!(
+            cold.trace.samples[0].output,
+            oracle.infer_bitplanes(&planes).unwrap()
+        );
     }
 
     #[test]
     fn parses_linux_hwm_strictly() {
-        assert_eq!(parse_vm_hwm_kib("Name:\ttest\nVmHWM:\t1234 kB\n"), Some(1234));
+        assert_eq!(
+            parse_vm_hwm_kib("Name:\ttest\nVmHWM:\t1234 kB\n"),
+            Some(1234)
+        );
         assert_eq!(parse_vm_hwm_kib("VmHWM:\t12 MB\n"), None);
         assert_eq!(parse_vm_hwm_kib("VmHWM:\tbad kB\n"), None);
         assert_eq!(parse_vm_hwm_kib("VmRSS:\t1234 kB\n"), None);
@@ -369,15 +415,34 @@ mod tests {
         let base = FiveCircleHierarchy::from_modes(
             &[GateKind::Majority, GateKind::Parity, GateKind::Or],
             LeafRouting::SeededShuffle(53),
-        ).unwrap();
+        )
+        .unwrap();
         let planes: Vec<u64> = (0..base.input_bits())
             .map(|i| (i as u64 + 17).wrapping_mul(0x9e3779b97f4a7c15))
             .collect();
         let mut session = PersistentSession::new(base.clone(), planes.clone()).unwrap();
         let steps = [
-            (PackedIntervention::LeafSwap { first: 0, second: 19 }, true),
-            (PackedIntervention::LeafSwap { first: 3, second: 27 }, false),
-            (PackedIntervention::LeafSwap { first: 7, second: 38 }, true),
+            (
+                PackedIntervention::LeafSwap {
+                    first: 0,
+                    second: 19,
+                },
+                true,
+            ),
+            (
+                PackedIntervention::LeafSwap {
+                    first: 3,
+                    second: 27,
+                },
+                false,
+            ),
+            (
+                PackedIntervention::LeafSwap {
+                    first: 7,
+                    second: 38,
+                },
+                true,
+            ),
         ];
         assert!(matches!(
             profile_verified_sequence(&mut session, &steps, 2),
@@ -390,16 +455,24 @@ mod tests {
         assert_eq!(profile.samples[1].updated_gates, 0);
         assert_eq!(
             profile.updated_gates,
-            profile.samples.iter().map(|s| s.updated_gates).sum::<usize>()
+            profile
+                .samples
+                .iter()
+                .map(|s| s.updated_gates)
+                .sum::<usize>()
         );
         let mut oracle = base;
         for ((proposal, accepted), sample) in steps.iter().zip(&profile.samples) {
-            let PackedIntervention::LeafSwap { first, second } = *proposal else { unreachable!() };
+            let PackedIntervention::LeafSwap { first, second } = *proposal else {
+                unreachable!()
+            };
             let mut routing = oracle.routing().to_vec();
             routing.swap(first, second);
             let candidate = oracle.rerouted(routing).unwrap();
             assert_eq!(sample.output, candidate.infer_bitplanes(&planes).unwrap());
-            if *accepted { oracle = candidate; }
+            if *accepted {
+                oracle = candidate;
+            }
         }
         assert_eq!(session.output(), oracle.infer_bitplanes(&planes).unwrap());
     }
