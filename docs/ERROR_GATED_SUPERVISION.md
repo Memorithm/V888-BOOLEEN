@@ -118,6 +118,89 @@ positive in ≥ 16/20 seeds, and its bootstrap 95 % CI lower bound is > 0;
 cargo +1.89 run --release -- bench-error-gated --csv results/error-gated-v1.csv
 ```
 
-## Results
+## Results (pre-registered grid; CSV `results/error-gated-v1.csv`)
 
-(Filled in only after the pre-registered run.)
+CSV: 60 rows (20 seeds × 3 arms), sha256
+`eafa390a9d1947592ee78aa090fdeede08ff23be82401cb11bb53c696ac653cd`. A second
+run gave a byte-identical CSV and identical stdout. Run time is about 0.3 s
+(release build, CPU). `topology_unchanged=true` for every row. On seeds
+1..10 the `supervised` rows reproduce the #43 control exactly (A test 0.870,
+retained A 0.617, B test 0.803, forgetting 0.253); bit-identity with the
+#39/#43 control code path is also unit-tested. On average a seed has 291.6
+agree and 271.4 conflict test pairs. Values are mean ± sample sd over 20
+seeds; counters are means over A+B.
+
+| arm | A train | A test (after A) | A test after B | forgetting | B test | agree forgetting | conflict forgetting | B test agree / conflict | targets updated | attempts | weights changed | saturated after A / B |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| supervised (control) | 0.935±0.029 | 0.857±0.039 | 0.603±0.044 | 0.253±0.062 | 0.803±0.030 | −0.038±0.049 | 0.559±0.071 | 0.901 / 0.709 | 4520.4 | 5192.4 | 2218.2 | 100.7 / 114.0 |
+| error-gated | 1.000±0.000 | 0.928±0.036 | 0.583±0.052 | 0.346±0.066 | 0.920±0.025 | −0.058±0.043 | 0.774±0.061 | 0.986 / 0.849 | 122.6 | 136.9 | 129.2 | 62.5 / 70.3 |
+| margin-gated-4 | 1.000±0.000 | 0.928±0.036 | 0.579±0.052 | 0.350±0.066 | 0.920±0.025 | −0.054±0.043 | 0.779±0.060 | 0.983 / 0.854 | 340.0 | 380.1 | 366.6 | 62.5 / 69.8 |
+
+Paired against `supervised` (same seed). Each cell: mean ± sd
+[bootstrap 95 % CI] better/tied/worse seeds. For forgetting columns
+"better" means x forgets less; for the others x is higher.
+
+| x | Δ forgetting | Δ agree forgetting | Δ conflict forgetting | Δ A test | Δ retained A | Δ B test | trade sum | rule (H1/H2) | H3 |
+|---|---|---|---|---|---|---|---|---|---|
+| error-gated | −0.092±0.037 [−0.108, −0.076] 0/0/20 | +0.019±0.048 [+0.000, +0.040] 12/1/7 | −0.215±0.054 [−0.239, −0.193] 0/0/20 | **+0.072±0.026 [+0.060, +0.082] 20/0/0** | −0.021±0.022 [−0.030, −0.011] 3/0/17 | **+0.116±0.034 [+0.103, +0.131] 20/0/0** | +0.095±0.031 [+0.083, +0.108] 20/0/0 | **fails (forgetting worse)** | **passes** |
+| margin-gated-4 | −0.096±0.036 [−0.112, −0.081] 0/0/20 | +0.016±0.049 [−0.005, +0.037] 12/1/7 | −0.220±0.052 [−0.243, −0.198] 0/0/20 | **+0.072±0.026 [+0.060, +0.082] 20/0/0** | −0.025±0.023 [−0.035, −0.015] 3/0/17 | **+0.116±0.033 [+0.102, +0.131] 20/0/0** | +0.091±0.031 [+0.079, +0.105] 20/0/0 | **fails (forgetting worse)** | **passes** |
+
+Control agree-pair forgetting (H4, one-sample): −0.038±0.049
+[−0.059, −0.018], > 0 in 4/20 seeds.
+
+## Pre-stated readings
+
+* **H1 (error-gated reduces forgetting): not supported — the opposite.**
+  Forgetting is *higher* than the control by 0.092 (20/20 seeds, CI
+  [−0.108, −0.076]). Guards (2) and (3) hold with large margins: A test
+  +0.072 and B test +0.116.
+* **H2 (margin-gated-4 reduces forgetting): not supported**, same pattern
+  (−0.096 forgetting, +0.072 A test, +0.116 B test).
+* **H3 (generalisation): supported.** Both gated arms raise held-out A test
+  after A by +0.072 and B test after B by +0.116, in 20/20 seeds, with
+  bootstrap CIs well above 0, using ~17× fewer weight changes (129 vs 2218)
+  and ~38× fewer edge update attempts (137 vs 5192) for the same 256 + 256
+  episodes.
+* **H4 (avoidable forgetting in the control): not supported.** On agree
+  pairs the control does not forget at all; B training *improves* them
+  (agree A test 0.862 → 0.901). All of the control's forgetting is on
+  conflict pairs (0.559). This supports #43's interpretation on this task:
+  forgetting here is the unavoidable conflict part, so protection rules
+  can only trade it against B at ~1:1.
+
+## Findings, including negative ones
+
+* The gated rule is a better learner, not a better rememberer. It fits A
+  train perfectly (1.000 vs 0.935), generalises better to held-out patterns
+  on both tasks, and the trade sum (Δ retained A + Δ B) is +0.095 vs the
+  control (20/20 seeds), the first B888-4 arm with a clearly positive trade
+  sum. It also beats every graded/protection arm of #39/#43 on B test
+  (0.920 vs ≤ 0.803).
+* It "forgets" more because it learns B better: on conflict pairs, where B
+  must overwrite A, it moves A accuracy from 0.925 to 0.151 (control 0.850
+  → 0.291). On agree pairs it retains slightly better than the control
+  (agree forgetting −0.058 vs −0.038, CI of the difference [+0.000,
+  +0.040], 12/1/7 seeds — not significant by the pre-stated rule).
+* Retained A after B is slightly lower than the control (−0.021, 17/20
+  seeds worse). By the pre-stated rule this is a forgetting failure, and we
+  report it as such.
+* The unconditional supervised step is wasteful on this task: it drives
+  ~101 of 144 weights to the 0/15 plateaus after A (gated: ~63) and
+  spends ~2200 weight changes where ~130 suffice.
+* `margin-gated-4` adds ~2.8× more updates than `error-gated` and changes
+  nothing measurable; the positive margin is not useful at threshold 1.
+* Consequence for the series: on this task (50 % per-edge label flip, no
+  context input) forgetting cannot be reduced below the conflict share
+  without losing B. A forgetting claim would need a task with a context
+  signal or a lower flip rate; that was **not** run here (constants fixed
+  before the run).
+
+## Limitations
+
+Synthetic generated graph only (not BANC; DOI 10.7910/DVN/7WTH1N is not
+built on the box). The task is an artificial OR rule with a 50 % per-edge
+label flip between A and B. One graph size (144 edges), one margin, init
+weight 1, threshold 1, balanced accuracy on 64 held-out test patterns, 20
+seeds. The gated arms use the supervised teacher (full labels), so they
+are compared to the supervised control only, not to the reward-only graded
+learners as a like-for-like signal budget. No biological claims.
