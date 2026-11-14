@@ -66,6 +66,40 @@ impl SequentialProfile {
     }
 }
 
+/// Cold-start trace: measures cache construction separately from verified steps.
+/// The reported end-to-end time includes construction and all oracle checks.
+/// VmHWM remains process-wide and must not be interpreted as per-run allocation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ColdSequentialProfile {
+    pub cache_build_ns: u128,
+    pub end_to_end_ns: u128,
+    pub trace: SequentialProfile,
+}
+
+/// Construct a fresh cache, then execute the exact verified sequential trace.
+/// This prevents comparing a warm incremental cache with a cold Full baseline.
+pub fn profile_cold_verified_sequence(
+    model: crate::fourier5_hierarchy::FiveCircleHierarchy,
+    planes: Vec<u64>,
+    steps: &[(PackedIntervention, bool)],
+    max_steps: usize,
+) -> Result<ColdSequentialProfile, HierarchyError> {
+    // Validate the step budget before allocating or building the cache.
+    if steps.len() > max_steps {
+        return Err(HierarchyError::InvalidInput);
+    }
+    let start = Instant::now();
+    let mut session = PersistentSession::new(model, planes)?;
+    let cache_build_ns = start.elapsed().as_nanos();
+    let trace = profile_verified_sequence(&mut session, steps, max_steps)?;
+    let end_to_end_ns = cache_build_ns.saturating_add(trace.total_ns);
+    Ok(ColdSequentialProfile {
+        cache_build_ns,
+        end_to_end_ns,
+        trace,
+    })
+}
+
 /// Read Linux process-wide peak RSS. None on other OSes or malformed/unavailable procfs.
 /// This counter is cumulative over the process lifetime and cannot isolate this call.
 pub fn process_vm_hwm_kib() -> Option<u64> {
@@ -170,6 +204,28 @@ mod tests {
         assert_eq!(stats.steps_per_second, Some(20_000_000_000 / profile.total_ns));
         profile.total_ns = 0;
         assert_eq!(profile.statistics().unwrap().steps_per_second, None);
+    }
+
+    #[test]
+    fn cold_trace_accounts_for_build_and_rejects_oversized_budget() {
+        let model = FiveCircleHierarchy::from_modes(
+            &[GateKind::Majority, GateKind::Parity],
+            LeafRouting::SeededShuffle(71),
+        ).unwrap();
+        let planes = vec![0x55aa_55aa_55aa_55aa; model.input_bits()];
+        let steps = [(PackedIntervention::LeafSwap { first: 0, second: 1 }, true)];
+        assert!(matches!(
+            profile_cold_verified_sequence(model.clone(), planes.clone(), &steps, 0),
+            Err(HierarchyError::InvalidInput)
+        ));
+        let cold = profile_cold_verified_sequence(model.clone(), planes.clone(), &steps, 1).unwrap();
+        assert_eq!(cold.trace.samples.len(), 1);
+        assert_eq!(cold.trace.accepted_count, 1);
+        assert_eq!(cold.end_to_end_ns, cold.cache_build_ns + cold.trace.total_ns);
+        let mut oracle_routing = model.routing().to_vec();
+        oracle_routing.swap(0, 1);
+        let oracle = model.rerouted(oracle_routing).unwrap();
+        assert_eq!(cold.trace.samples[0].output, oracle.infer_bitplanes(&planes).unwrap());
     }
 
     #[test]
