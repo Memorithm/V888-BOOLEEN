@@ -79,6 +79,28 @@ impl PersistentSession {
         Ok(changes[&0])
     }
 
+    /// Exact per-lane Boolean influence of a proposed intervention on the
+    /// current output. A set bit means that lane's final prediction flips.
+    /// The session remains unchanged, including on invalid proposals.
+    /// This is an output sensitivity, not a hidden teacher activation.
+    pub fn output_flip_mask(&self, proposal: PackedIntervention) -> Result<u64, HierarchyError> {
+        Ok(self.output() ^ self.propose(proposal)?)
+    }
+
+    /// Evaluate a bounded sequence of independent counterfactuals against
+    /// the same accepted baseline. No proposal is committed by this method.
+    /// The caller supplies the bound to avoid unbounded batch allocation.
+    pub fn output_flip_masks(
+        &self,
+        proposals: &[PackedIntervention],
+        max_proposals: usize,
+    ) -> Result<Vec<u64>, HierarchyError> {
+        if proposals.len() > max_proposals {
+            return Err(HierarchyError::InvalidInput);
+        }
+        proposals.iter().copied().map(|p| self.output_flip_mask(p)).collect()
+    }
+
     /// Atomic acceptance: validate and construct the candidate first, then
     /// refresh only changed leaves/ancestors. Failed changes leave state intact.
     pub fn accept(&mut self, proposal: PackedIntervention) -> Result<usize, HierarchyError> {
@@ -124,6 +146,38 @@ mod tests {
     use super::*;
     use crate::fourier5_hierarchy::{GateKind, LeafRouting};
     use crate::fourier5::FiveCircle;
+
+    #[test]
+    fn output_sensitivity_matches_independent_full_inference_and_preserves_state() {
+        let base = FiveCircleHierarchy::from_modes(
+            &[GateKind::Majority, GateKind::Majority, GateKind::Majority],
+            LeafRouting::SeededShuffle(23),
+        ).unwrap();
+        let planes: Vec<u64> = (0..base.input_bits())
+            .map(|i| (i as u64 + 7).wrapping_mul(0xd6e8feb86659fd93))
+            .collect();
+        let session = PersistentSession::new(base.clone(), planes.clone()).unwrap();
+        let baseline = base.infer_bitplanes(&planes).unwrap();
+        let proposals = [
+            PackedIntervention::LeafSwap { first: 0, second: 1 },
+            PackedIntervention::LeafSwap { first: 3, second: 42 },
+        ];
+        let actual = session.output_flip_masks(&proposals, 2).unwrap();
+        for (proposal, &mask) in proposals.iter().zip(&actual) {
+            let PackedIntervention::LeafSwap { first, second } = *proposal else { unreachable!() };
+            let mut routing = base.routing().to_vec();
+            routing.swap(first, second);
+            let expected = base.rerouted(routing).unwrap().infer_bitplanes(&planes).unwrap();
+            assert_eq!(mask, baseline ^ expected);
+        }
+        assert_eq!(session.output(), baseline);
+        assert_eq!(session.updated_gates, 0);
+        assert!(matches!(session.output_flip_masks(&proposals, 1), Err(HierarchyError::InvalidInput)));
+        assert!(matches!(session.output_flip_mask(PackedIntervention::LeafSwap {
+            first: 0, second: base.input_bits()
+        }), Err(HierarchyError::InvalidRouting)));
+        assert_eq!(session.output(), baseline);
+    }
 
     #[test]
     fn accepted_and_rejected_sequences_match_full_oracle() {
