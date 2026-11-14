@@ -28,7 +28,8 @@ pub fn evaluate_heldout_regional_recall(
     if training.is_empty() || heldout.is_empty() {
         return Err(RecallError::EmptyHistory);
     }
-    if training.len() > 1000 || heldout.len() > 1000
+    if training.len() > 1000
+        || heldout.len() > 1000
         || minimum_training_observations == 0
         || maximum_members_per_region == 0
         || minimum_recall_members == 0
@@ -36,7 +37,11 @@ pub fn evaluate_heldout_regional_recall(
         return Err(RecallError::ZeroBudget);
     }
     let universe = annotations.len();
-    if training.iter().chain(heldout).any(|state| state.len() != universe) {
+    if training
+        .iter()
+        .chain(heldout)
+        .any(|state| state.len() != universe)
+    {
         return Err(RecallError::LengthMismatch);
     }
     let mut regions = BTreeMap::<u32, Vec<(usize, usize)>>::new();
@@ -57,9 +62,8 @@ pub fn evaluate_heldout_regional_recall(
     let mut result = Vec::new();
     for (region_id, mut candidates) in regions {
         candidates.retain(|&(index, _)| counts[index] >= minimum_training_observations);
-        candidates.sort_unstable_by(|a, b| {
-            counts[b.0].cmp(&counts[a.0]).then_with(|| a.0.cmp(&b.0))
-        });
+        candidates
+            .sort_unstable_by(|a, b| counts[b.0].cmp(&counts[a.0]).then_with(|| a.0.cmp(&b.0)));
         candidates.truncate(maximum_members_per_region);
         if candidates.is_empty() {
             continue;
@@ -68,10 +72,12 @@ pub fn evaluate_heldout_regional_recall(
             universe,
             candidates.into_iter().map(|(index, _)| index).collect(),
         )?;
-        let training_matches = training.iter()
+        let training_matches = training
+            .iter()
             .filter(|state| circuit.recall(state, minimum_recall_members) == Ok(true))
             .count();
-        let heldout_matches = heldout.iter()
+        let heldout_matches = heldout
+            .iter()
             .filter(|state| circuit.recall(state, minimum_recall_members) == Ok(true))
             .count();
         result.push(HeldoutRegionalRecall {
@@ -103,10 +109,25 @@ mod tests {
         let train = [state(4, &[0, 2]), state(4, &[0, 2])];
         let heldout = [state(4, &[1, 2, 3]), state(4, &[1, 3])];
         let outcome = evaluate_heldout_regional_recall(&train, &heldout, &labels, 2, 1, 1).unwrap();
-        assert_eq!(outcome, vec![
-            HeldoutRegionalRecall { region_id: 1, members: vec![2], training_matches: 2, heldout_matches: 1, heldout_steps: 2 },
-            HeldoutRegionalRecall { region_id: 2, members: vec![0], training_matches: 2, heldout_matches: 0, heldout_steps: 2 },
-        ]);
+        assert_eq!(
+            outcome,
+            vec![
+                HeldoutRegionalRecall {
+                    region_id: 1,
+                    members: vec![2],
+                    training_matches: 2,
+                    heldout_matches: 1,
+                    heldout_steps: 2
+                },
+                HeldoutRegionalRecall {
+                    region_id: 2,
+                    members: vec![0],
+                    training_matches: 2,
+                    heldout_matches: 0,
+                    heldout_steps: 2
+                },
+            ]
+        );
         assert_eq!(train[0].active_count(), 2);
         assert_eq!(heldout[0].active_count(), 3);
     }
@@ -126,11 +147,29 @@ mod tests {
     fn validates_both_partitions_and_budgets() {
         let labels = [Some(1)];
         let valid = [state(1, &[0])];
-        assert_eq!(evaluate_heldout_regional_recall(&[], &valid, &labels, 1, 1, 1), Err(RecallError::EmptyHistory));
-        assert_eq!(evaluate_heldout_regional_recall(&valid, &[], &labels, 1, 1, 1), Err(RecallError::EmptyHistory));
-        assert_eq!(evaluate_heldout_regional_recall(&valid, &valid, &labels, 0, 1, 1), Err(RecallError::ZeroBudget));
-        assert_eq!(evaluate_heldout_regional_recall(&valid, &valid, &labels, 1, 0, 1), Err(RecallError::ZeroBudget));
-        assert_eq!(evaluate_heldout_regional_recall(&valid, &valid, &labels, 1, 1, 0), Err(RecallError::ZeroBudget));
-        assert_eq!(evaluate_heldout_regional_recall(&valid, &[state(2, &[0])], &labels, 1, 1, 1), Err(RecallError::LengthMismatch));
+        assert_eq!(
+            evaluate_heldout_regional_recall(&[], &valid, &labels, 1, 1, 1),
+            Err(RecallError::EmptyHistory)
+        );
+        assert_eq!(
+            evaluate_heldout_regional_recall(&valid, &[], &labels, 1, 1, 1),
+            Err(RecallError::EmptyHistory)
+        );
+        assert_eq!(
+            evaluate_heldout_regional_recall(&valid, &valid, &labels, 0, 1, 1),
+            Err(RecallError::ZeroBudget)
+        );
+        assert_eq!(
+            evaluate_heldout_regional_recall(&valid, &valid, &labels, 1, 0, 1),
+            Err(RecallError::ZeroBudget)
+        );
+        assert_eq!(
+            evaluate_heldout_regional_recall(&valid, &valid, &labels, 1, 1, 0),
+            Err(RecallError::ZeroBudget)
+        );
+        assert_eq!(
+            evaluate_heldout_regional_recall(&valid, &[state(2, &[0])], &labels, 1, 1, 1),
+            Err(RecallError::LengthMismatch)
+        );
     }
 }
