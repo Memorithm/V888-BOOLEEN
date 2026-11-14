@@ -440,7 +440,7 @@ mod tests {
             seed: 1,
         };
         assert!(matches!(
-            select_by_validation(&model, &rows[..64], &rows[64..], config, &[1]),
+            select_by_validation(&model, &rows[..64], &rows[32..96], config, &[1]),
             Err(CreditError::DuplicateInput)
         ));
     }
