@@ -171,6 +171,14 @@ impl RecentPairedPolicy {
         })
     }
 
+    /// Discard stale timings after an accepted structural edit or cache rebuild.
+    /// Call before calibrating the new circuit; no TEST/OOD samples are admitted.
+    /// Without invalidation, timings from a previous topology could select a
+    /// slower engine even when the cone ratio remains in the same bucket.
+    pub fn invalidate_after_structural_change(&mut self) {
+        self.windows = [Window::default(); 4];
+    }
+
     pub fn choose(&self, cone: usize, total: usize) -> Result<Engine, RecentPolicyError> {
         Ok(self.windows[Self::bucket(cone, total)?].choice())
     }
@@ -258,6 +266,27 @@ mod tests {
         }
         assert_eq!(p.choose(2, 100), Ok(Engine::Incremental));
     }
+    #[test]
+    fn structural_change_invalidates_every_bucket_and_requires_recalibration() {
+        let mut policy = RecentPairedPolicy::default();
+        for _ in 0..8 {
+            policy.record_verified(2, 100, 1, 1, 100, 10).unwrap();
+            policy.record_verified(40, 100, 1, 1, 100, 10).unwrap();
+        }
+        assert_eq!(policy.choose(2, 100), Ok(Engine::Incremental));
+        assert_eq!(policy.choose(40, 100), Ok(Engine::Incremental));
+        policy.invalidate_after_structural_change();
+        assert_eq!(policy.choose(2, 100), Ok(Engine::Full));
+        assert_eq!(policy.choose(40, 100), Ok(Engine::Full));
+        for _ in 0..7 {
+            policy.record_verified(2, 100, 1, 1, 100, 10).unwrap();
+        }
+        assert_eq!(policy.choose(2, 100), Ok(Engine::Full));
+        policy.record_verified(2, 100, 1, 1, 100, 10).unwrap();
+        assert_eq!(policy.choose(2, 100), Ok(Engine::Incremental));
+        assert_eq!(policy.choose(40, 100), Ok(Engine::Full));
+    }
+
     #[test]
     fn independent_bucket_and_strict_threshold() {
         let mut p = RecentPairedPolicy::default();
