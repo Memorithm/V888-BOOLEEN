@@ -41,6 +41,7 @@ pub mod nt_gates;
 pub mod online_recall;
 pub mod plasticity;
 pub mod recurrent_csr;
+pub mod recovery_profile;
 pub mod region_activation;
 pub mod reward_limits;
 pub mod source_holdout;
