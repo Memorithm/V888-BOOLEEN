@@ -13,6 +13,7 @@ use v888_booleen::consolidation::{
 use v888_booleen::consolidation_scale as scale;
 use v888_booleen::eligibility_trace as et;
 use v888_booleen::engine::BooleanEngine;
+use v888_booleen::error_gated as eg;
 use v888_booleen::full_synapse::{pack_records, FullSynapseReader};
 use v888_booleen::generalization_bench as genbench;
 use v888_booleen::graded_reward as gr;
@@ -134,6 +135,7 @@ fn help() {
     println!("  bench-eligibility-traces [--graph brain.v888b] [--seeds 1,..,10] [--init 1] [--csv out.csv]  (eligibility trace + reward-prediction error remedy for scalar / delayed credit vs #34 reward arm and supervised control; GENERATED synthetic graph by default)");
     println!("  bench-consolidated-graded [--graph brain.v888b] [--seeds 1,..,10] [--init 1] [--csv out.csv]  (consolidation 1-of-4 + bounded 1-in-8 A rehearsal on supervised control, trace-group-8, trace-per-target; equal budget; GENERATED synthetic graph by default)");
     println!("  bench-importance-protection [--graph brain.v888b] [--seeds 1,..,10] [--init 1] [--csv out.csv]  (importance-weighted freeze of top-credit A edges 25%/50% + task-gated plasticity vs #39 consolidate; equal budget; GENERATED synthetic graph by default)");
+    println!("  bench-error-gated [--graph brain.v888b] [--seeds 1,..,20] [--init 1] [--csv out.csv]  (error-gated / margin-gated-4 supervised updates vs matched supervised control; agree/conflict forgetting split; bootstrap CIs; equal budget; GENERATED synthetic graph by default)");
     println!("  bench-graded-reward [--graph brain.v888b] [--seeds 1,..,10] [--init 1] [--csv out.csv]  (graded reward ladder bit/fraction/group-k/per-target through the #36 trace + episode-stamped tags for delayed scalars; GENERATED synthetic graph by default)");
     println!("  train-plasticity --graph brain.v888b --episodes labeled.csv --output weights.v888pls [--epochs 1]");
     println!("  score-plasticity --graph brain.v888b --weights weights.v888pls --episodes labeled.csv [--threshold 1]");
@@ -1014,6 +1016,138 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("H2_task_gated_passes_both_graded={h2}");
             println!("H3_better_exchange_than_1to1={h3}");
             println!("H4_tradeoff_vs_control={h4}");
+            println!(
+                "topology_unchanged={}",
+                rows.iter().all(|r| r.topology_unchanged)
+            );
+            println!("evaluation_scope=synthetic_or_unverified_graph_artificial_labels_not_BANC_not_biological");
+        }
+        Some("bench-error-gated") => {
+            let allowed = ["--graph", "--seeds", "--init", "--csv"];
+            for flag in args.iter().skip(1).filter(|arg| arg.starts_with("--")) {
+                if !allowed.contains(&flag.as_str()) {
+                    return Err(format!("unknown bench-error-gated option: {flag}").into());
+                }
+            }
+            let seeds = optional(&args, "--seeds")
+                .unwrap_or("1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20")
+                .split(',')
+                .map(str::parse::<u64>)
+                .collect::<Result<Vec<_>, _>>()?;
+            let init = optional(&args, "--init").unwrap_or("1").parse::<u8>()?;
+            let shape = genbench::GraphShape {
+                sources: 64,
+                targets: 24,
+                fan_in: 6,
+            };
+            let spec = genbench::GenSpec {
+                active: 4,
+                train_patterns: 32,
+                test_patterns: 64,
+                rounds_a: 8,
+                rounds_b: 8,
+                positive_pct: 50,
+                flip_pct: 50,
+                init_weight: init,
+            };
+            let owned = match optional(&args, "--graph") {
+                Some(path) => Some(Connectome::load(Path::new(path))?),
+                None => None,
+            };
+            let graph_label = if owned.is_some() {
+                "PROVIDED_GRAPH"
+            } else {
+                "GENERATED_SYNTHETIC"
+            };
+            let rows = eg::run_grid(owned.as_ref(), &shape, &spec, &seeds)?;
+            if let Some(path) = optional(&args, "--csv") {
+                use std::io::Write;
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)?
+                    .write_all(eg::to_csv(&rows, graph_label).as_bytes())?;
+            }
+            println!("v888_error_gated_schema=b888-4-error-gated-v1");
+            if owned.is_some() {
+                println!("graph=PROVIDED_GRAPH (task labels artificial)");
+            } else {
+                println!("graph=GENERATED_SYNTHETIC sources=64 targets=24 fan_in=6 (not BANC; real BANC V888 graph DOI 10.7910/DVN/7WTH1N not available here)");
+            }
+            println!(
+                "seeds={} init={init} active=4 train_patterns=32 test_patterns=64 rounds_a=8 rounds_b=8 flip_pct=50 threshold={} metric=balanced_accuracy margin={} boot_resamples={} boot_seed={:#x}",
+                seeds.len(),
+                eg::THRESHOLD,
+                eg::MARGIN,
+                eg::BOOT_RESAMPLES,
+                eg::BOOT_SEED,
+            );
+            let fmt = |s: genbench::Spread| format!("{:.3}±{:.3}", s.mean, s.sd);
+            let stat = |g: eg::Gate, f: &dyn Fn(&eg::Row) -> f64| {
+                let v: Vec<f64> = rows.iter().filter(|r| r.gate == g).map(f).collect();
+                genbench::spread(&v)
+            };
+            println!("arm_summary: arm,a_train,a_test_after_a,a_test_after_b,forgetting,b_test,agree_forgetting,conflict_forgetting,agree_b_test,conflict_b_test,targets_updated(A+B),attempts(A+B),weights_changed(A+B),saturated_after_a,saturated_after_b");
+            for g in eg::ARMS {
+                println!(
+                    "{},{},{},{},{},{},{},{},{},{},{:.1},{:.1},{:.1},{:.1},{:.1}",
+                    g.label(),
+                    fmt(stat(g, &|r| r.a_train_after_a.balanced())),
+                    fmt(stat(g, &|r| r.a_test_after_a.all.balanced())),
+                    fmt(stat(g, &|r| r.a_test_after_b.all.balanced())),
+                    fmt(stat(g, &eg::Row::forgetting)),
+                    fmt(stat(g, &|r| r.b_test_after_b.all.balanced())),
+                    fmt(stat(g, &eg::Row::forgetting_agree)),
+                    fmt(stat(g, &eg::Row::forgetting_conflict)),
+                    fmt(stat(g, &|r| r.b_test_after_b.agree.balanced())),
+                    fmt(stat(g, &|r| r.b_test_after_b.conflict.balanced())),
+                    stat(
+                        g,
+                        &|r| (r.cost_a.targets_updated + r.cost_b.targets_updated) as f64
+                    )
+                    .mean,
+                    stat(g, &|r| (r.cost_a.attempts + r.cost_b.attempts) as f64).mean,
+                    stat(
+                        g,
+                        &|r| (r.cost_a.weights_changed + r.cost_b.weights_changed) as f64
+                    )
+                    .mean,
+                    stat(g, &|r| r.saturated_after_a as f64).mean,
+                    stat(g, &|r| r.saturated_after_b as f64).mean,
+                );
+            }
+            let p = |d: &eg::Paired| {
+                format!(
+                    "{:+.3}±{:.3}[{:+.3},{:+.3}]{}/{}/{}",
+                    d.mean, d.sd, d.ci_lo, d.ci_hi, d.better, d.ties, d.worse
+                )
+            };
+            println!("comparison_vs_supervised: x,n,d_forget(+=x_less),d_forget_agree,d_forget_conflict,d_a_test,d_retained_a,d_b_test,trade_sum,passes_rule,generalises  (each: mean±sd[boot95_lo,hi]better/tie/worse)");
+            for c in eg::preregistered_comparisons(&rows) {
+                println!(
+                    "{},{},{},{},{},{},{},{},{},{},{}",
+                    c.x.label(),
+                    c.forget.n,
+                    p(&c.forget),
+                    p(&c.forget_agree),
+                    p(&c.forget_conflict),
+                    p(&c.a_test),
+                    p(&c.retained),
+                    p(&c.b),
+                    p(&c.trade),
+                    c.passes(),
+                    c.generalises(),
+                );
+            }
+            println!(
+                "control_agree_forgetting={}",
+                p(&eg::control_agree_forgetting(&rows))
+            );
+            let (h1, h2, h3, h4) = eg::readings(&rows);
+            println!("H1_error_gated_passes={h1}");
+            println!("H2_margin_gated_4_passes={h2}");
+            println!("H3_generalisation_gain={h3}");
+            println!("H4_control_agree_forgetting_avoidable={h4}");
             println!(
                 "topology_unchanged={}",
                 rows.iter().all(|r| r.topology_unchanged)
