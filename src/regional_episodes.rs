@@ -111,9 +111,21 @@ mod tests {
     #[test]
     fn rejects_invalid_budget_and_dimension() {
         let regions = [Some(1), None, None, None];
-        assert_eq!(measure_regional_episodes(&[], &regions, 1), Err(EpisodeError::InvalidBudget));
-        assert_eq!(measure_regional_episodes(&[state(&[])], &regions, 0), Err(EpisodeError::InvalidBudget));
-        assert_eq!(measure_regional_episodes(&[state(&[])], &regions[..3], 1), Err(EpisodeError::LengthMismatch));
-        assert_eq!(measure_regional_episodes(&vec![state(&[]); 1001], &regions, 1), Err(EpisodeError::InvalidBudget));
+        assert_eq!(
+            measure_regional_episodes(&[], &regions, 1),
+            Err(EpisodeError::InvalidBudget)
+        );
+        assert_eq!(
+            measure_regional_episodes(&[state(&[])], &regions, 0),
+            Err(EpisodeError::InvalidBudget)
+        );
+        assert_eq!(
+            measure_regional_episodes(&[state(&[])], &regions[..3], 1),
+            Err(EpisodeError::LengthMismatch)
+        );
+        assert_eq!(
+            measure_regional_episodes(&vec![state(&[]); 1001], &regions, 1),
+            Err(EpisodeError::InvalidBudget)
+        );
     }
 }
