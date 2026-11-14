@@ -263,9 +263,18 @@ impl PersistentSession {
                 routing.swap(first, second);
                 self.model.rerouted(routing)?
             }
-            PackedIntervention::Parameter { layer, neuron, model } => {
+            PackedIntervention::Parameter {
+                layer,
+                neuron,
+                model,
+            } => {
                 let old = self.model.layer_model(layer, neuron)?;
-                if old.circles().iter().zip(model.circles()).any(|(a, b)| a.mask != b.mask) {
+                if old
+                    .circles()
+                    .iter()
+                    .zip(model.circles())
+                    .any(|(a, b)| a.mask != b.mask)
+                {
                     return Err(HierarchyError::InvalidLayerShape);
                 }
                 self.model.with_neuron_parameters(layer, neuron, model)?
@@ -278,22 +287,26 @@ impl PersistentSession {
         let mut full_ns = 0u128;
         let mut incremental_ns = 0u128;
         let mut full_output = 0;
-        let mut incremental_output = 0;
+        let mut incremental_output;
         // Alternate measurement order to reduce systematic warm-cache bias.
         for round in 0..repetitions {
             if round % 2 == 0 {
                 let start = Instant::now();
-                full_output = std::hint::black_box(candidate.infer_bitplanes(std::hint::black_box(&planes))?);
+                full_output =
+                    std::hint::black_box(candidate.infer_bitplanes(std::hint::black_box(&planes))?);
                 full_ns = full_ns.saturating_add(start.elapsed().as_nanos());
                 let start = Instant::now();
-                incremental_output = std::hint::black_box(self.propose(std::hint::black_box(proposal))?);
+                incremental_output =
+                    std::hint::black_box(self.propose(std::hint::black_box(proposal))?);
                 incremental_ns = incremental_ns.saturating_add(start.elapsed().as_nanos());
             } else {
                 let start = Instant::now();
-                incremental_output = std::hint::black_box(self.propose(std::hint::black_box(proposal))?);
+                incremental_output =
+                    std::hint::black_box(self.propose(std::hint::black_box(proposal))?);
                 incremental_ns = incremental_ns.saturating_add(start.elapsed().as_nanos());
                 let start = Instant::now();
-                full_output = std::hint::black_box(candidate.infer_bitplanes(std::hint::black_box(&planes))?);
+                full_output =
+                    std::hint::black_box(candidate.infer_bitplanes(std::hint::black_box(&planes))?);
                 full_ns = full_ns.saturating_add(start.elapsed().as_nanos());
             }
             if full_output != incremental_output {
@@ -303,7 +316,11 @@ impl PersistentSession {
         let use_incremental = incremental_ns < full_ns;
         Ok(ProposalResult {
             output: full_output,
-            engine: if use_incremental { Engine::Incremental } else { Engine::Full },
+            engine: if use_incremental {
+                Engine::Incremental
+            } else {
+                Engine::Full
+            },
             full_gates: self.model.neuron_count(),
             // This diagnostic does not claim a gate-count estimate.
             cone_gates: 0,
@@ -330,9 +347,11 @@ impl PersistentSession {
                 routing.swap(first, second);
                 self.model.rerouted(routing)?
             }
-            PackedIntervention::Parameter { layer, neuron, model } => {
-                self.model.with_neuron_parameters(layer, neuron, model)?
-            }
+            PackedIntervention::Parameter {
+                layer,
+                neuron,
+                model,
+            } => self.model.with_neuron_parameters(layer, neuron, model)?,
         };
         if selected.output != candidate.infer_bitplanes(&planes)? {
             return Err(HierarchyError::InvalidInput);
@@ -409,32 +428,45 @@ mod tests {
         let base = FiveCircleHierarchy::from_modes(
             &[GateKind::Majority, GateKind::Parity, GateKind::Or],
             LeafRouting::SeededShuffle(47),
-        ).unwrap();
+        )
+        .unwrap();
         let planes: Vec<u64> = (0..base.input_bits())
             .map(|i| (i as u64 + 5).wrapping_mul(0x9e3779b97f4a7c15))
             .collect();
         let mut session = PersistentSession::new(base, planes.clone()).unwrap();
         for step in 0..16 {
-            let proposal = PackedIntervention::LeafSwap { first: step, second: step + 13 };
+            let proposal = PackedIntervention::LeafSwap {
+                first: step,
+                second: step + 13,
+            };
             for (full, incremental) in [(1, 10000), (10000, 1), (0, 0)] {
-                let result = session.propose_verified_adaptive(
-                    proposal,
-                    EngineCalibration {
-                        full_ns_per_gate: full,
-                        incremental_ns_per_gate: incremental,
-                        cache_build_ns: 0,
-                    },
-                ).unwrap();
+                let result = session
+                    .propose_verified_adaptive(
+                        proposal,
+                        EngineCalibration {
+                            full_ns_per_gate: full,
+                            incremental_ns_per_gate: incremental,
+                            cache_build_ns: 0,
+                        },
+                    )
+                    .unwrap();
                 let mut routing = session.model().routing().to_vec();
                 routing.swap(step, step + 13);
-                let oracle = session.model().rerouted(routing).unwrap()
-                    .infer_bitplanes(&planes).unwrap();
+                let oracle = session
+                    .model()
+                    .rerouted(routing)
+                    .unwrap()
+                    .infer_bitplanes(&planes)
+                    .unwrap();
                 assert_eq!(result.output, oracle);
                 assert!(!result.accepted);
             }
             if step % 2 == 0 {
                 session.accept(proposal).unwrap();
-                assert_eq!(session.output(), session.model().infer_bitplanes(&planes).unwrap());
+                assert_eq!(
+                    session.output(),
+                    session.model().infer_bitplanes(&planes).unwrap()
+                );
             }
         }
     }
@@ -450,16 +482,29 @@ mod tests {
             .map(|i| (i as u64 + 3).wrapping_mul(0x9e3779b97f4a7c15))
             .collect();
         let session = PersistentSession::new(model.clone(), planes.clone()).unwrap();
-        let proposal = PackedIntervention::LeafSwap { first: 0, second: 7 };
+        let proposal = PackedIntervention::LeafSwap {
+            first: 0,
+            second: 7,
+        };
         let mut routing = model.routing().to_vec();
         routing.swap(0, 7);
-        let expected = model.rerouted(routing).unwrap().infer_bitplanes(&planes).unwrap();
+        let expected = model
+            .rerouted(routing)
+            .unwrap()
+            .infer_bitplanes(&planes)
+            .unwrap();
         let result = session.propose_measured(proposal, 3).unwrap();
         assert_eq!(result.output, expected);
         assert!(!result.accepted);
         assert_eq!(session.output(), model.infer_bitplanes(&planes).unwrap());
-        assert!(matches!(session.propose_measured(proposal, 0), Err(HierarchyError::InvalidInput)));
-        assert!(matches!(session.propose_measured(proposal, 65), Err(HierarchyError::InvalidInput)));
+        assert!(matches!(
+            session.propose_measured(proposal, 0),
+            Err(HierarchyError::InvalidInput)
+        ));
+        assert!(matches!(
+            session.propose_measured(proposal, 65),
+            Err(HierarchyError::InvalidInput)
+        ));
     }
 
     #[test]
