@@ -1,6 +1,9 @@
 //! Hypothetical ablation-robust circuit choice from frozen candidate memberships.
 //! This is an experimental recall rule, not evidence of biological connectivity.
-use crate::{subcircuit_recall::{RecallError, Subcircuit}, BooleanState};
+use crate::{
+    subcircuit_recall::{RecallError, Subcircuit},
+    BooleanState,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RobustCircuit {
@@ -18,20 +21,29 @@ pub fn select_ablation_robust(
     snapshots: &[BooleanState],
     minimum_active: usize,
 ) -> Result<RobustCircuit, RecallError> {
-    if candidates.is_empty() { return Err(RecallError::EmptyCircuit); }
-    if snapshots.is_empty() { return Err(RecallError::EmptyHistory); }
-    if minimum_active == 0 { return Err(RecallError::ZeroBudget); }
+    if candidates.is_empty() {
+        return Err(RecallError::EmptyCircuit);
+    }
+    if snapshots.is_empty() {
+        return Err(RecallError::EmptyHistory);
+    }
+    if minimum_active == 0 {
+        return Err(RecallError::ZeroBudget);
+    }
     if candidates.len() > 256 || snapshots.len() > 1_000 {
         return Err(RecallError::ZeroBudget);
     }
     let universe = snapshots[0].len();
     if snapshots.iter().any(|s| s.len() != universe)
-        || candidates.iter().any(|c| c.universe_len() != universe) {
+        || candidates.iter().any(|c| c.universe_len() != universe)
+    {
         return Err(RecallError::LengthMismatch);
     }
     let mut best: Option<RobustCircuit> = None;
     for (candidate_index, circuit) in candidates.iter().enumerate() {
-        if circuit.members().len() > 4_096 { return Err(RecallError::ZeroBudget); }
+        if circuit.members().len() > 4_096 {
+            return Err(RecallError::ZeroBudget);
+        }
         let mut baseline_recalled = 0usize;
         let mut losses = vec![0usize; circuit.members().len()];
         for state in snapshots {
@@ -46,7 +58,9 @@ pub fn select_ablation_robust(
             if active_count >= minimum_active {
                 baseline_recalled += 1;
                 if active_count == minimum_active {
-                    for position in active_members { losses[position] += 1; }
+                    for position in active_members {
+                        losses[position] += 1;
+                    }
                 }
             }
         }
@@ -58,12 +72,19 @@ pub fn select_ablation_robust(
             member_count: circuit.members().len(),
         };
         let better = best.as_ref().is_none_or(|old| {
-            (result.worst_case_recalled, result.baseline_recalled,
-             std::cmp::Reverse(result.member_count))
-                > (old.worst_case_recalled, old.baseline_recalled,
-                   std::cmp::Reverse(old.member_count))
+            (
+                result.worst_case_recalled,
+                result.baseline_recalled,
+                std::cmp::Reverse(result.member_count),
+            ) > (
+                old.worst_case_recalled,
+                old.baseline_recalled,
+                std::cmp::Reverse(old.member_count),
+            )
         });
-        if better { best = Some(result); }
+        if better {
+            best = Some(result);
+        }
     }
     Ok(best.expect("nonempty candidates"))
 }
@@ -73,7 +94,9 @@ mod tests {
     use super::*;
     fn state(bits: &[usize]) -> BooleanState {
         let mut s = BooleanState::new(4);
-        for &i in bits { s.set(i, true).unwrap(); }
+        for &i in bits {
+            s.set(i, true).unwrap();
+        }
         s
     }
     #[test]
@@ -92,13 +115,24 @@ mod tests {
         let b = a.clone();
         let history = [state(&[0, 1])];
         let copy = history.clone();
-        assert_eq!(select_ablation_robust(&[a, b], &history, 1).unwrap().candidate_index, 0);
+        assert_eq!(
+            select_ablation_robust(&[a, b], &history, 1)
+                .unwrap()
+                .candidate_index,
+            0
+        );
         assert_eq!(history, copy);
     }
     #[test]
     fn rejects_incompatible_dimensions_and_zero_threshold() {
         let c = Subcircuit::new(4, vec![0]).unwrap();
-        assert_eq!(select_ablation_robust(&[c.clone()], &[BooleanState::new(3)], 1), Err(RecallError::LengthMismatch));
-        assert_eq!(select_ablation_robust(&[c], &[BooleanState::new(4)], 0), Err(RecallError::ZeroBudget));
+        assert_eq!(
+            select_ablation_robust(&[c.clone()], &[BooleanState::new(3)], 1),
+            Err(RecallError::LengthMismatch)
+        );
+        assert_eq!(
+            select_ablation_robust(&[c], &[BooleanState::new(4)], 0),
+            Err(RecallError::ZeroBudget)
+        );
     }
 }
