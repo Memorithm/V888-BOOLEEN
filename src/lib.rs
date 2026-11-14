@@ -234,3 +234,4 @@ pub mod paired_recall_tradeoff;
 pub mod region_recall_monitor;
 pub mod regional_retention;
 pub mod regional_episodes;
+pub mod regional_transition_profile;
