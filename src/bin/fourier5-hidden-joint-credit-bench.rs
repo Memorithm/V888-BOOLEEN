@@ -334,6 +334,9 @@ fn experiment(tree: &WideFiveTree, seed: u64) -> Result<(), String> {
         tree.logical_neurons(), valid_activity.0, valid_activity.1,
         ood_activity.0, ood_activity.1
     );
+    let mut root_coupling_updates = 0_usize;
+    let mut initial_hidden_changed = 0_usize;
+    let mut prior_test_regressions = 0_u64;
     for task in 0..TASKS {
         let retained: Vec<_> = tasks[..task].iter().map(|x| x.train.as_slice()).collect();
         let previous_test: Vec<_> = tasks[..task]
@@ -349,6 +352,15 @@ fn experiment(tree: &WideFiveTree, seed: u64) -> Result<(), String> {
         }
         .map_err(|e| format!("{e:?}"))?;
         let elapsed = start.elapsed().as_micros();
+        if task == 0 {
+            initial_hidden_changed = fit.hidden_changed;
+        } else if fit.accepted && fit.root_changed {
+            root_coupling_updates += 1;
+        }
+        for (index, earlier) in previous_test.iter().enumerate() {
+            let score = primary.score(&tasks[index].test);
+            prior_test_regressions += earlier.0.saturating_sub(score.0);
+        }
         if task == 0 {
             no_replay
                 .fit_joint(&tasks[task].train, &[])
@@ -439,10 +451,24 @@ fn experiment(tree: &WideFiveTree, seed: u64) -> Result<(), String> {
     let baseline = aggregate(&original, &tasks, Split::Test);
     let random = aggregate(&shuffled, &tasks, Split::Test);
     let unguarded = aggregate(&no_replay, &tasks, Split::Test);
+    let seed_criteria_met = final_valid.0 * 10 >= final_valid.1 * 9
+        && final_test.0 * 10 >= final_test.1 * 9
+        && unseen.1 > 0
+        && unseen.0 * 10 >= unseen.1 * 9
+        && final_ood.0 * 10 >= final_ood.1 * 9
+        && prior_test_regressions == 0
+        && initial_hidden_changed >= 2
+        && root_coupling_updates >= 2
+        && primary.commits() >= 3
+        && final_test.0 * 5 >= baseline.0 * 5 + final_test.1
+        && final_test.0 * 5 >= random.0 * 5 + final_test.1;
+    println!(
+        "HIDDEN_PREDECLARED_CRITERIA seed={seed} met={seed_criteria_met}          initial_hidden_changed={initial_hidden_changed}          later_root_coupling_updates={root_coupling_updates}          prior_test_regressions={prior_test_regressions}          validation_min_90=true test_min_90=true unseen_min_90=true          ood_min_90=true control_gain_min_20pp=true",
+    );
     let hidden = primary.hidden();
     let root = primary.root();
     println!(
-        "HIDDEN_SEED_SUMMARY seed={seed} width={width} backbone_neurons={}          shared_hidden_neurons=3 shared_root_neurons=1          tasks={TASKS} commits={} hidden_masks={},{},{}          root_mask={} root_phase={} target_hidden_masks={},{},{}          valid={}/{} test={}/{} unseen={}/{} feature_ood={}/{}          frozen={}/{} shuffled={}/{} no_replay={}/{}          elapsed_ms={} output_only=true fixed_capacity=true",
+        "HIDDEN_SEED_SUMMARY seed={seed} width={width} backbone_neurons={}          shared_hidden_neurons=3 shared_root_neurons=1          tasks={TASKS} commits={} hidden_masks={},{},{}          root_mask={} root_phase={} target_hidden_masks={},{},{}          valid={}/{} test={}/{} unseen={}/{} feature_ood={}/{}          frozen={}/{} shuffled={}/{} no_replay={}/{}          elapsed_ms={} predeclared_criteria_met={seed_criteria_met}          output_only=true fixed_capacity=true",
         tree.logical_neurons(), primary.commits(),
         hidden[0].mask, hidden[1].mask, hidden[2].mask,
         root.mask, root.phase,
