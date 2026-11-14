@@ -51,6 +51,7 @@ pub mod reward_limits;
 pub mod source_holdout;
 pub mod subcircuit_recall;
 pub mod synapse_pairs;
+pub mod task_sequence;
 
 // Brique d'état booléen. Ne constitue pas une simulation du cerveau.
 
