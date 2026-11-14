@@ -6,6 +6,7 @@ pub mod connectome;
 pub mod consolidated_graded;
 pub mod consolidation;
 pub mod consolidation_scale;
+pub mod context_cue;
 pub mod eligibility_trace;
 pub mod engine;
 pub mod error_gated;
