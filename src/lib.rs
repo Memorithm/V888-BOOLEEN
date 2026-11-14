@@ -39,6 +39,7 @@ pub mod learning_bench;
 pub mod learning_strategies;
 pub mod nt_gates;
 pub mod online_recall;
+pub mod paired_recovery;
 pub mod plasticity;
 pub mod recurrent_csr;
 pub mod recovery_profile;
