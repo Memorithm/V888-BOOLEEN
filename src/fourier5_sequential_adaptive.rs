@@ -47,17 +47,18 @@ pub fn evaluate_and_apply(
             routing.swap(first, second);
             current.rerouted(routing)?
         }
-        PackedIntervention::Parameter { layer, neuron, model } => {
-            current.with_neuron_parameters(layer, neuron, model)?
-        }
+        PackedIntervention::Parameter {
+            layer,
+            neuron,
+            model,
+        } => current.with_neuron_parameters(layer, neuron, model)?,
     };
     let full_gates = current.neuron_count();
     // A fresh cache evaluates every baseline gate before any counterfactual
     // work. With nonzero per-gate cost it cannot beat a single full pass.
     // Skip that allocation and traversal entirely when the lower bound
     // already exceeds the full oracle cost.
-    let full_cost = (full_gates as u128)
-        .saturating_mul(calibration.full_ns_per_gate as u128);
+    let full_cost = (full_gates as u128).saturating_mul(calibration.full_ns_per_gate as u128);
     let cache_lower_bound = (full_gates as u128)
         .saturating_mul(calibration.full_ns_per_gate as u128)
         .saturating_add(calibration.cache_build_ns as u128);
@@ -74,7 +75,11 @@ pub fn evaluate_and_apply(
         if incremental_cost < full_cost {
             (delta.output, Engine::Incremental, delta.gate_evaluations)
         } else {
-            (candidate.infer_bitplanes(planes)?, Engine::Full, delta.gate_evaluations)
+            (
+                candidate.infer_bitplanes(planes)?,
+                Engine::Full,
+                delta.gate_evaluations,
+            )
         }
     } else {
         (candidate.infer_bitplanes(planes)?, Engine::Full, 0)
@@ -90,7 +95,6 @@ pub fn evaluate_and_apply(
         accepted: accept,
     })
 }
-
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BatchEvaluation {
@@ -139,16 +143,21 @@ pub fn evaluate_frozen_batch(
                 routing.swap(first, second);
                 baseline.rerouted(routing)?
             }
-            PackedIntervention::Parameter { layer, neuron, model } => {
-                baseline.with_neuron_parameters(layer, neuron, model)?
-            }
+            PackedIntervention::Parameter {
+                layer,
+                neuron,
+                model,
+            } => baseline.with_neuron_parameters(layer, neuron, model)?,
         };
         candidates.push(candidate);
     }
     let full_gates = baseline.neuron_count().saturating_mul(proposals.len());
     if calibration.full_ns_per_gate == 0 || calibration.incremental_ns_per_gate == 0 {
         return Ok(BatchEvaluation {
-            outputs: candidates.iter().map(|c| c.infer_bitplanes(planes)).collect::<Result<Vec<_>, _>>()?,
+            outputs: candidates
+                .iter()
+                .map(|c| c.infer_bitplanes(planes))
+                .collect::<Result<Vec<_>, _>>()?,
             engine: Engine::Full,
             full_gates,
             incremental_gates: 0,
@@ -156,7 +165,9 @@ pub fn evaluate_frozen_batch(
         });
     }
     let cache = FiveCircleIncrementalCache::new(baseline, planes)?;
-    let deltas = proposals.iter().copied()
+    let deltas = proposals
+        .iter()
+        .copied()
         .map(|p| cache.evaluate(p))
         .collect::<Result<Vec<_>, _>>()?;
     let cone_gates: usize = deltas.iter().map(|d| d.gate_evaluations).sum();
@@ -164,16 +175,25 @@ pub fn evaluate_frozen_batch(
     let incremental_cost = (cache.build_gate_evaluations() as u128)
         .saturating_mul(calibration.full_ns_per_gate as u128)
         .saturating_add(calibration.cache_build_ns as u128)
-        .saturating_add((cone_gates as u128).saturating_mul(calibration.incremental_ns_per_gate as u128));
+        .saturating_add(
+            (cone_gates as u128).saturating_mul(calibration.incremental_ns_per_gate as u128),
+        );
     let use_incremental = incremental_cost < full_cost;
     let outputs = if use_incremental {
         deltas.iter().map(|d| d.output).collect()
     } else {
-        candidates.iter().map(|c| c.infer_bitplanes(planes)).collect::<Result<Vec<_>, _>>()?
+        candidates
+            .iter()
+            .map(|c| c.infer_bitplanes(planes))
+            .collect::<Result<Vec<_>, _>>()?
     };
     Ok(BatchEvaluation {
         outputs,
-        engine: if use_incremental { Engine::Incremental } else { Engine::Full },
+        engine: if use_incremental {
+            Engine::Incremental
+        } else {
+            Engine::Full
+        },
         full_gates,
         incremental_gates: cone_gates,
         cache_build_gates: cache.build_gate_evaluations(),
@@ -187,60 +207,110 @@ mod tests {
     use crate::fourier5_hierarchy::{GateKind, LeafRouting};
 
     fn planes(count: usize) -> Vec<u64> {
-        (0..count).map(|i| (i as u64 + 17).wrapping_mul(0x9e3779b97f4a7c15)).collect()
+        (0..count)
+            .map(|i| (i as u64 + 17).wrapping_mul(0x9e3779b97f4a7c15))
+            .collect()
     }
-
 
     #[test]
     fn frozen_batch_amortizes_cache_and_matches_full_oracle() {
         for depth in 2..=4 {
             let model = FiveCircleHierarchy::from_modes(
-                &vec![GateKind::Majority; depth], LeafRouting::SeededShuffle(13)
-            ).unwrap();
+                &vec![GateKind::Majority; depth],
+                LeafRouting::SeededShuffle(13),
+            )
+            .unwrap();
             let input = planes(model.input_bits());
-            let proposals: Vec<_> = (0..12).map(|i| PackedIntervention::LeafSwap {
-                first: i, second: i + 1,
-            }).collect();
-            let expected: Vec<u64> = proposals.iter().map(|p| {
-                let PackedIntervention::LeafSwap { first, second } = *p else { unreachable!() };
-                let mut routing = model.routing().to_vec();
-                routing.swap(first, second);
-                model.rerouted(routing).unwrap().infer_bitplanes(&input).unwrap()
-            }).collect();
-            let fast = evaluate_frozen_batch(&model, &input, &proposals,
-                EngineCalibration { full_ns_per_gate: 100, incremental_ns_per_gate: 1, cache_build_ns: 0 }
-            ).unwrap();
+            let proposals: Vec<_> = (0..12)
+                .map(|i| PackedIntervention::LeafSwap {
+                    first: i,
+                    second: i + 1,
+                })
+                .collect();
+            let expected: Vec<u64> = proposals
+                .iter()
+                .map(|p| {
+                    let PackedIntervention::LeafSwap { first, second } = *p else {
+                        unreachable!()
+                    };
+                    let mut routing = model.routing().to_vec();
+                    routing.swap(first, second);
+                    model
+                        .rerouted(routing)
+                        .unwrap()
+                        .infer_bitplanes(&input)
+                        .unwrap()
+                })
+                .collect();
+            let fast = evaluate_frozen_batch(
+                &model,
+                &input,
+                &proposals,
+                EngineCalibration {
+                    full_ns_per_gate: 100,
+                    incremental_ns_per_gate: 1,
+                    cache_build_ns: 0,
+                },
+            )
+            .unwrap();
             assert_eq!(fast.outputs, expected);
             assert_eq!(fast.engine, Engine::Incremental);
             assert_eq!(fast.cache_build_gates, model.neuron_count());
-            let slow = evaluate_frozen_batch(&model, &input, &proposals,
-                EngineCalibration { full_ns_per_gate: 1, incremental_ns_per_gate: 1000, cache_build_ns: 0 }
-            ).unwrap();
+            let slow = evaluate_frozen_batch(
+                &model,
+                &input,
+                &proposals,
+                EngineCalibration {
+                    full_ns_per_gate: 1,
+                    incremental_ns_per_gate: 1000,
+                    cache_build_ns: 0,
+                },
+            )
+            .unwrap();
             assert_eq!(slow.outputs, expected);
             assert_eq!(slow.engine, Engine::Full);
-            assert_eq!(model.infer_bitplanes(&input).unwrap(),
-                model.infer_bitplanes(&input).unwrap());
+            assert_eq!(
+                model.infer_bitplanes(&input).unwrap(),
+                model.infer_bitplanes(&input).unwrap()
+            );
         }
     }
 
     #[test]
     fn frozen_batch_rejects_invalid_proposals() {
         let model = FiveCircleHierarchy::from_modes(
-            &[GateKind::Majority, GateKind::Parity], LeafRouting::Contiguous
-        ).unwrap();
+            &[GateKind::Majority, GateKind::Parity],
+            LeafRouting::Contiguous,
+        )
+        .unwrap();
         let input = planes(model.input_bits());
-        let invalid = [PackedIntervention::LeafSwap { first: 0, second: 25 }];
-        assert!(matches!(evaluate_frozen_batch(&model, &input, &invalid,
-            EngineCalibration { full_ns_per_gate: 1, incremental_ns_per_gate: 1, cache_build_ns: 0 }),
-            Err(HierarchyError::InvalidRouting)));
+        let invalid = [PackedIntervention::LeafSwap {
+            first: 0,
+            second: 25,
+        }];
+        assert!(matches!(
+            evaluate_frozen_batch(
+                &model,
+                &input,
+                &invalid,
+                EngineCalibration {
+                    full_ns_per_gate: 1,
+                    incremental_ns_per_gate: 1,
+                    cache_build_ns: 0
+                }
+            ),
+            Err(HierarchyError::InvalidRouting)
+        ));
     }
 
     #[test]
     fn sequential_swaps_match_independent_full_oracle() {
         for depth in 2..=4 {
             let mut model = FiveCircleHierarchy::from_modes(
-                &vec![GateKind::Majority; depth], LeafRouting::SeededShuffle(77)
-            ).unwrap();
+                &vec![GateKind::Majority; depth],
+                LeafRouting::SeededShuffle(77),
+            )
+            .unwrap();
             let inputs = planes(model.input_bits());
             for step in 0..16 {
                 let first = step;
@@ -251,7 +321,8 @@ mod tests {
                 let before = model.infer_bitplanes(&inputs).unwrap();
                 let accept = step % 2 == 0;
                 let result = evaluate_and_apply(
-                    &mut model, &inputs,
+                    &mut model,
+                    &inputs,
                     PackedIntervention::LeafSwap { first, second },
                     accept,
                     EngineCalibration {
@@ -259,12 +330,15 @@ mod tests {
                         incremental_ns_per_gate: 1,
                         cache_build_ns: 0,
                     },
-                ).unwrap();
+                )
+                .unwrap();
                 assert_eq!(result.engine, Engine::Full);
                 assert_eq!(result.cone_gates, 0);
                 assert_eq!(result.output, expected.infer_bitplanes(&inputs).unwrap());
-                assert_eq!(model.infer_bitplanes(&inputs).unwrap(),
-                    if accept { result.output } else { before });
+                assert_eq!(
+                    model.infer_bitplanes(&inputs).unwrap(),
+                    if accept { result.output } else { before }
+                );
             }
         }
     }
@@ -274,7 +348,8 @@ mod tests {
         let mut model = FiveCircleHierarchy::from_modes(
             &[GateKind::Majority, GateKind::Parity, GateKind::Or],
             LeafRouting::Contiguous,
-        ).unwrap();
+        )
+        .unwrap();
         let inputs = planes(model.input_bits());
         for neuron in [0, 3, 12] {
             let old = model.layer_model(0, neuron).unwrap();
@@ -283,15 +358,21 @@ mod tests {
             let next = FiveCircle::new(circles, old.bias() + 1).unwrap();
             let expected = model.with_neuron_parameters(0, neuron, next).unwrap();
             let result = evaluate_and_apply(
-                &mut model, &inputs,
-                PackedIntervention::Parameter { layer: 0, neuron, model: next },
+                &mut model,
+                &inputs,
+                PackedIntervention::Parameter {
+                    layer: 0,
+                    neuron,
+                    model: next,
+                },
                 true,
                 EngineCalibration {
                     full_ns_per_gate: 0,
                     incremental_ns_per_gate: 0,
                     cache_build_ns: 0,
                 },
-            ).unwrap();
+            )
+            .unwrap();
             assert_eq!(result.engine, Engine::Full);
             assert_eq!(result.output, expected.infer_bitplanes(&inputs).unwrap());
         }
