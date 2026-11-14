@@ -25,6 +25,47 @@ pub struct SequentialProfile {
     pub vm_hwm_kib: Option<u64>,
 }
 
+/// Deterministic integer-only latency and throughput statistics for a completed trace.
+/// Rates use total wall-clock step time (including the independent Full oracle).
+/// The caller must report cache construction separately when comparing end-to-end runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SequentialStatistics {
+    pub steps: usize,
+    pub min_ns: u128,
+    pub median_ns: u128,
+    pub p95_ns: u128,
+    pub max_ns: u128,
+    /// Completed interventions per second, rounded down; None for empty/zero-duration traces.
+    pub steps_per_second: Option<u128>,
+}
+
+impl SequentialProfile {
+    /// Nearest-rank p95; median is the lower middle observation for even samples.
+    /// All calculations are overflow-safe and avoid floating-point precision loss.
+    pub fn statistics(&self) -> Option<SequentialStatistics> {
+        if self.samples.is_empty() {
+            return None;
+        }
+        let mut durations: Vec<u128> = self.samples.iter().map(|s| s.elapsed_ns).collect();
+        durations.sort_unstable();
+        let n = durations.len();
+        let p95_index = n.saturating_mul(95).saturating_add(99) / 100;
+        let rate = if self.total_ns == 0 {
+            None
+        } else {
+            Some((n as u128).saturating_mul(1_000_000_000) / self.total_ns)
+        };
+        Some(SequentialStatistics {
+            steps: n,
+            min_ns: durations[0],
+            median_ns: durations[(n - 1) / 2],
+            p95_ns: durations[p95_index.saturating_sub(1).min(n - 1)],
+            max_ns: durations[n - 1],
+            steps_per_second: rate,
+        })
+    }
+}
+
 /// Read Linux process-wide peak RSS. None on other OSes or malformed/unavailable procfs.
 /// This counter is cumulative over the process lifetime and cannot isolate this call.
 pub fn process_vm_hwm_kib() -> Option<u64> {
@@ -99,6 +140,37 @@ pub fn profile_verified_sequence(
 mod tests {
     use super::*;
     use crate::fourier5_hierarchy::{FiveCircleHierarchy, GateKind, LeafRouting};
+
+    #[test]
+    fn integer_statistics_cover_nonuniform_latency_and_empty_trace() {
+        let mut profile = SequentialProfile {
+            samples: Vec::new(),
+            total_ns: 0,
+            accepted_count: 0,
+            rejected_count: 0,
+            updated_gates: 0,
+            vm_hwm_kib: None,
+        };
+        assert_eq!(profile.statistics(), None);
+        for duration in [100_u128, 1, 50, 10, 20, 5, 2, 3, 4, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17] {
+            profile.samples.push(SequentialSample {
+                accepted: false,
+                output: 0,
+                updated_gates: 0,
+                elapsed_ns: duration,
+            });
+            profile.total_ns += duration;
+        }
+        let stats = profile.statistics().unwrap();
+        assert_eq!(stats.steps, 20);
+        assert_eq!(stats.min_ns, 1);
+        assert_eq!(stats.median_ns, 10);
+        assert_eq!(stats.p95_ns, 50);
+        assert_eq!(stats.max_ns, 100);
+        assert_eq!(stats.steps_per_second, Some(20_000_000_000 / profile.total_ns));
+        profile.total_ns = 0;
+        assert_eq!(profile.statistics().unwrap().steps_per_second, None);
+    }
 
     #[test]
     fn parses_linux_hwm_strictly() {
