@@ -8,9 +8,7 @@
 use std::time::Instant;
 
 use v888_booleen::fourier5::{FiveCircle, CIRCLES};
-use v888_booleen::fourier5_hidden_credit::{
-    HiddenCircuit, HiddenCredit, HiddenExample, WalshGate,
-};
+use v888_booleen::fourier5_hidden_credit::{HiddenCircuit, HiddenCredit, HiddenExample, WalshGate};
 use v888_booleen::fourier5_wide::{WideFiveTree, SIX_MILLION_INPUTS};
 use v888_booleen::fourier5_wide_learning::WidePlasticCircuit;
 
@@ -114,7 +112,8 @@ fn heldout_score(circuit: &HiddenCircuit, examples: &[HiddenExample]) -> (u64, u
 }
 
 fn feature_activity(examples: &[HiddenExample]) -> (u64, u64) {
-    let active: u64 = examples.iter()
+    let active: u64 = examples
+        .iter()
         .flat_map(|e| e.blocks.iter())
         .flat_map(|planes| planes.iter())
         .map(|plane| u64::from(plane.count_ones()))
@@ -133,10 +132,14 @@ fn examples(
     for index in 0..count {
         let source = random_words(
             plan.width,
-            plan.seed ^ salt ^ ((u64::from(context) + 1) << 48)
+            plan.seed
+                ^ salt
+                ^ ((u64::from(context) + 1) << 48)
                 ^ (index as u64 + 1).wrapping_mul(0x6a09_e667_f3bc_c909),
         );
-        let trace = backbone.evaluate_trace(&source).map_err(|e| format!("{e:?}"))?;
+        let trace = backbone
+            .evaluate_trace(&source)
+            .map_err(|e| format!("{e:?}"))?;
         let layer = trace.get(plan.layer).ok_or("missing backbone layer")?;
         if layer.len() < 15 {
             return Err("not enough independent backbone feature nodes".into());
@@ -150,7 +153,9 @@ fn examples(
             // inference about latent shift from raw-source perturbation.
             let modifiers = random_words(
                 15,
-                plan.seed ^ salt ^ ((u64::from(context) + 1) << 32)
+                plan.seed
+                    ^ salt
+                    ^ ((u64::from(context) + 1) << 32)
                     ^ (index as u64 + 1).wrapping_mul(0x243f_6a88_85a3_08d3),
             );
             for (word, &mask) in blocks.iter_mut().flatten().zip(&modifiers) {
@@ -186,18 +191,18 @@ fn task_suite(backbone: &WidePlasticCircuit<'_>, plan: &SourcePlan) -> Result<Ve
 }
 
 fn negative_labels(items: &[HiddenExample]) -> Vec<HiddenExample> {
-    items.iter().map(|item| HiddenExample {
-        label: item.label.rotate_left(17),
-        ..*item
-    }).collect()
+    items
+        .iter()
+        .map(|item| HiddenExample {
+            label: item.label.rotate_left(17),
+            ..*item
+        })
+        .collect()
 }
 
-fn aggregate(
-    circuit: &HiddenCircuit,
-    tasks: &[Task],
-    which: Split,
-) -> (u64, u64) {
-    tasks.iter()
+fn aggregate(circuit: &HiddenCircuit, tasks: &[Task], which: Split) -> (u64, u64) {
+    tasks
+        .iter()
         .map(|task| match which {
             Split::Train => circuit.score(&task.train),
             Split::Valid => circuit.score(&task.valid),
@@ -224,8 +229,18 @@ struct Report<'a> {
 
 fn report(input: Report<'_>) -> Result<(), String> {
     let Report {
-        seed, phase, primary, control, tasks, fit, elapsed_us,
-        pretest, past, null, frozen, feature_layer,
+        seed,
+        phase,
+        primary,
+        control,
+        tasks,
+        fit,
+        elapsed_us,
+        pretest,
+        past,
+        null,
+        frozen,
+        feature_layer,
     } = input;
     let train = primary.score(&tasks[phase].train);
     let valid = primary.score(&tasks[phase].valid);
@@ -251,8 +266,8 @@ fn report(input: Report<'_>) -> Result<(), String> {
         return Err("TRAIN replay accuracy decreased".into());
     }
     let record = primary.checkpoint();
-    let restored = HiddenCircuit::restore(&record, feature_layer, SOURCES)
-        .map_err(|e| format!("{e:?}"))?;
+    let restored =
+        HiddenCircuit::restore(&record, feature_layer, SOURCES).map_err(|e| format!("{e:?}"))?;
     if &restored != primary {
         return Err("hidden joint memory checkpoint mismatch".into());
     }
@@ -290,14 +305,22 @@ fn experiment(tree: &WideFiveTree, seed: u64) -> Result<(), String> {
         phase: false,
     });
     let oracle_model = HiddenCircuit::from_models(
-        layer as u32, SOURCES,
+        layer as u32,
+        SOURCES,
         truth,
-        WalshGate { mask: 0b11111, phase: seed & 1 != 0 },
-    ).map_err(|e| format!("{e:?}"))?;
+        WalshGate {
+            mask: 0b11111,
+            phase: seed & 1 != 0,
+        },
+    )
+    .map_err(|e| format!("{e:?}"))?;
     let initial = random_words(width, seed ^ 0x1010_2020);
     let backbone = WidePlasticCircuit::new(tree, &initial).map_err(|e| format!("{e:?}"))?;
     let plan = SourcePlan {
-        width, layer, seed, teacher: oracle_model,
+        width,
+        layer,
+        seed,
+        teacher: oracle_model,
     };
     let tasks = task_suite(&backbone, &plan)?;
     let original = HiddenCircuit::new(layer as u32, SOURCES).map_err(|e| format!("{e:?}"))?;
@@ -313,32 +336,41 @@ fn experiment(tree: &WideFiveTree, seed: u64) -> Result<(), String> {
     );
     for task in 0..TASKS {
         let retained: Vec<_> = tasks[..task].iter().map(|x| x.train.as_slice()).collect();
-        let previous_test: Vec<_> = tasks[..task].iter()
-            .map(|x| primary.score(&x.test)).collect();
+        let previous_test: Vec<_> = tasks[..task]
+            .iter()
+            .map(|x| primary.score(&x.test))
+            .collect();
         let before = primary.score(&tasks[task].test);
         let start = Instant::now();
         let fit = if task == 0 {
             primary.fit_joint(&tasks[task].train, &retained)
         } else {
             primary.fit_coordinate(&tasks[task].train, &retained)
-        }.map_err(|e| format!("{e:?}"))?;
+        }
+        .map_err(|e| format!("{e:?}"))?;
         let elapsed = start.elapsed().as_micros();
         if task == 0 {
-            no_replay.fit_joint(&tasks[task].train, &[])
+            no_replay
+                .fit_joint(&tasks[task].train, &[])
                 .map_err(|e| format!("{e:?}"))?;
         } else {
-            no_replay.fit_coordinate(&tasks[task].train, &[])
+            no_replay
+                .fit_coordinate(&tasks[task].train, &[])
                 .map_err(|e| format!("{e:?}"))?;
         }
         let negative = negative_labels(&tasks[task].train);
-        let previous_noise: Vec<_> = tasks[..task].iter()
-            .map(|x| negative_labels(&x.train)).collect();
+        let previous_noise: Vec<_> = tasks[..task]
+            .iter()
+            .map(|x| negative_labels(&x.train))
+            .collect();
         let noise_refs: Vec<_> = previous_noise.iter().map(Vec::as_slice).collect();
         if task == 0 {
-            shuffled.fit_joint(&negative, &noise_refs)
+            shuffled
+                .fit_joint(&negative, &noise_refs)
                 .map_err(|e| format!("{e:?}"))?;
         } else {
-            shuffled.fit_coordinate(&negative, &noise_refs)
+            shuffled
+                .fit_coordinate(&negative, &noise_refs)
                 .map_err(|e| format!("{e:?}"))?;
         }
         let checkpoint = primary.checkpoint();
@@ -392,7 +424,9 @@ fn experiment(tree: &WideFiveTree, seed: u64) -> Result<(), String> {
     let final_valid = aggregate(&primary, &tasks, Split::Valid);
     let final_test = aggregate(&primary, &tasks, Split::Test);
     let final_ood = aggregate(&primary, &tasks, Split::Ood);
-    let unseen = tasks.iter().map(|t| heldout_score(&primary, &t.test))
+    let unseen = tasks
+        .iter()
+        .map(|t| heldout_score(&primary, &t.test))
         .fold((0_u64, 0_u64), |(a, b), (c, d)| (a + c, b + d));
     let baseline = aggregate(&original, &tasks, Split::Test);
     let random = aggregate(&shuffled, &tasks, Split::Test);
@@ -440,7 +474,9 @@ mod tests {
             for b in [false, true] {
                 let mut item = HiddenExample {
                     blocks: [[0_u64; CIRCLES]; 3],
-                    context: 0, label: 0, observed: u64::MAX,
+                    context: 0,
+                    label: 0,
+                    observed: u64::MAX,
                 };
                 item.blocks[0][0] = if a { u64::MAX } else { 0 };
                 item.blocks[0][1] = if b { u64::MAX } else { 0 };
