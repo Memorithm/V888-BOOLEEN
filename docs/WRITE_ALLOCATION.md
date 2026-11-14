@@ -155,7 +155,109 @@ cargo +1.89 run --release -- bench-write-allocation --csv results/write-allocati
 
 ## Results
 
-*Pending: run after this pre-registration commit is pushed.*
+Run once after the pre-registration commit 8656bc9 had been pushed. The grid
+(1680 rows: 3 flips × 40 seeds × 7 strategies × 2 budgets) takes about
+6.3 min on CPU. Two runs give a byte-identical CSV (sha256
+`de274ab1…4c587842`) and an identical report. Every row keeps the original
+topology (`topology_unchanged_all=true`). Files:
+`results/write-allocation-v1.csv`, `results/write-allocation-report-v1.txt`,
+pilot `results/write-allocation-census-v1.txt`.
+
+### 1. Design gates (reported first)
+
+* **G1 passes:** writes never exceed the allowance; `error-gated@paced100`
+  is bit-identical to uncapped `error-gated` with zero refusals; the three
+  `E/E-cue` allocations are bit-identical uncapped on all 120 (flip, seed);
+  no `E-tag` false negative ever had all its edges tagged.
+* **G2 passes:** PF and SM end with different weights in 100 % of seeds at
+  every flip.
+* **G3 passes:** median CN pairs per (seed, task) 119 ≥ 20.
+
+### 2. Settings at flip 50 (k = 4, mean over 40 seeds)
+
+| strategy @ budget | ACC_all | ACC_CN | LEARN_all | LEARN_CN | FGT_all | FGT_CN | LAST_all | writes (4 tasks) | cue share of writes |
+|---|---|---|---|---|---|---|---|---|---|
+| supervised @ free | 0.612 | 0.590 | 0.884 | 0.758 | 0.362 | 0.224 | 0.871 | 3521 | 0 |
+| error-gated @ free (= paced100) | 0.631 | 0.630 | 0.972 | 0.912 | 0.454 | 0.375 | 0.969 | 205 | 0 |
+| E/E-cue @ free (all three orders) | 0.698 | 0.640 | 0.971 | 0.901 | 0.365 | 0.349 | 0.966 | 438 | 0.572 |
+| supervised @ paced100 | 0.579 | 0.548 | 0.645 | 0.575 | 0.089 | 0.036 | 0.616 | 205 | 0 |
+| reward @ paced100 | 0.606 | 0.575 | 0.631 | 0.573 | 0.032 | −0.002 | 0.598 | 205 | 0 |
+| E/E-cue (SM) @ paced100 | 0.646 | 0.609 | 0.699 | 0.638 | 0.070 | 0.039 | 0.705 | 205 | 0.600 |
+| **E/E-cue-pattern-first (PF) @ paced100** | 0.631 | 0.613 | 0.694 | 0.684 | 0.084 | 0.095 | 0.755 | 205 | 0.337 |
+| E/E-cue-cue-first (CF) @ paced100 | 0.652 | 0.594 | 0.677 | 0.602 | 0.033 | 0.011 | 0.664 | 205 | 0.709 |
+| E-tag @ free (= paced100) | 0.631 | 0.630 | 0.972 | 0.912 | 0.454 | 0.375 | 0.969 | 198 | 0 |
+
+Pattern-first moves the cue share of writes from 0.60 to 0.34, but every
+cued arm at `paced100` still learns about 0.28 less of each task than
+`error-gated` (LEARN_all 0.68–0.70 vs 0.97).
+
+### 3. Hypotheses (k = 4; mean [95 % CI] seeds better/tied/worse)
+
+| | statistic | value | result |
+|---|---|---|---|
+| G1 | integrity (caps, E unchanged, orders identical uncapped, tags sound) | all rows | **pass** |
+| G2 | PF ≠ SM final weights in ≥ 50 % of seeds, flip 50 | 100 % | **pass** |
+| G3 | median CN pairs ≥ 20 | 119 | **pass** |
+| H1 | PF vs E, sequence rule, all pairs, flip 50 | ACC −0.001 [−0.010, +0.009] 19/0/21; Δ LEARN −0.278, Δ LAST −0.214 | **fail** |
+| H2 | LEARN_all(PF) − LEARN_all(SM) strong, flip 50 | −0.005 [−0.013, +0.002] 17/0/23 | **fail** |
+| H3 | PF vs E, sequence rule, CN pairs, flip 50 | ACC −0.017 [−0.038, +0.003] 16/0/24; Δ LEARN_CN −0.228 | **fail** |
+| H4 | PF vs E, sequence rule, CN pairs, flip 100 | ACC +0.053 [+0.037, +0.070] 31/0/9 (not strong: 31 < 32 seeds); Δ LEARN_CN −0.159, Δ LAST_CN −0.096 | **fail** |
+| H5 | PF vs S1, sequence rule, CN pairs, flip 50 | ACC +0.065 [+0.044, +0.085] 33/0/7; Δ LEARN_CN +0.109, Δ LAST_CN +0.152 | **pass** |
+| H6 | FGT_CN(E) − FGT_CN(PF) strong and Δ LEARN_CN ≥ −0.05, flip 100 | +0.283 [+0.262, +0.304] 40/0/0, but Δ LEARN_CN −0.159 | **fail** |
+| H7 | reward@paced100 − S1, ACC_all CI lo > 0, flip 50 | +0.028 [+0.023, +0.032] 39/0/1 | **pass** |
+
+### 4. Secondary (no pass/fail)
+
+* **Replication of #126 on new seeds (flip 50, all pairs vs E):**
+  `E/E-cue@free` +0.066 [+0.059, +0.074] 40/0/0 (#126: +0.060);
+  SM@paced100 +0.015 [+0.006, +0.024] 28/0/12 (#126: +0.011).
+* **Allocation contrasts at flip 50 (all pairs):** PF − SM: ACC −0.016,
+  LEARN −0.005, LAST +0.050 [+0.031, +0.068] 33/0/7, forgetting worse by
+  0.014. CF − SM: ACC +0.006, LEARN −0.022, LAST −0.041, forgets 0.038
+  less. On CN pairs PF − SM: LEARN_CN +0.046 [+0.028, +0.065] 32/0/8, LAST_CN
+  +0.068, ACC_CN +0.004. Funding pattern steps first helps the task just
+  trained and hurts retention by about the same amount.
+* **Flip 100 (all pairs vs E):** SM +0.123, PF +0.121, CF +0.123 (all
+  40/0/0), with Δ LEARN −0.21 to −0.23. The three orders are equivalent on
+  ACC at high conflict.
+* **Flip 25:** every cued arm at `paced100` is far worse than E (all pairs
+  −0.120 to −0.130, 0/0/40).
+* **k = 2 and 3 at flip 50 (PF vs E, all pairs):** −0.127 and −0.036
+  (0/0/40 and 4/0/36). The flat k = 4 result is again forgetting traded for
+  learning.
+* **Error gate vs supervised at equal writes:** E − S1 at flip 50: all
+  +0.053 (40/0/0), CN +0.082 (37/0/3), LEARN +0.33; replicates #126 H6.
+* **E-tag:** 198 writes vs 205 for E at flip 50 (−3.4 %; 3.5 raises blocked
+  per seed over four tasks; 331.5 vs 348.9 at flip 100). Its TEST
+  predictions equal E's on every (seed, flip): every ACC/LEARN/FGT contrast
+  is 0/40/0. The pilot was right: on this design tagging only saves a few
+  writes that do not change any TEST prediction.
+
+### Reading
+
+The learning loss of the cued arm at an equal write schedule is **not an
+artifact of the funding order.** Moving a quarter of the allowance from cue
+to pattern steps changes which task is remembered (more LAST, more
+forgetting) but leaves the mean learning loss intact (H2 fails, −0.005) and
+does not turn the cue into a gain over `error-gated` at flip 50 (H1, H3
+fail). At flip 100 every order keeps a large all-pairs gain (+0.12) and a
+CN gain (+0.053), still bought with less learning (H4, H6 fail).
+
+A post-hoc reading (not a tested hypothesis): uncapped, `E/E-cue` spends
+about 0.57 × 438 / 4 ≈ 63 writes per task on cue edges, more than
+`error-gated`'s whole allowance (≈ 51 writes per task at flip 50). With
+threshold 1 and init weight 1, an untouched cue edge makes every cued
+target fire, so the cue carries a fixed write cost before it stops causing
+errors. Under `error-gated`'s schedule no order can pay it and also learn
+the task. A cue whose edges start silent (init 0 on cue edges) or a
+per-line budget would test that directly; neither is tested here.
+
+At equal writes, every error-gated arm still beats the supervised control
+(H5: PF vs S1 on CN +0.065 with higher learning; E − S1 +0.082), and
+reward modulation beats supervision at equal writes by a small, consistent
+margin (H7: +0.028, 39/40) while learning slightly less. This cycle is a
+negative result for allocation as a fix and a replication of the
+write-efficiency ranking error gate > reward > supervised.
 
 ## Limitations
 
