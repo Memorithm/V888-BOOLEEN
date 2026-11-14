@@ -13,6 +13,7 @@ use v888_booleen::consolidation::{
 use v888_booleen::consolidation_scale as scale;
 use v888_booleen::context_cue as cc;
 use v888_booleen::cue_gating as cgate;
+use v888_booleen::cue_reach as cr;
 use v888_booleen::eligibility_trace as et;
 use v888_booleen::engine::BooleanEngine;
 use v888_booleen::error_gated as eg;
@@ -143,6 +144,7 @@ fn help() {
     println!("  bench-context-cue [--graph brain.v888b] [--seeds 1,..,20] [--flips 25,50,100] [--init 1] [--csv out.csv]  (task-context cue on reserved existing input lines vs no cue, supervised and error-gated; conflict-pair floor; structural ceiling; bootstrap CIs; equal budget; GENERATED synthetic graph by default)");
     println!("  bench-task-sequence [--graph brain.v888b] [--seeds 41,..,80] [--flips 25,50,100] [--init 1] [--csv out.csv]  (A->B->C->D task sequences with one context cue per task; #121 gates and a margin-gate sweep; novel-configuration TEST slice; equal budget; bootstrap CIs; GENERATED synthetic graph by default)");
     println!("  bench-novel-split [--graph brain.v888b] [--seeds 81,..,120] [--flips 25,50,100] [--census] [--csv out.csv]  (B888-4 cycle 12: wider pattern pool, cue cap 4, TEST pairs split into seen / compositional-novel / unseen-edge per task; design-validity gate on novel-pair count; E/E-cue vs error-gated vs supervised at equal budget; GENERATED synthetic graph by default)");
+    println!("  bench-cue-reach [--graph brain.v888b] [--seeds 121,..,160] [--flips 25,50,100] [--levels 2,4,8,16] [--census] [--no-coupled] [--csv out.csv]  (B888-4 cycle 13: cue size / target reach varied at a FIXED pattern pool on the #123 novel-split design; E/E-cue minus error-gated gain on all / novel pairs and forgetting per level; coupled #123-style pool-vs-reach trade-off; equal budget; bootstrap CIs; GENERATED synthetic graph by default)");
     println!("  bench-cue-gating [--graph brain.v888b] [--seeds 1,..,40] [--flips 25,50,100] [--init 1] [--csv out.csv]  (separate pattern-edge / cue-edge gates and cue-line count under the task-context cue; S0 structural check; equal budget; bootstrap CIs; GENERATED synthetic graph by default)");
     println!("  bench-graded-reward [--graph brain.v888b] [--seeds 1,..,10] [--init 1] [--csv out.csv]  (graded reward ladder bit/fraction/group-k/per-target through the #36 trace + episode-stamped tags for delayed scalars; GENERATED synthetic graph by default)");
     println!("  train-plasticity --graph brain.v888b --episodes labeled.csv --output weights.v888pls [--epochs 1]");
@@ -1579,6 +1581,151 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .write_all(ns::to_csv(&rows, graph_label).as_bytes())?;
             }
             print!("{}", ns::report(&rows, &flips));
+            println!(
+                "topology_unchanged_all={}",
+                rows.iter().all(|r| r.topology_unchanged)
+            );
+            println!("evaluation_scope=synthetic_or_unverified_graph_artificial_labels_not_BANC_not_biological");
+        }
+        Some("bench-cue-reach") => {
+            let allowed = [
+                "--graph",
+                "--seeds",
+                "--flips",
+                "--levels",
+                "--census",
+                "--no-coupled",
+                "--csv",
+            ];
+            for flag in args.iter().skip(1).filter(|arg| arg.starts_with("--")) {
+                if !allowed.contains(&flag.as_str()) {
+                    return Err(format!("unknown bench-cue-reach option: {flag}").into());
+                }
+            }
+            let seeds: Vec<u64> = match optional(&args, "--seeds") {
+                Some(s) => s
+                    .split(',')
+                    .map(str::parse::<u64>)
+                    .collect::<Result<Vec<_>, _>>()?,
+                None => cr::SEEDS.collect(),
+            };
+            let flips = optional(&args, "--flips")
+                .unwrap_or("25,50,100")
+                .split(',')
+                .map(str::parse::<u32>)
+                .collect::<Result<Vec<_>, _>>()?;
+            let levels: Vec<usize> = match optional(&args, "--levels") {
+                Some(s) => s
+                    .split(',')
+                    .map(str::parse::<usize>)
+                    .collect::<Result<Vec<_>, _>>()?,
+                None => cr::LEVELS.to_vec(),
+            };
+            let owned = match optional(&args, "--graph") {
+                Some(path) => Some(Connectome::load(Path::new(path))?),
+                None => None,
+            };
+            let graph_label = if owned.is_some() {
+                "PROVIDED_GRAPH"
+            } else {
+                "GENERATED_SYNTHETIC"
+            };
+            let d = cr::DESIGN;
+            println!("v888_cue_reach_schema=b888-4-cue-reach-v1");
+            if owned.is_some() {
+                println!("graph=PROVIDED_GRAPH (task labels artificial)");
+            } else {
+                println!(
+                    "graph=GENERATED_SYNTHETIC sources={} targets={} fan_in={} (not BANC; real BANC V888 graph DOI 10.7910/DVN/7WTH1N not available here)",
+                    d.shape.sources, d.shape.targets, d.shape.fan_in
+                );
+            }
+            println!(
+                "seeds={} flips={flips:?} levels={levels:?} reserved_lines_per_cue={} tasks={} active={} train_patterns_per_task={} test_patterns={} rounds_per_task={} init={} threshold={} min_novel_pairs={} mono_tol={} metric=balanced_accuracy boot_resamples={} boot_seed={:#x}",
+                seeds.len(),
+                cr::FULL,
+                ts::K_MAX,
+                d.spec.active,
+                d.spec.train_patterns,
+                d.spec.test_patterns,
+                d.spec.rounds_a,
+                d.spec.init_weight,
+                eg::THRESHOLD,
+                ns::MIN_NOVEL_PAIRS,
+                cr::MONO_TOL,
+                eg::BOOT_RESAMPLES,
+                eg::BOOT_SEED,
+            );
+            if args.iter().any(|a| a == "--census") {
+                println!("census_fixed: flip,seed,task,pool,reachable,lines@levels,reach@levels,test_pairs,seen,cn,icn,ue");
+                for &flip in &flips {
+                    for &seed in &seeds {
+                        let fx = cr::fixed_fixture(owned.as_ref(), flip, seed)?;
+                        let c = cr::census_fixture(&fx, &levels);
+                        for (j, p) in c.pairs.iter().enumerate() {
+                            let lines: Vec<String> =
+                                c.lines.iter().map(|l| l[j].to_string()).collect();
+                            let reach: Vec<String> =
+                                c.reach.iter().map(|r| r[j].to_string()).collect();
+                            println!(
+                                "{flip},{seed},{},{},{},{},{},{},{},{},{},{}",
+                                j + 1,
+                                c.pool,
+                                c.reachable,
+                                lines.join("/"),
+                                reach.join("/"),
+                                p.all,
+                                p.seen,
+                                p.cn,
+                                p.icn,
+                                p.ue
+                            );
+                        }
+                    }
+                }
+                println!(
+                    "census_coupled(#123 construction): flip,seed,level,pool,reach@tasks,cn@tasks"
+                );
+                for &flip in &flips {
+                    for &seed in &seeds {
+                        for &l in &levels {
+                            let fx = cr::coupled_fixture(owned.as_ref(), flip, seed, l)?;
+                            let c = cr::census_fixture(&fx, &[l]);
+                            let reach: Vec<String> =
+                                c.reach[0].iter().map(ToString::to_string).collect();
+                            let cn: Vec<String> =
+                                c.pairs.iter().map(|p| p.cn.to_string()).collect();
+                            println!(
+                                "{flip},{seed},{l},{},{},{}",
+                                c.pool,
+                                reach.join("/"),
+                                cn.join("/")
+                            );
+                        }
+                    }
+                }
+                println!("evaluation_scope=synthetic_or_unverified_graph_artificial_labels_not_BANC_not_biological");
+                return Ok(());
+            }
+            let mut rows = cr::run_fixed(owned.as_ref(), &flips, &seeds, &levels)?;
+            if !args.iter().any(|a| a == "--no-coupled") && flips.contains(&cr::PRIMARY_FLIP) {
+                rows.extend(cr::run_coupled(
+                    owned.as_ref(),
+                    &ns::DESIGN,
+                    cr::PRIMARY_FLIP,
+                    &seeds,
+                    &levels,
+                )?);
+            }
+            if let Some(path) = optional(&args, "--csv") {
+                use std::io::Write;
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)?
+                    .write_all(cr::to_csv(&rows, graph_label).as_bytes())?;
+            }
+            print!("{}", cr::report(&rows, &flips, &levels));
             println!(
                 "topology_unchanged_all={}",
                 rows.iter().all(|r| r.topology_unchanged)
