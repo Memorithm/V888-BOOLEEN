@@ -59,7 +59,14 @@ impl Window {
             .fold((0_u128, 0_u128), |(f, i), p| {
                 (f + u128::from(p.full), i + u128::from(p.incremental))
             });
-        if incremental * 10 < full * 9 {
+        // Require broad paired evidence, not only a favorable sum driven by one outlier.
+        // A strict 10% win in at least 3/4 of the observations guards against
+        // heterogeneous workloads whose average hides frequent regressions.
+        let wins = self.pairs[..self.len]
+            .iter()
+            .filter(|p| u128::from(p.incremental) * 10 < u128::from(p.full) * 9)
+            .count();
+        if incremental * 10 < full * 9 && wins * 4 >= self.len * 3 {
             Engine::Incremental
         } else {
             Engine::Full
@@ -164,6 +171,14 @@ impl RecentPairedPolicy {
         })
     }
 
+    /// Discard stale timings after an accepted structural edit or cache rebuild.
+    /// Call before calibrating the new circuit; no TEST/OOD samples are admitted.
+    /// Without invalidation, timings from a previous topology could select a
+    /// slower engine even when the cone ratio remains in the same bucket.
+    pub fn invalidate_after_structural_change(&mut self) {
+        self.windows = [Window::default(); 4];
+    }
+
     pub fn choose(&self, cone: usize, total: usize) -> Result<Engine, RecentPolicyError> {
         Ok(self.windows[Self::bucket(cone, total)?].choice())
     }
@@ -238,6 +253,40 @@ mod tests {
         p.record_verified(2, 100, 1, 1, 100, 10).unwrap();
         assert_eq!(p.choose(2, 100), Ok(Engine::Incremental));
     }
+    #[test]
+    fn isolated_outlier_cannot_override_majority_regressions() {
+        let mut p = RecentPairedPolicy::default();
+        for _ in 0..15 {
+            p.record_verified(2, 100, 1, 1, 100, 110).unwrap();
+        }
+        p.record_verified(2, 100, 1, 1, 100_000, 1).unwrap();
+        assert_eq!(p.choose(2, 100), Ok(Engine::Full));
+        for _ in 0..16 {
+            p.record_verified(2, 100, 1, 1, 100, 50).unwrap();
+        }
+        assert_eq!(p.choose(2, 100), Ok(Engine::Incremental));
+    }
+    #[test]
+    fn structural_change_invalidates_every_bucket_and_requires_recalibration() {
+        let mut policy = RecentPairedPolicy::default();
+        for _ in 0..8 {
+            policy.record_verified(2, 100, 1, 1, 100, 10).unwrap();
+            policy.record_verified(40, 100, 1, 1, 100, 10).unwrap();
+        }
+        assert_eq!(policy.choose(2, 100), Ok(Engine::Incremental));
+        assert_eq!(policy.choose(40, 100), Ok(Engine::Incremental));
+        policy.invalidate_after_structural_change();
+        assert_eq!(policy.choose(2, 100), Ok(Engine::Full));
+        assert_eq!(policy.choose(40, 100), Ok(Engine::Full));
+        for _ in 0..7 {
+            policy.record_verified(2, 100, 1, 1, 100, 10).unwrap();
+        }
+        assert_eq!(policy.choose(2, 100), Ok(Engine::Full));
+        policy.record_verified(2, 100, 1, 1, 100, 10).unwrap();
+        assert_eq!(policy.choose(2, 100), Ok(Engine::Incremental));
+        assert_eq!(policy.choose(40, 100), Ok(Engine::Full));
+    }
+
     #[test]
     fn independent_bucket_and_strict_threshold() {
         let mut p = RecentPairedPolicy::default();
