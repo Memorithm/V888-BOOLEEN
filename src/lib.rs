@@ -15,6 +15,7 @@ pub mod fourier5_eligibility;
 pub mod fourier5_hidden_teacher;
 pub mod fourier5_hierarchy;
 pub mod fourier5_incremental;
+pub mod fourier5_persistent_session;
 pub mod fourier5_joint_search;
 pub mod fourier5_local_learning;
 pub mod fourier5_mask_learning;
