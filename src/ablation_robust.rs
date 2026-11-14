@@ -127,7 +127,7 @@ mod tests {
     fn rejects_incompatible_dimensions_and_zero_threshold() {
         let c = Subcircuit::new(4, vec![0]).unwrap();
         assert_eq!(
-            select_ablation_robust(&[c.clone()], &[BooleanState::new(3)], 1),
+            select_ablation_robust(std::slice::from_ref(&c), &[BooleanState::new(3)], 1),
             Err(RecallError::LengthMismatch)
         );
         assert_eq!(

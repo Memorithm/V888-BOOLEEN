@@ -373,7 +373,7 @@ mod tests {
         ];
         let annotations = [Some(7), None, None, None];
         let overlapping = rank_gate_return_sustained_recall(
-            &[circuit.clone()],
+            std::slice::from_ref(&circuit),
             &history,
             &annotations,
             7,
@@ -399,7 +399,7 @@ mod tests {
         let annotations = [Some(7), None, None, None];
         assert_eq!(
             rank_gate_return_disjoint_recall(
-                &[circuit.clone()],
+                std::slice::from_ref(&circuit),
                 &history,
                 &annotations,
                 7,
@@ -535,7 +535,7 @@ mod tests {
         let circuit = Subcircuit::new(4, vec![1]).unwrap();
         assert_eq!(
             rank_gate_return_recall(
-                &[circuit.clone()],
+                std::slice::from_ref(&circuit),
                 &[state(&[0])],
                 &[Some(7); 3],
                 7,
