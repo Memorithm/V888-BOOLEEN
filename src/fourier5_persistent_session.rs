@@ -6,6 +6,7 @@ use crate::fourier5_hierarchy::{shannon_64, FiveCircleHierarchy, HierarchyError}
 use crate::fourier5_incremental::PackedIntervention;
 use std::collections::{BTreeMap, BTreeSet};
 
+#[derive(Clone)]
 pub struct PersistentSession {
     model: FiveCircleHierarchy,
     stages: Vec<Vec<u64>>,
@@ -14,6 +15,24 @@ pub struct PersistentSession {
 }
 
 impl PersistentSession {
+    /// Execute an all-or-nothing verified sequence. A late invalid proposal or
+    /// oracle mismatch leaves the original model, cache and counters untouched.
+    /// This deliberately clones the cache: it is a correctness-first transactional
+    /// path, not a low-memory or faster alternative to prefix execution.
+    pub fn execute_atomic_verified_sequence(
+        &mut self,
+        interventions: &[(PackedIntervention, bool)],
+        max_steps: usize,
+    ) -> Result<Vec<(u64, usize)>, HierarchyError> {
+        if interventions.len() > max_steps {
+            return Err(HierarchyError::InvalidInput);
+        }
+        let mut staged = self.clone();
+        let trace = staged.execute_verified_sequence(interventions, max_steps)?;
+        *self = staged;
+        Ok(trace)
+    }
+
     pub fn new(model: FiveCircleHierarchy, planes: Vec<u64>) -> Result<Self, HierarchyError> {
         if planes.len() != model.input_bits() {
             return Err(HierarchyError::InvalidInput);
@@ -526,6 +545,49 @@ mod tests {
             session.output(),
             independent.infer_bitplanes(&planes).unwrap()
         );
+    }
+
+    #[test]
+    fn atomic_sequence_rolls_back_late_error_and_matches_independent_full() {
+        let base = FiveCircleHierarchy::from_modes(
+            &[GateKind::Majority, GateKind::Parity],
+            LeafRouting::SeededShuffle(83),
+        )
+        .unwrap();
+        let planes: Vec<u64> = (0..base.input_bits())
+            .map(|i| (i as u64 + 31).wrapping_mul(0x9e3779b97f4a7c15))
+            .collect();
+        let mut session = PersistentSession::new(base.clone(), planes.clone()).unwrap();
+        let initial = session.output();
+        let accepted = PackedIntervention::LeafSwap { first: 0, second: 7 };
+        let invalid = PackedIntervention::LeafSwap {
+            first: 0,
+            second: base.input_bits(),
+        };
+        assert!(session
+            .execute_atomic_verified_sequence(&[(accepted, true), (invalid, true)], 2)
+            .is_err());
+        assert_eq!(session.output(), initial);
+        assert_eq!(session.model().routing(), base.routing());
+        assert_eq!(session.updated_gates, 0);
+        assert_eq!(session.rebuilt_gates, base.neuron_count());
+
+        let steps = [(accepted, true), (PackedIntervention::LeafSwap { first: 3, second: 9 }, false)];
+        let trace = session.execute_atomic_verified_sequence(&steps, 2).unwrap();
+        let mut routing = base.routing().to_vec();
+        routing.swap(0, 7);
+        let committed = base.rerouted(routing).unwrap();
+        assert_eq!(trace[0].0, committed.infer_bitplanes(&planes).unwrap());
+        let mut rejected_routing = committed.routing().to_vec();
+        rejected_routing.swap(3, 9);
+        assert_eq!(
+            trace[1].0,
+            committed.rerouted(rejected_routing).unwrap().infer_bitplanes(&planes).unwrap()
+        );
+        assert_eq!(trace[1].1, 0);
+        assert_eq!(session.output(), committed.infer_bitplanes(&planes).unwrap());
+        assert_eq!(session.model().routing(), committed.routing());
+        assert!(session.updated_gates > 0);
     }
 
     #[test]
