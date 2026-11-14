@@ -180,6 +180,55 @@ impl Subcircuit {
         )
     }
 
+    /// Evaluate the loss of recall caused by silencing each selected member in turn.
+    /// This is a hypothetical intervention on observed Boolean states, not anatomy.
+    /// The same snapshots and threshold are used for every ablation (paired budget).
+    /// Returns (baseline matching ticks, sorted (member, lost matching ticks)).
+    /// An ablation can only remove matches, never create one.
+    pub fn single_member_ablation(
+        &self,
+        snapshots: &[BooleanState],
+        minimum_active: usize,
+    ) -> Result<(usize, Vec<(usize, usize)>), RecallError> {
+        if snapshots.is_empty() {
+            return Err(RecallError::EmptyHistory);
+        }
+        if minimum_active == 0 {
+            return Err(RecallError::ZeroBudget);
+        }
+        if snapshots.len() > 1000 || self.members.len() > 4096 {
+            return Err(RecallError::ZeroBudget);
+        }
+        if snapshots.iter().any(|state| state.len() != self.universe_len) {
+            return Err(RecallError::LengthMismatch);
+        }
+        let mut baseline = 0usize;
+        let mut losses = vec![0usize; self.members.len()];
+        for state in snapshots {
+            let mut active = 0usize;
+            for &member in &self.members {
+                if state.get(member).expect("validated circuit index") {
+                    active += 1;
+                }
+            }
+            if active >= minimum_active {
+                baseline += 1;
+                // Only members whose removal crosses the threshold can lose recall.
+                if active == minimum_active {
+                    for (position, &member) in self.members.iter().enumerate() {
+                        if state.get(member).expect("validated circuit index") {
+                            losses[position] += 1;
+                        }
+                    }
+                }
+            }
+        }
+        Ok((
+            baseline,
+            self.members.iter().copied().zip(losses).collect(),
+        ))
+    }
+
     /// Count observed activations for each explicitly selected member, in sorted index order.
     /// Counts are empirical snapshot frequencies, not learned weights or anatomy.
     /// Memory is bounded by circuit membership, independently of history length.
@@ -436,4 +485,42 @@ mod tests {
             Err(RecallError::ZeroBudget)
         );
     }
+    #[test]
+    fn ablation_counts_only_threshold_crossings_and_preserves_states() {
+        let circuit = Subcircuit::new(4, vec![0, 1, 2]).unwrap();
+        let mut a = BooleanState::new(4);
+        a.set(0, true).unwrap();
+        a.set(1, true).unwrap();
+        let mut b = a.clone();
+        b.set(2, true).unwrap();
+        let mut c = BooleanState::new(4);
+        c.set(1, true).unwrap();
+        c.set(2, true).unwrap();
+        let history = vec![a, b, c];
+        let original = history.clone();
+        assert_eq!(
+            circuit.single_member_ablation(&history, 2),
+            Ok((3, vec![(0, 1), (1, 2), (2, 1)]))
+        );
+        assert_eq!(history, original);
+    }
+
+    #[test]
+    fn ablation_validates_budget_and_dimensions() {
+        let circuit = Subcircuit::new(2, vec![0]).unwrap();
+        assert_eq!(circuit.single_member_ablation(&[], 1), Err(RecallError::EmptyHistory));
+        assert_eq!(
+            circuit.single_member_ablation(&[BooleanState::new(2)], 0),
+            Err(RecallError::ZeroBudget)
+        );
+        assert_eq!(
+            circuit.single_member_ablation(&[BooleanState::new(3)], 1),
+            Err(RecallError::LengthMismatch)
+        );
+        assert_eq!(
+            circuit.single_member_ablation(&vec![BooleanState::new(2); 1001], 1),
+            Err(RecallError::ZeroBudget)
+        );
+    }
+
 }
