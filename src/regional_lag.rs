@@ -65,9 +65,10 @@ pub fn regional_lag_one(
         }
     }
     for (tick, state) in states.iter().enumerate() {
-        let active: Vec<bool> = members.iter().map(|group| {
-            group.iter().any(|&index| state.get(index) == Ok(true))
-        }).collect();
+        let active: Vec<bool> = members
+            .iter()
+            .map(|group| group.iter().any(|&index| state.get(index) == Ok(true)))
+            .collect();
         if tick != 0 {
             for (source, &was_active) in previous.iter().enumerate() {
                 for (target, &is_active) in active.iter().enumerate() {
@@ -97,15 +98,32 @@ mod tests {
         let rows = regional_lag_one(&[a, b, c], &[Some(7), Some(9), None]).unwrap();
         assert_eq!(rows.len(), 4);
         assert_eq!((rows[1].source_region, rows[1].target_region), (7, 9));
-        assert_eq!((rows[1].source_exposures, rows[1].target_next_active, rows[1].joint, rows[1].target_without_source), (1, 1, 1, 0));
+        assert_eq!(
+            (
+                rows[1].source_exposures,
+                rows[1].target_next_active,
+                rows[1].joint,
+                rows[1].target_without_source
+            ),
+            (1, 1, 1, 0)
+        );
         assert_eq!(rows[3].joint, 0);
     }
     #[test]
     fn rejects_unmatched_lengths_and_unbounded_histories() {
         let a = BooleanState::new(2);
-        assert_eq!(regional_lag_one(&[a.clone()], &[Some(1), None]), Err(LagError::InvalidBudget));
-        assert_eq!(regional_lag_one(&[a.clone(), a.clone()], &[Some(1)]), Err(LagError::LengthMismatch));
-        assert_eq!(regional_lag_one(&vec![a; 1001], &[Some(1), None]), Err(LagError::InvalidBudget));
+        assert_eq!(
+            regional_lag_one(&[a.clone()], &[Some(1), None]),
+            Err(LagError::InvalidBudget)
+        );
+        assert_eq!(
+            regional_lag_one(&[a.clone(), a.clone()], &[Some(1)]),
+            Err(LagError::LengthMismatch)
+        );
+        assert_eq!(
+            regional_lag_one(&vec![a; 1001], &[Some(1), None]),
+            Err(LagError::InvalidBudget)
+        );
     }
     #[test]
     fn preserves_explicit_region_ids_and_excludes_unannotated_members() {
