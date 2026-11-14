@@ -232,3 +232,4 @@ mod tests {
 }
 pub mod paired_recall_tradeoff;
 pub mod region_recall_monitor;
+pub mod regional_retention;
