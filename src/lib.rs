@@ -251,3 +251,4 @@ pub mod durable_recovery;
 pub mod region_transitions;
 pub mod region_lag;
 pub mod region_persistence;
+pub mod region_gated_recall;
