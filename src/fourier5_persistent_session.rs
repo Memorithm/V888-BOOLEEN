@@ -1,9 +1,10 @@
 //! Persistent exact bit-sliced cache for accepted sequential interventions.
 //! Synthetic five-circle circuits only; no BANC anatomical claims.
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use crate::fourier5::CIRCLES;
 use crate::fourier5_hierarchy::{FiveCircleHierarchy, HierarchyError, shannon_64};
-use crate::fourier5_incremental::{FiveCircleIncrementalCache, PackedIntervention};
+use crate::fourier5_incremental::PackedIntervention;
+use crate::fourier5_hierarchy::compiled_truth_table;
 
 pub struct PersistentSession {
     model: FiveCircleHierarchy,
@@ -38,10 +39,45 @@ impl PersistentSession {
     /// Proposals are evaluated against the current accepted model, without
     /// mutating the session. The independent full inference is the oracle.
     pub fn propose(&self, proposal: PackedIntervention) -> Result<u64, HierarchyError> {
-        // Reuse the existing exact counterfactual oracle; accepted updates
-        // below update only the affected cone, not the whole cache.
-        let cache = FiveCircleIncrementalCache::new(&self.model, &self.planes)?;
-        Ok(cache.evaluate(proposal)?.output)
+        let mut changes = BTreeMap::new();
+        let start_layer = match proposal {
+            PackedIntervention::LeafSwap { first, second } => {
+                if first >= self.model.input_bits() || second >= self.model.input_bits() || first == second {
+                    return Err(HierarchyError::InvalidRouting);
+                }
+                for neuron in BTreeSet::from([first / CIRCLES, second / CIRCLES]) {
+                    let input = std::array::from_fn(|bit| {
+                        let position = neuron * CIRCLES + bit;
+                        let source = if position == first { second } else if position == second { first } else { position };
+                        self.stages[0][source]
+                    });
+                    changes.insert(neuron, shannon_64(self.model.gate_truth(0, neuron)?, input));
+                }
+                0
+            }
+            PackedIntervention::Parameter { layer, neuron, model } => {
+                let old = self.model.layer_model(layer, neuron)?;
+                if old.circles().iter().zip(model.circles()).any(|(a,b)| a.mask != b.mask) {
+                    return Err(HierarchyError::InvalidLayerShape);
+                }
+                let input = std::array::from_fn(|bit| self.stages[layer][neuron * CIRCLES + bit]);
+                changes.insert(neuron, shannon_64(compiled_truth_table(model), input));
+                layer
+            }
+        };
+        for layer in start_layer + 1..self.model.depth() {
+            let parents: BTreeSet<usize> = changes.keys().map(|&index| index / CIRCLES).collect();
+            let mut next = BTreeMap::new();
+            for neuron in parents {
+                let input = std::array::from_fn(|bit| {
+                    let child = neuron * CIRCLES + bit;
+                    changes.get(&child).copied().unwrap_or(self.stages[layer][child])
+                });
+                next.insert(neuron, shannon_64(self.model.gate_truth(layer, neuron)?, input));
+            }
+            changes = next;
+        }
+        Ok(changes[&0])
     }
 
     /// Atomic acceptance: validate and construct the candidate first, then
