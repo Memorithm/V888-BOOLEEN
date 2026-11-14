@@ -247,3 +247,4 @@ pub mod regional_window_consistency;
 pub mod paired_forgetting;
 pub mod episode_recall;
 pub mod episode_robust_selection;
+pub mod durable_recovery;
