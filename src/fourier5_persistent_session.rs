@@ -101,6 +101,79 @@ impl PersistentSession {
         proposals.iter().copied().map(|p| self.output_flip_mask(p)).collect()
     }
 
+
+    /// Select a counterfactual engine using externally measured nanoseconds per
+    /// gate. Cache construction is already paid for by this persistent session.
+    /// A zero calibration falls back to the independent full inference.
+    /// The returned gate budget is a conservative upper bound on affected gates.
+    pub fn propose_adaptive(
+        &self,
+        proposal: PackedIntervention,
+        calibration: crate::fourier5_sequential_adaptive::EngineCalibration,
+    ) -> Result<crate::fourier5_sequential_adaptive::ProposalResult, HierarchyError> {
+        use crate::fourier5_sequential_adaptive::{Engine, ProposalResult};
+        let candidate = match proposal {
+            PackedIntervention::LeafSwap { first, second } => {
+                if first >= self.model.input_bits() || second >= self.model.input_bits() || first == second {
+                    return Err(HierarchyError::InvalidRouting);
+                }
+                let mut routing = self.model.routing().to_vec();
+                routing.swap(first, second);
+                self.model.rerouted(routing)?
+            }
+            PackedIntervention::Parameter { layer, neuron, model } => {
+                let old = self.model.layer_model(layer, neuron)?;
+                if old.circles().iter().zip(model.circles()).any(|(a, b)| a.mask != b.mask) {
+                    return Err(HierarchyError::InvalidLayerShape);
+                }
+                self.model.with_neuron_parameters(layer, neuron, model)?
+            }
+        };
+        let mut affected = BTreeSet::new();
+        let start_layer = match proposal {
+            PackedIntervention::LeafSwap { first, second } => {
+                affected.insert(first / CIRCLES);
+                affected.insert(second / CIRCLES);
+                0
+            }
+            PackedIntervention::Parameter { layer, neuron, .. } => {
+                affected.insert(neuron);
+                layer
+            }
+        };
+        let mut cone_gates = 0usize;
+        for _ in start_layer..self.model.depth() {
+            cone_gates = cone_gates.saturating_add(affected.len());
+            affected = affected.into_iter().map(|index| index / CIRCLES).collect();
+        }
+        let full_gates = self.model.neuron_count();
+        let full_cost = (full_gates as u128).saturating_mul(calibration.full_ns_per_gate as u128);
+        let incremental_cost = (cone_gates as u128)
+            .saturating_mul(calibration.incremental_ns_per_gate as u128);
+        let use_incremental = calibration.full_ns_per_gate > 0
+            && calibration.incremental_ns_per_gate > 0
+            && incremental_cost < full_cost;
+        let output = if use_incremental {
+            self.propose(proposal)?
+        } else {
+            // The full path is independent of the persistent cache.
+            // Original routed input planes are reconstructed from the current
+            // routed stage, using the inverse permutation.
+            let mut planes = vec![0u64; self.model.input_bits()];
+            for (position, &source) in self.model.routing().iter().enumerate() {
+                planes[usize::from(source)] = self.stages[0][position];
+            }
+            candidate.infer_bitplanes(&planes)?
+        };
+        Ok(ProposalResult {
+            output,
+            engine: if use_incremental { Engine::Incremental } else { Engine::Full },
+            full_gates,
+            cone_gates,
+            accepted: false,
+        })
+    }
+
     /// Atomic acceptance: validate and construct the candidate first, then
     /// refresh only changed leaves/ancestors. Failed changes leave state intact.
     pub fn accept(&mut self, proposal: PackedIntervention) -> Result<usize, HierarchyError> {
@@ -146,6 +219,41 @@ mod tests {
     use super::*;
     use crate::fourier5_hierarchy::{GateKind, LeafRouting};
     use crate::fourier5::FiveCircle;
+
+
+    #[test]
+    fn adaptive_persistent_engine_matches_full_after_sequential_acceptance() {
+        use crate::fourier5_sequential_adaptive::{Engine, EngineCalibration};
+        let model = FiveCircleHierarchy::from_modes(
+            &[GateKind::Majority, GateKind::Parity, GateKind::Or],
+            LeafRouting::SeededShuffle(37),
+        ).unwrap();
+        let planes: Vec<u64> = (0..model.input_bits())
+            .map(|i| (i as u64 + 11).wrapping_mul(0x9e3779b97f4a7c15))
+            .collect();
+        let mut session = PersistentSession::new(model, planes.clone()).unwrap();
+        for step in 0..12 {
+            let proposal = PackedIntervention::LeafSwap { first: step, second: step + 7 };
+            for (calibration, expected_engine) in [
+                (EngineCalibration { full_ns_per_gate: 100, incremental_ns_per_gate: 1, cache_build_ns: 0 }, Engine::Incremental),
+                (EngineCalibration { full_ns_per_gate: 1, incremental_ns_per_gate: 10000, cache_build_ns: 0 }, Engine::Full),
+                (EngineCalibration { full_ns_per_gate: 0, incremental_ns_per_gate: 0, cache_build_ns: 0 }, Engine::Full),
+            ] {
+                let result = session.propose_adaptive(proposal, calibration).unwrap();
+                let mut routing = session.model().routing().to_vec();
+                routing.swap(step, step + 7);
+                let oracle = session.model().rerouted(routing).unwrap()
+                    .infer_bitplanes(&planes).unwrap();
+                assert_eq!(result.output, oracle);
+                assert_eq!(result.engine, expected_engine);
+                assert!(!result.accepted);
+            }
+            if step % 2 == 0 {
+                session.accept(proposal).unwrap();
+                assert_eq!(session.output(), session.model().infer_bitplanes(&planes).unwrap());
+            }
+        }
+    }
 
     #[test]
     fn output_sensitivity_matches_independent_full_inference_and_preserves_state() {
