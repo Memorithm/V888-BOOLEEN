@@ -240,6 +240,7 @@ pub mod episode_robust_selection;
 pub mod fourier5_compact;
 pub mod fourier5_joint_audit;
 pub mod fourier5_online_policy;
+pub mod fourier5_recent_policy;
 pub mod fourier5_validation_selection;
 pub mod gate_return_recall;
 pub mod heldout_regional_recall;
