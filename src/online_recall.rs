@@ -1,3 +1,4 @@
+#![allow(clippy::too_many_arguments, clippy::type_complexity)]
 //! Streaming activation statistics for explicitly selected experimental subcircuits.
 //! Observations are simulated states, never evidence of biological firing.
 use crate::subcircuit_recall::{RecallError, Subcircuit};

@@ -1,3 +1,4 @@
+#![allow(clippy::too_many_arguments, clippy::type_complexity)]
 //! Observe recall after an explicitly annotated region reactivates.
 //! Temporal co-occurrence is not anatomical connectivity or causality.
 use crate::{
