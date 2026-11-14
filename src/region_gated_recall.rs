@@ -147,7 +147,14 @@ mod tests {
     fn rejects_missing_region_and_mismatched_dimensions() {
         let circuit = Subcircuit::new(4, vec![1]).unwrap();
         assert_eq!(
-            rank_region_gated_recall(std::slice::from_ref(&circuit), &[state(&[1])], &[None; 4], 3, 1, 1),
+            rank_region_gated_recall(
+                std::slice::from_ref(&circuit),
+                &[state(&[1])],
+                &[None; 4],
+                3,
+                1,
+                1
+            ),
             Err(GatedRecallError::MissingRegion)
         );
         assert_eq!(
@@ -160,7 +167,14 @@ mod tests {
     fn rejects_zero_budgets_and_empty_history() {
         let circuit = Subcircuit::new(4, vec![1]).unwrap();
         assert_eq!(
-            rank_region_gated_recall(std::slice::from_ref(&circuit), &[state(&[1])], &[Some(1); 4], 1, 0, 1),
+            rank_region_gated_recall(
+                std::slice::from_ref(&circuit),
+                &[state(&[1])],
+                &[Some(1); 4],
+                1,
+                0,
+                1
+            ),
             Err(GatedRecallError::InvalidBudget)
         );
         assert_eq!(
