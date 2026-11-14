@@ -430,6 +430,48 @@ mod tests {
     }
 
     #[test]
+    fn conflicting_output_rewards_cannot_both_be_preserved_at_fixed_capacity() {
+        let ids = std::array::from_fn(|i| i as u32);
+        let teacher = HiddenCircuit::from_models(
+            7,
+            ids,
+            [
+                WalshGate { mask: 13, phase: false },
+                WalshGate { mask: 22, phase: false },
+                WalshGate { mask: 27, phase: false },
+            ],
+            WalshGate { mask: 7, phase: false },
+        )
+        .unwrap();
+        let first: Vec<_> = (0..4)
+            .map(|i| sample(0, &teacher, 1000 + i))
+            .collect();
+        let mut learner = HiddenCircuit::new(7, ids).unwrap();
+        let gained = learner.fit_joint(&first, &[]).unwrap();
+        assert!(gained.accepted);
+        assert_eq!(learner.score(&first), (256, 256));
+
+        // Same exact inputs/context, but opposite observable labels:
+        // unlike context-indexed tasks, no deterministic shared circuit
+        // can simultaneously predict both labels correctly.
+        let opposite: Vec<_> = first
+            .iter()
+            .map(|item| HiddenExample {
+                label: !item.label,
+                ..*item
+            })
+            .collect();
+        let saved = learner.checkpoint();
+        let update = learner.fit_coordinate(&opposite, &[first.as_slice()]).unwrap();
+        assert!(!update.accepted);
+        assert_eq!(update.reward_before, 0);
+        assert_eq!(update.reward_after, 0);
+        assert_eq!(learner.score(&first), (256, 256));
+        assert_eq!(learner.score(&opposite), (0, 256));
+        assert_eq!(learner.checkpoint(), saved);
+    }
+
+    #[test]
     fn five_circle_reference_matches_compiled_parity_gates() {
         use crate::fourier5_hierarchy::{compiled_truth_table, shannon_64};
         let features = [
