@@ -25,7 +25,8 @@ pub struct ProposalResult {
     pub accepted: bool,
 }
 
-/// A cache is constructed only when its conservative cost lower bound can beat\n/// full inference. Rebuild after acceptance; never reuse stale state.
+/// A cache is constructed only when its conservative cost lower bound can beat
+/// full inference. Rebuild after acceptance; never reuse stale state.
 /// Unknown calibration (zero rates) always selects the full oracle.
 pub fn evaluate_and_apply(
     current: &mut FiveCircleHierarchy,
