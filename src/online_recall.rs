@@ -510,9 +510,76 @@ impl OnlineRecall {
     }
 }
 
+/// Histogram of first *durable* recovery confirmation across independent trials.
+///
+/// Each trial is a bounded sequence of simulated recall outcomes. A recovery
+/// requires `durable_ticks` consecutive positive observations; its latency is
+/// the one-based confirmation tick. Trials without confirmation are right-censored.
+/// The returned histogram has `maximum_steps + 1` bins (bin zero is unused).
+/// This function neither learns nor infers biological activity.
+pub fn durable_recovery_histogram(
+    trials: &[&[bool]],
+    durable_ticks: usize,
+    maximum_steps: usize,
+) -> Result<(Vec<u64>, u64), RecallError> {
+    if durable_ticks == 0
+        || maximum_steps == 0
+        || maximum_steps > 1000
+        || durable_ticks > maximum_steps
+    {
+        return Err(RecallError::ZeroBudget);
+    }
+    let mut histogram = vec![0_u64; maximum_steps + 1];
+    let mut censored = 0_u64;
+    for trial in trials {
+        if trial.len() > maximum_steps {
+            return Err(RecallError::ZeroBudget);
+        }
+        let mut streak = 0_usize;
+        let mut confirmed = None;
+        for (tick, &active) in trial.iter().enumerate() {
+            streak = if active { streak + 1 } else { 0 };
+            if streak == durable_ticks {
+                confirmed = Some(tick + 1);
+                break;
+            }
+        }
+        match confirmed {
+            Some(tick) => histogram[tick] += 1,
+            None => censored += 1,
+        }
+    }
+    Ok((histogram, censored))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn durable_recovery_histogram_counts_confirmations_and_censoring() {
+        let trials: &[&[bool]] = &[
+            &[false, true, true, false],
+            &[true, false, true, true],
+            &[true, false, false],
+            &[],
+        ];
+        let (hist, censored) = durable_recovery_histogram(trials, 2, 4).unwrap();
+        assert_eq!(hist, vec![0, 0, 0, 1, 1]);
+        assert_eq!(censored, 2);
+        assert_eq!(
+            durable_recovery_histogram(trials, 0, 4),
+            Err(RecallError::ZeroBudget)
+        );
+        assert_eq!(
+            durable_recovery_histogram(trials, 2, 1001),
+            Err(RecallError::ZeroBudget)
+        );
+        assert_eq!(
+            durable_recovery_histogram(&[&[true, true, true]], 2, 2),
+            Err(RecallError::ZeroBudget)
+        );
+    }
 
     #[test]
     fn recalls_selected_region_against_live_engine_without_consuming_ticks() {
