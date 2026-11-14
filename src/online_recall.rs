@@ -11,6 +11,9 @@ pub struct OnlineRecall {
     ticks: u64,
     current_streak: u64,
     longest_streak: u64,
+    quiet_streak: u64,
+    last_recovery_delay: Option<u64>,
+    recovery_events: u64,
 }
 
 impl OnlineRecall {
@@ -22,6 +25,9 @@ impl OnlineRecall {
             ticks: 0,
             current_streak: 0,
             longest_streak: 0,
+            quiet_streak: 0,
+            last_recovery_delay: None,
+            recovery_events: 0,
         }
     }
 
@@ -45,6 +51,19 @@ impl OnlineRecall {
         } else {
             0
         };
+        let next_quiet = if matches {
+            0
+        } else {
+            self.quiet_streak
+                .checked_add(1)
+                .ok_or(RecallError::ZeroBudget)?
+        };
+        let recovered = matches && self.quiet_streak > 0;
+        let next_recoveries = if recovered {
+            self.recovery_events.checked_add(1).ok_or(RecallError::ZeroBudget)?
+        } else {
+            self.recovery_events
+        };
         let mut increments = Vec::with_capacity(self.counts.len());
         for (position, &member) in self.circuit.members().iter().enumerate() {
             if state.get(member) == Ok(true) {
@@ -55,6 +74,11 @@ impl OnlineRecall {
             }
         }
         self.ticks = next_ticks;
+        if recovered {
+            self.last_recovery_delay = Some(self.quiet_streak);
+        }
+        self.quiet_streak = next_quiet;
+        self.recovery_events = next_recoveries;
         self.current_streak = next_streak;
         self.longest_streak = self.longest_streak.max(next_streak);
         for position in increments {
@@ -72,6 +96,44 @@ impl OnlineRecall {
         minimum_active: usize,
     ) -> Result<bool, RecallError> {
         self.observe(&engine.active, minimum_active)
+    }
+
+    /// Advance a validated synthetic graph and observe each resulting engine state.
+    /// The initial state is not observed. At most 1000 steps are permitted, matching
+    /// the CLI engine bound. A step failure preserves previously completed steps;
+    /// no rollback of engine dynamics is implied. No anatomical edges are created.
+    pub fn observe_engine_steps(
+        &mut self,
+        engine: &mut crate::engine::BooleanEngine,
+        graph: &crate::connectome::Connectome,
+        minimum_active: usize,
+        steps: usize,
+    ) -> std::io::Result<Vec<bool>> {
+        use std::io::{Error, ErrorKind};
+        if steps == 0 || steps > 1000 || minimum_active == 0 {
+            return Err(Error::new(ErrorKind::InvalidInput, "invalid recall budget"));
+        }
+        graph.validate()?;
+        if engine.active.len() != graph.ids.len() || self.circuit.universe_len() != graph.ids.len()
+        {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "graph/state size mismatch",
+            ));
+        }
+        // Validate the recall threshold before any engine mutation.
+        self.circuit
+            .recall(&engine.active, minimum_active)
+            .map_err(|_| Error::new(ErrorKind::InvalidInput, "invalid recall state"))?;
+        let mut matches = Vec::with_capacity(steps);
+        for _ in 0..steps {
+            engine.step(graph)?;
+            let recalled = self
+                .observe_engine_state(engine, minimum_active)
+                .map_err(|_| Error::new(ErrorKind::InvalidData, "recall counter overflow"))?;
+            matches.push(recalled);
+        }
+        Ok(matches)
     }
 
     /// Aggregate streaming activation counts by caller-provided region labels.
@@ -188,6 +250,38 @@ impl OnlineRecall {
             .collect())
     }
 
+    /// Rank explicitly annotated regions with low historical occupancy for targeted
+    /// experimental reactivation. A region is eligible when its exact activity
+    /// fraction is at most max_active_percent/100 (inclusive). Zero observations
+    /// are rejected: no silence can be inferred without a sampled tick.
+    /// Returns region IDs ordered by lowest occupancy, then ascending region ID.
+    pub fn select_quiet_regions(
+        &self,
+        annotations: &[Option<u32>],
+        max_active_percent: u8,
+        minimum_members: usize,
+        maximum_regions: usize,
+    ) -> Result<Vec<u32>, RecallError> {
+        if minimum_members == 0 || maximum_regions == 0 || max_active_percent > 100 {
+            return Err(RecallError::ZeroBudget);
+        }
+        if self.ticks == 0 {
+            return Err(RecallError::ZeroBudget);
+        }
+        let mut candidates = self.regional_occupancy(annotations)?;
+        candidates.retain(|(_, active, possible)| {
+            *possible >= (self.ticks as u128) * (minimum_members as u128)
+                && *active * 100 <= *possible * u128::from(max_active_percent)
+        });
+        // Compare rational occupancies without floating point. Each region's
+        // denominator is ticks * member_count, so compare per-member activity.
+        candidates.sort_unstable_by(|a, b| {
+            (a.1 * b.2).cmp(&(b.1 * a.2)).then_with(|| a.0.cmp(&b.0))
+        });
+        candidates.truncate(maximum_regions);
+        Ok(candidates.into_iter().map(|(region, _, _)| region).collect())
+    }
+
     /// Atomically observe one simulated state and select the most active annotated regions.
     /// Invalid annotations or budgets must not consume an observation tick.
     /// The returned match describes the current circuit recall, while region ranking
@@ -217,6 +311,45 @@ impl OnlineRecall {
         Ok((recalled, regions))
     }
 
+    /// Recall the most active explicitly annotated region against the live engine state.
+    /// Selection uses previously observed ticks; the current state is not consumed.
+    /// Returns the selected member indices and whether their recall threshold is met.
+    /// All graph connectivity remains unchanged and no anatomical label is inferred.
+    pub fn recall_selected_region(
+        &self,
+        engine: &crate::engine::BooleanEngine,
+        annotations: &[Option<u32>],
+        minimum_member_ticks: u64,
+        maximum_members: usize,
+        minimum_active: usize,
+    ) -> Result<(Vec<usize>, bool), RecallError> {
+        if minimum_active == 0 {
+            return Err(RecallError::ZeroBudget);
+        }
+        let selected =
+            self.select_region_subcircuit(annotations, minimum_member_ticks, maximum_members)?;
+        let recalled = selected.recall(&engine.active, minimum_active)?;
+        Ok((selected.members().to_vec(), recalled))
+    }
+
+    /// Consecutive simulated observations without circuit recall.
+    #[must_use]
+    pub fn quiet_streak(&self) -> u64 {
+        self.quiet_streak
+    }
+
+    /// Last completed silence-to-recall interval, measured in observation ticks.
+    #[must_use]
+    pub fn last_recovery_delay(&self) -> Option<u64> {
+        self.last_recovery_delay
+    }
+
+    /// Number of transitions from a nonempty silent interval to a matching recall.
+    #[must_use]
+    pub fn recovery_events(&self) -> u64 {
+        self.recovery_events
+    }
+
     /// Consume at most `maximum_steps` simulated states, stopping when recall
     /// remains positive for `required_streak` consecutive observations.
     /// Returns the number of observations consumed, or None if not recovered.
@@ -230,6 +363,7 @@ impl OnlineRecall {
         maximum_steps: usize,
     ) -> Result<Option<usize>, RecallError> {
         if minimum_active == 0 || required_streak == 0 || maximum_steps == 0 || maximum_steps > 1000 {
+
             return Err(RecallError::ZeroBudget);
         }
         if usize::try_from(required_streak).ok().is_none_or(|n| n > maximum_steps) {
@@ -307,6 +441,69 @@ impl OnlineRecall {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recalls_selected_region_against_live_engine_without_consuming_ticks() {
+        use crate::connectome::Connectome;
+        use crate::engine::BooleanEngine;
+
+        // Synthetic chain; region IDs are explicit experimental labels.
+        let graph = Connectome {
+            ids: vec![10, 20, 30],
+            offsets: vec![0, 1, 2, 2],
+            targets: vec![1, 2],
+            counts: vec![1, 1],
+        };
+        let mut engine = BooleanEngine::new(&graph, 1).unwrap();
+        let mut tracker = OnlineRecall::new(Subcircuit::new(3, vec![0, 1, 2]).unwrap());
+        let regions = [Some(7), Some(7), Some(9)];
+        engine.stimulate(&graph, 10).unwrap();
+        tracker.observe_engine_state(&engine, 1).unwrap();
+        engine.step(&graph).unwrap();
+        tracker.observe_engine_state(&engine, 1).unwrap();
+        assert_eq!(
+            tracker.recall_selected_region(&engine, &regions, 1, 2, 1),
+            Ok((vec![0, 1], true))
+        );
+        engine.step(&graph).unwrap();
+        assert_eq!(
+            tracker.recall_selected_region(&engine, &regions, 1, 2, 1),
+            Ok((vec![0, 1], false))
+        );
+        assert_eq!(tracker.ticks(), 2);
+        assert_eq!(
+            tracker.recall_selected_region(&engine, &regions[..2], 1, 2, 1),
+            Err(RecallError::LengthMismatch)
+        );
+        assert_eq!(
+            tracker.recall_selected_region(&engine, &regions, 1, 2, 0),
+            Err(RecallError::ZeroBudget)
+        );
+    }
+
+    #[test]
+    fn recovery_latency_tracks_silence_and_reactivation_without_snapshots() {
+        let mut tracker = OnlineRecall::new(Subcircuit::new(2, vec![0]).unwrap());
+        let quiet = BooleanState::new(2);
+        let mut active = BooleanState::new(2);
+        active.set(0, true).unwrap();
+        assert_eq!(tracker.last_recovery_delay(), None);
+        assert_eq!(tracker.observe(&quiet, 1), Ok(false));
+        assert_eq!(tracker.observe(&quiet, 1), Ok(false));
+        assert_eq!(tracker.quiet_streak(), 2);
+        assert_eq!(tracker.observe(&active, 1), Ok(true));
+        assert_eq!(tracker.last_recovery_delay(), Some(2));
+        assert_eq!(tracker.recovery_events(), 1);
+        assert_eq!(tracker.quiet_streak(), 0);
+        assert_eq!(tracker.observe(&active, 1), Ok(true));
+        assert_eq!(tracker.recovery_events(), 1);
+        assert_eq!(tracker.observe(&quiet, 1), Ok(false));
+        assert_eq!(tracker.observe(&active, 1), Ok(true));
+        assert_eq!(tracker.last_recovery_delay(), Some(1));
+        assert_eq!(tracker.recovery_events(), 2);
+        assert_eq!(tracker.observe(&quiet, 0), Err(RecallError::ZeroBudget));
+        assert_eq!(tracker.recovery_events(), 2);
+    }
 
     #[test]
     fn recovery_latency_requires_new_durable_run() {
@@ -538,6 +735,69 @@ mod tests {
             tracker.observe_and_select_regions(&BooleanState::new(4), 2, &labels, 2, 1, 2),
             Ok((false, vec![]))
         );
+        assert_eq!(tracker.ticks(), 2);
+    }
+
+    #[test]
+    fn bounded_engine_steps_observe_propagation_and_reject_bad_budgets() {
+        use crate::connectome::Connectome;
+        use crate::engine::BooleanEngine;
+        let graph = Connectome {
+            ids: vec![10, 20, 30],
+            offsets: vec![0, 1, 2, 2],
+            targets: vec![1, 2],
+            counts: vec![1, 1],
+        };
+        let mut engine = BooleanEngine::new(&graph, 1).unwrap();
+        let mut tracker = OnlineRecall::new(Subcircuit::new(3, vec![1, 2]).unwrap());
+        engine.stimulate(&graph, 10).unwrap();
+        assert!(tracker
+            .observe_engine_steps(&mut engine, &graph, 1, 0)
+            .is_err());
+        assert!(tracker
+            .observe_engine_steps(&mut engine, &graph, 1, 1001)
+            .is_err());
+        assert!(tracker
+            .observe_engine_steps(&mut engine, &graph, 0, 1)
+            .is_err());
+        assert_eq!(tracker.ticks(), 0);
+        assert_eq!(
+            tracker
+                .observe_engine_steps(&mut engine, &graph, 1, 3)
+                .unwrap(),
+            vec![true, true, false]
+        );
+        assert_eq!(tracker.ticks(), 3);
+        assert_eq!(tracker.longest_streak(), 2);
+        assert_eq!(tracker.latest_streak(), 0);
+        assert_eq!(
+            tracker.member_counts().collect::<Vec<_>>(),
+            vec![(1, 1), (2, 1)]
+        );
+        assert_eq!(
+            tracker.regional_occupancy(&[None, Some(7), Some(7)]),
+            Ok(vec![(7, 2, 6)])
+        );
+    }
+
+    #[test]
+    fn quiet_region_selection_is_bounded_and_annotation_only() {
+        let mut tracker = OnlineRecall::new(Subcircuit::new(5, vec![0, 1, 2, 3, 4]).unwrap());
+        let labels = [Some(8), Some(8), Some(3), Some(3), None];
+        assert_eq!(tracker.select_quiet_regions(&labels, 50, 1, 2), Err(RecallError::ZeroBudget));
+        let mut state = BooleanState::new(5);
+        state.set(0, true).unwrap();
+        state.set(1, true).unwrap();
+        state.set(2, true).unwrap();
+        tracker.observe(&state, 1).unwrap();
+        tracker.observe(&BooleanState::new(5), 1).unwrap();
+        // Region 3: 1/4; region 8: 2/4; unannotated index 4 excluded.
+        assert_eq!(tracker.select_quiet_regions(&labels, 50, 2, 2), Ok(vec![3, 8]));
+        assert_eq!(tracker.select_quiet_regions(&labels, 25, 2, 2), Ok(vec![3]));
+        assert_eq!(tracker.select_quiet_regions(&labels, 0, 2, 2), Ok(vec![]));
+        assert_eq!(tracker.select_quiet_regions(&labels, 100, 2, 1), Ok(vec![3]));
+        assert_eq!(tracker.select_quiet_regions(&labels[..4], 50, 2, 2), Err(RecallError::LengthMismatch));
+        assert_eq!(tracker.select_quiet_regions(&labels, 101, 2, 2), Err(RecallError::ZeroBudget));
         assert_eq!(tracker.ticks(), 2);
     }
 
