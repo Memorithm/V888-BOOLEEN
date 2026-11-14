@@ -388,6 +388,39 @@ impl OnlineRecall {
         Ok(None)
     }
 
+    /// Measure the first fresh durable recall run in bounded simulated states.
+    /// Returns 1-based (first positive tick, confirmation tick), or None.
+    /// Prior streaks cannot satisfy this invocation's recovery criterion.
+    pub fn measure_recovery_latency<'a>(
+        &mut self,
+        states: impl IntoIterator<Item = &'a BooleanState>,
+        minimum_active: usize,
+        required_streak: usize,
+        maximum_steps: usize,
+    ) -> Result<Option<(usize, usize)>, RecallError> {
+        if minimum_active == 0
+            || minimum_active > self.circuit.members().len()
+            || required_streak == 0
+            || maximum_steps == 0
+            || maximum_steps > 1000
+            || required_streak > maximum_steps
+        {
+            return Err(RecallError::ZeroBudget);
+        }
+        let mut consecutive = 0usize;
+        for (index, state) in states.into_iter().take(maximum_steps).enumerate() {
+            if self.observe(state, minimum_active)? {
+                consecutive += 1;
+                if consecutive == required_streak {
+                    return Ok(Some((index + 2 - consecutive, index + 1)));
+                }
+            } else {
+                consecutive = 0;
+            }
+        }
+        Ok(None)
+    }
+
     #[must_use]
     pub fn ticks(&self) -> u64 {
         self.ticks
@@ -506,6 +539,31 @@ mod tests {
             Ok(None)
         );
         assert_eq!(tracker.latest_streak(), 1);
+    }
+
+    #[test]
+    fn recovery_latency_requires_new_durable_run() {
+        let mut tracker = OnlineRecall::new(Subcircuit::new(2, vec![0]).unwrap());
+        let mut active = BooleanState::new(2);
+        active.set(0, true).unwrap();
+        let quiet = BooleanState::new(2);
+        tracker.observe(&active, 1).unwrap();
+        tracker.observe(&active, 1).unwrap();
+        assert_eq!(
+            tracker.measure_recovery_latency([&quiet, &active, &quiet, &active, &active], 1, 2, 5),
+            Ok(Some((4, 5)))
+        );
+        assert_eq!(tracker.ticks(), 7);
+        assert_eq!(
+            tracker.measure_recovery_latency([&active], 1, 2, 1),
+            Err(RecallError::ZeroBudget)
+        );
+        assert_eq!(tracker.ticks(), 7);
+        assert_eq!(
+            tracker.measure_recovery_latency([&quiet, &active], 1, 2, 2),
+            Ok(None)
+        );
+        assert_eq!(tracker.ticks(), 9);
     }
 
     #[test]
