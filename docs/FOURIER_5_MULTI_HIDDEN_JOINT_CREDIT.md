@@ -63,6 +63,24 @@ this finite Walsh-family experiment is an incremental precursor to
 shared deep-backbone plasticity. An unchanged task 3 is not a
 fourth accepted update.
 
+## Counterexample: incompatible task under identical inputs
+
+After the four contextual tasks, each seed receives a **fifth,
+contradictory reward experiment** in which TRAIN inputs and context are
+identical to the last learned task, but every observed label is inverted.
+The new task is deliberately impossible to reconcile with perfect
+retention of its original labels using a single deterministic circuit.
+The exact replay guard must refuse any improvement that would damage
+the original TRAIN objective. Report `HIDDEN_CONFLICT_LIMIT` with
+original hits, contradicted hits, attempted improvement and acceptance,
+and verify the persistent checkpoint remains bitwise unchanged.
+
+This is a **negative control**, not evidence of fifth-task success:
+no finite deterministic shared model can satisfy contradictory labels
+on the exact same inputs and context simultaneously. Successful
+rejection establishes the known capacity boundary of strict retention.
+The conflicting task does not enter the four-task macro accuracy.
+
 ## Matched controls and prospective thresholds
 
 Controls:
