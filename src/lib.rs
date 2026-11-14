@@ -253,3 +253,4 @@ pub mod region_lag;
 pub mod region_persistence;
 pub mod region_gated_recall;
 pub mod gate_return_recall;
+pub mod fourier5_compact;
