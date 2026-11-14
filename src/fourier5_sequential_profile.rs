@@ -110,6 +110,35 @@ pub struct ColdSequentialProfile {
     pub trace: SequentialProfile,
 }
 
+impl ColdSequentialProfile {
+    /// End-to-end completed interventions per second, including cold cache build
+    /// and the independent Full oracle. Returns None for empty or zero-time traces.
+    /// This is a diagnostic throughput, NOT unverified production inference speed.
+    pub fn end_to_end_steps_per_second(&self) -> Option<u128> {
+        if self.trace.samples.is_empty() || self.end_to_end_ns == 0 {
+            return None;
+        }
+        Some(
+            (self.trace.samples.len() as u128)
+                .saturating_mul(1_000_000_000)
+                / self.end_to_end_ns,
+        )
+    }
+
+    /// Fraction of end-to-end time spent constructing the cold cache,
+    /// expressed in parts per million, rounded down.
+    /// None means a zero-duration or inconsistent trace.
+    pub fn cache_build_share_ppm(&self) -> Option<u32> {
+        if self.end_to_end_ns == 0 || self.cache_build_ns > self.end_to_end_ns {
+            return None;
+        }
+        let share = self.cache_build_ns
+            .saturating_mul(1_000_000)
+            / self.end_to_end_ns;
+        Some(share.min(1_000_000) as u32)
+    }
+}
+
 /// Construct a fresh cache, then execute the exact verified sequential trace.
 /// This prevents comparing a warm incremental cache with a cold Full baseline.
 pub fn profile_cold_verified_sequence(
@@ -208,6 +237,42 @@ pub fn profile_verified_sequence(
 mod tests {
     use super::*;
     use crate::fourier5_hierarchy::{FiveCircleHierarchy, GateKind, LeafRouting};
+
+    #[test]
+    fn cold_metrics_include_setup_and_reject_inconsistent_time() {
+        let sample = SequentialSample {
+            accepted: true, output: 1, updated_gates: 3, elapsed_ns: 200,
+        };
+        let trace = SequentialProfile {
+            samples: vec![sample],
+            total_ns: 200,
+            accepted_count: 1,
+            rejected_count: 0,
+            updated_gates: 3,
+            vm_hwm_kib: None,
+        };
+        let cold = ColdSequentialProfile {
+            cache_build_ns: 800,
+            end_to_end_ns: 1000,
+            trace: trace.clone(),
+        };
+        assert_eq!(cold.end_to_end_steps_per_second(), Some(1_000_000));
+        assert_eq!(cold.cache_build_share_ppm(), Some(800_000));
+        assert_eq!(cold.trace.statistics().unwrap().steps_per_second, Some(5_000_000));
+        let empty = ColdSequentialProfile {
+            cache_build_ns: 0,
+            end_to_end_ns: 0,
+            trace: SequentialProfile { samples: vec![], ..trace.clone() },
+        };
+        assert_eq!(empty.end_to_end_steps_per_second(), None);
+        assert_eq!(empty.cache_build_share_ppm(), None);
+        let inconsistent = ColdSequentialProfile {
+            cache_build_ns: 2,
+            end_to_end_ns: 1,
+            trace,
+        };
+        assert_eq!(inconsistent.cache_build_share_ppm(), None);
+    }
 
     #[test]
     fn acceptance_statistics_keep_heterogeneous_costs_separate() {
