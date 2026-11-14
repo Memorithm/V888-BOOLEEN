@@ -125,11 +125,16 @@ impl Row {
     }
 }
 
-type Item<'a> = (&'a [usize], &'a [bool]);
+pub(crate) type Item<'a> = (&'a [usize], &'a [bool]);
 
 /// B-phase stream: the #38 B order with every `REHEARSAL_PERIOD`-th slot
 /// optionally replaced by the next A-train episode of a fixed shuffle.
-fn b_stream<'a>(task: &'a gb::Task, spec: &GenSpec, seed: u64, rehearse: bool) -> Vec<Item<'a>> {
+pub(crate) fn b_stream<'a>(
+    task: &'a gb::Task,
+    spec: &GenSpec,
+    seed: u64,
+    rehearse: bool,
+) -> Vec<Item<'a>> {
     let b = episode_order(task.b_train.len(), spec.rounds_b, seed ^ B_SALT);
     let a = episode_order(task.a_train.len(), spec.rounds_a, seed ^ REHEARSAL_SALT);
     let mut next_a = a.into_iter().cycle();
@@ -146,7 +151,7 @@ fn b_stream<'a>(task: &'a gb::Task, spec: &GenSpec, seed: u64, rehearse: bool) -
         .collect()
 }
 
-fn train(
+pub(crate) fn train(
     learner: Learner,
     circuit: &mut PlasticCircuit,
     graph: &Connectome,
