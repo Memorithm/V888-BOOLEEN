@@ -95,6 +95,24 @@ impl SequentialProfile {
         Ok(())
     }
 
+    /// Fail-closed statistics for policy calibration: never derive a throughput
+    /// or percentile from a trace whose counters or elapsed time disagree.
+    /// The unchecked statistics() method remains for backwards compatibility.
+    pub fn checked_statistics(
+        &self,
+    ) -> Result<Option<SequentialStatistics>, TraceIntegrityError> {
+        self.validate_integrity()?;
+        Ok(self.statistics())
+    }
+
+    /// Fail-closed per-acceptance statistics, with the same integrity contract.
+    pub fn checked_statistics_by_acceptance(
+        &self,
+    ) -> Result<AcceptanceStatistics, TraceIntegrityError> {
+        self.validate_integrity()?;
+        Ok(self.statistics_by_acceptance())
+    }
+
     /// Calculate independent latency distributions for accepted and rejected steps.
     /// Each denominator is the sum of its own measured step durations, never
     /// the overall trace duration. Empty subsets have no statistics.
@@ -281,6 +299,36 @@ pub fn profile_verified_sequence(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn checked_policy_statistics_reject_corruption_before_calibration() {
+        let mut profile = SequentialProfile {
+            samples: vec![
+                SequentialSample { accepted: true, output: 7, updated_gates: 2, elapsed_ns: 10 },
+                SequentialSample { accepted: false, output: 7, updated_gates: 0, elapsed_ns: 30 },
+            ],
+            total_ns: 40,
+            accepted_count: 1,
+            rejected_count: 1,
+            updated_gates: 2,
+            vm_hwm_kib: None,
+        };
+        let overall = profile.checked_statistics().unwrap().unwrap();
+        assert_eq!(overall.steps, 2);
+        assert_eq!(overall.steps_per_second, Some(50_000_000));
+        let split = profile.checked_statistics_by_acceptance().unwrap();
+        assert_eq!(split.accepted.unwrap().steps_per_second, Some(100_000_000));
+        assert_eq!(split.rejected.unwrap().steps_per_second, Some(33_333_333));
+        profile.total_ns = 1;
+        assert_eq!(profile.checked_statistics(), Err(TraceIntegrityError::TimeMismatch));
+        assert_eq!(
+            profile.checked_statistics_by_acceptance(),
+            Err(TraceIntegrityError::TimeMismatch)
+        );
+        profile.total_ns = 40;
+        profile.samples[0].updated_gates = usize::MAX;
+        assert_eq!(profile.checked_statistics(), Err(TraceIntegrityError::Overflow));
+    }
+
     #[test]
     fn integrity_oracle_rejects_corrupt_and_overflowed_traces() {
         let mut trace = SequentialProfile {
