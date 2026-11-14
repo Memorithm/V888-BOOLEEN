@@ -52,6 +52,7 @@ pub mod recovery_profile;
 pub mod recurrent_csr;
 pub mod region_activation;
 pub mod reward_limits;
+pub mod seq_generalisation;
 pub mod source_holdout;
 pub mod subcircuit_recall;
 pub mod synapse_pairs;
