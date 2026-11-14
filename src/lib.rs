@@ -230,12 +230,12 @@ mod tests {
         assert_eq!(state.words()[1], 1);
     }
 }
+pub mod heldout_regional_recall;
 pub mod paired_recall_tradeoff;
 pub mod region_recall_monitor;
-pub mod regional_retention;
-pub mod regional_episodes;
-pub mod regional_transition_profile;
-pub mod regional_lag;
 pub mod regional_candidate;
-pub mod heldout_regional_recall;
+pub mod regional_episodes;
+pub mod regional_lag;
+pub mod regional_retention;
+pub mod regional_transition_profile;
 pub mod regional_window_stability;
