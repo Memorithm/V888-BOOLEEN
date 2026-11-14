@@ -8,7 +8,6 @@ use crate::fourier5_hierarchy::compiled_truth_table;
 
 pub struct PersistentSession {
     model: FiveCircleHierarchy,
-    planes: Vec<u64>,
     stages: Vec<Vec<u64>>,
     pub rebuilt_gates: usize,
     pub updated_gates: usize,
@@ -30,7 +29,7 @@ impl PersistentSession {
             stages.push(next);
         }
         let rebuilt_gates = model.neuron_count();
-        Ok(Self { model, planes, stages, rebuilt_gates, updated_gates: 0 })
+        Ok(Self { model, stages, rebuilt_gates, updated_gates: 0 })
     }
 
     pub fn model(&self) -> &FiveCircleHierarchy { &self.model }
