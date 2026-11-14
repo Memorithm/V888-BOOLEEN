@@ -133,10 +133,113 @@ cargo +1.89 run --release -- bench-write-budget --csv results/write-budget-v1.cs
 
 ## Results
 
-Pending (pre-registration commit first; no learning run on seeds 161..200
-before it is pushed).
+Run after the pre-registration commit b3fe18f had been pushed. The grid
+(2560 rows: 4 flips × 40 seeds × 4 strategies × 4 budgets) takes about
+7.5 min on CPU. Two runs give a byte-identical CSV (sha256
+`5c864906…0e3cb417`) and an identical report. Every row keeps the original
+topology (`topology_unchanged_all=true`). Files:
+`results/write-budget-v1.csv`, `results/write-budget-report-v1.txt`.
 
-## Limitations (known before the run)
+### 1. Design gates (reported first)
+
+* **G1 passes:** writes never exceed the allowance; `error-gated` at
+  `paced100` and `total100` is bit-identical to uncapped `error-gated` with
+  zero refusals on all 320 (flip, seed) rows each; topology unchanged
+  everywhere.
+* **G2 passes:** `E/E-cue@paced100` refuses writes in 100 % of (seed, task)
+  at flip 50; the first refusal comes at episode 1.2 on average (of 256).
+* **G3 passes:** median CN pairs per (seed, task) 119 ≥ 20.
+
+### 2. Settings at flip 50 (k = 4, mean over 40 seeds)
+
+| strategy @ budget | ACC_all | ACC_CN | LEARN_all | LEARN_CN | FGT_all | FGT_CN | LAST_all | writes (4 tasks) |
+|---|---|---|---|---|---|---|---|---|
+| supervised @ free | 0.610 | 0.581 | 0.883 | 0.764 | 0.364 | 0.245 | 0.873 | 3625 |
+| error-gated @ free (= paced100 = total100) | 0.627 | 0.626 | 0.972 | 0.920 | 0.460 | 0.391 | 0.977 | 209 |
+| E/E-cue @ free | 0.688 | 0.636 | 0.971 | 0.906 | 0.378 | 0.359 | 0.976 | 452 |
+| reward @ free | 0.610 | 0.595 | 0.755 | 0.689 | 0.194 | 0.126 | 0.658 | 2554 |
+| supervised @ paced100 | 0.573 | 0.541 | 0.650 | 0.574 | 0.102 | 0.044 | 0.631 | 209 |
+| **E/E-cue @ paced100** | 0.639 | 0.599 | 0.691 | 0.634 | 0.070 | 0.047 | 0.692 | 209 |
+| reward @ paced100 | 0.598 | 0.570 | 0.630 | 0.574 | 0.043 | 0.006 | 0.600 | 209 |
+| E/E-cue @ total100 | 0.676 | 0.613 | 0.737 | 0.639 | 0.082 | 0.034 | 0.732 | 209 |
+| error-gated @ paced50 | 0.593 | 0.557 | 0.738 | 0.646 | 0.193 | 0.119 | 0.744 | 104 |
+
+With the same writes and schedule as `error-gated`, every other arm learns
+far less of the current task (LEARN_all 0.63–0.69 vs 0.97).
+
+### 3. Gain over `error-gated` across the flip sweep (k = 4; mean [95 % CI], seeds better/tied/worse)
+
+| flip | E/E-cue@free, all | E/E-cue@paced100, all | E/E-cue@free, CN | E/E-cue@paced100, CN | Δ LEARN_all, paced100 | Δ FGT_CN, paced100 (+ = forgets less) |
+|---|---|---|---|---|---|---|
+| 25 | +0.045 [+0.040, +0.050] 40/0/0 | −0.108 [−0.117, −0.098] 0/0/40 | −0.007 [−0.018, +0.004] | −0.116 [−0.140, −0.093] 5/0/35 | −0.340 | +0.294 |
+| 50 | +0.060 [+0.055, +0.065] 40/0/0 | **+0.011 [+0.003, +0.020] 25/0/15** | +0.010 [−0.003, +0.022] | −0.027 [−0.047, −0.006] 15/0/25 | −0.282 | +0.344 |
+| 75 | +0.070 [+0.064, +0.077] 40/0/0 | +0.051 [+0.041, +0.060] 38/0/2 | +0.037 [+0.023, +0.052] | +0.013 [−0.007, +0.034] 25/0/15 | −0.237 | +0.329 |
+| 100 | +0.115 [+0.105, +0.125] 40/0/0 | +0.127 [+0.117, +0.138] 40/0/0 | +0.106 [+0.091, +0.123] 40/0/0 | **+0.078 [+0.055, +0.101] 35/0/5** | −0.195 | **+0.334 [+0.308, +0.361] 40/0/0** |
+
+The `free` column replicates #124 on new seeds (flip 50 all +0.060 vs
++0.061; flip 100 CN +0.106 vs +0.110).
+
+### 4. Hypotheses
+
+| | statistic | value | result |
+|---|---|---|---|
+| G1 | budget integrity, E unchanged at 100 % | all rows | **pass** |
+| G2 | EE@paced100 refuses in ≥ 50 % of (seed, task), flip 50 | 100 % | **pass** |
+| G3 | median CN pairs ≥ 20 | 119 | **pass** |
+| H1 | EE@paced100 vs E, sequence rule, all pairs, flip 50 | +0.011 [+0.003, +0.020] 25/0/15; Δ LEARN −0.282, Δ LAST −0.285 | **fail** |
+| H2 | gain@paced100 ≥ 0.5 × gain@free and CI lo > 0, flip 50 | +0.011 vs 0.5 × +0.060 = +0.030 (CI lo +0.003) | **fail** |
+| H3 | CN gain monotone over flips 25→100 (tol 0.005) and gain@100 − gain@25 CI lo > 0 | −0.116 → −0.027 → +0.013 → +0.078; +0.193 [+0.164, +0.224] 40/0/0 | **pass** |
+| H4 | EE@paced100 vs E, sequence rule, CN pairs, flip 100 | ACC +0.078 [+0.055, +0.101] 35/0/5 (strong), but Δ LEARN_CN −0.173, Δ LAST_CN −0.090 | **fail** |
+| H5 | FGT_CN(E) − FGT_CN(EE@paced100) strong, flip 100 | +0.334 [+0.308, +0.361] 40/0/0 | **pass** (see reading: low learning) |
+| H6 | E vs supervised@paced100, sequence rule, CN pairs, flip 50 | +0.086 [+0.065, +0.107] 34/0/6; Δ LEARN_CN +0.346 | **pass** |
+| H7 | reward@paced100 − E, ACC_all CI lo > −0.05, flip 50 | −0.030 [−0.038, −0.022] 2/0/38; Δ LEARN −0.342 | **pass** (non-inferiority margin only; see reading) |
+
+### 5. Secondary (no pass/fail)
+
+* **Front-loaded total budget:** `E/E-cue@total100` keeps more of the
+  flip-50 gain (+0.048 [+0.042, +0.054] 40/0/0, CN −0.013) but still loses
+  0.235 LEARN_all. At flip 100 it gives +0.140 all / +0.069 CN.
+* **k = 2 and 3 at flip 50:** `E/E-cue@paced100` is *worse* than E on all
+  pairs (−0.108 and −0.024) and CN pairs (−0.136, −0.056). The small k = 4
+  gain comes from the last tasks being forgotten less, not from learning.
+* **Which pairs at flip 50, paced100:** seen +0.018, UE +0.017, ICN −0.019,
+  CN −0.027.
+* **Half budget:** `error-gated@paced50` loses 0.034 ACC_all and 0.235
+  LEARN_all at flip 50; `E/E-cue@paced50` loses 0.083 ACC_all. At flip 100,
+  `E/E-cue@paced50` still gains +0.061 all pairs over uncapped E.
+* **Reward at equal writes:** `reward@paced100` − `supervised@paced100` is
+  +0.024 all pairs / +0.029 CN at flip 50 (both lose ~0.33 LEARN vs E).
+  Uncapped, `reward` uses 2554 writes for ACC_all 0.610, LEARN 0.755.
+* **Write efficiency:** at flip 50 uncapped, ACC_all per 100 writes is far
+  higher for E (209 writes) than for S (3625) or R (2554) at a higher or
+  equal ACC.
+
+### Reading
+
+The +0.06 all-pairs cue gain of #124 at flip 50 is **mostly bought by extra
+writes**. Given exactly `error-gated`'s write schedule, `E/E-cue` keeps
++0.011 (H1, H2 fail): its cue edges consume the allowance in the first
+episodes, so it learns each task much less (LEARN −0.28) and has less to
+forget. At high conflict (flip 100) the cue still helps at equal writes
+(+0.127 all, +0.078 CN, 35/40 seeds), and the CN gain rises steadily with
+the flip rate (H3). But at every flip this gain is a forgetting-for-learning
+trade (Δ LEARN −0.20 to −0.34), so the sequence rule fails on CN pairs (H4),
+and the large forgetting cut (H5) mostly reflects that `E/E-cue@paced100`
+learned less in the first place.
+
+Among uncued rules, the error gate is by far the most write-efficient: with
+the same writes, `supervised` loses 0.054 ACC_all and 0.086 ACC_CN with
+LEARN 0.32–0.35 lower (H6). `reward` is within the pre-registered −0.05
+non-inferiority margin of E on ACC_all at flip 50 (H7), but it is worse in
+38/40 seeds and learns much less; at flip 50 every arm is near chance on
+final ACC, which makes this margin easy to meet. H7 is not evidence that
+reward modulation matches error gating.
+
+This cycle is a negative result for the cue at equal writes and a positive
+one for the error gate: the write budget, not the episode budget, is the
+right axis to compare these rules on.
+
+## Limitations
 
 - Synthetic graph and artificial OR-rule task only (128/32/8, active 6),
   threshold 1, init 1. Nothing is measured on the real BANC graph
@@ -151,6 +254,11 @@ before it is pushed).
   target that should fire.
 - CN pairs share TEST patterns with seen pairs. The cue is assumed known at
   test time. 40 seeds. No multiplicity correction across H1–H7.
+- The flip sweep uses the same seeds at every flip, but the fixtures (task
+  labels) differ by flip; H3's paired contrast is paired by seed only.
+- H7's non-inferiority margin (0.05) turned out loose at flip 50, where all
+  arms end near chance on the old tasks; it was fixed before the run and is
+  reported as is.
 
 B888-3 files (`src/circuit_explorer.rs`, subcircuit recall, activity atlas
 and their CLI wiring) are untouched. No NVIDIA dependency, no secrets. CPU
