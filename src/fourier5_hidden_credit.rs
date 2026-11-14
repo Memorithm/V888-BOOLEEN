@@ -114,6 +114,23 @@ impl HiddenCircuit {
         })
     }
 
+    /// Synthetic-label oracle construction only. The learner's fit methods
+    /// never inspect this model's parameters, only final output labels.
+    pub fn from_models(
+        layer: u32,
+        source_neurons: [u32; 15],
+        hidden: [WalshGate; 3],
+        root: WalshGate,
+    ) -> Result<Self, HiddenError> {
+        if hidden.iter().any(|gate| !valid_gate(*gate)) || !valid_gate(root) {
+            return Err(HiddenError::InvalidBinding);
+        }
+        let mut model = Self::new(layer, source_neurons)?;
+        model.hidden = hidden;
+        model.root = root;
+        Ok(model)
+    }
+
     #[must_use]
     pub fn hidden(&self) -> [WalshGate; 3] {
         self.hidden
