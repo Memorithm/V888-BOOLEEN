@@ -3,6 +3,9 @@
 use crate::subcircuit_recall::{RecallError, Subcircuit};
 use crate::BooleanState;
 
+/// Paired first-activation and durable-confirmation ticks from frozen trials.
+pub type PairedInactiveRecoveryLatencies = Vec<(Option<usize>, Option<usize>)>;
+
 /// Bounded-memory online recall. No snapshots or anatomical edges are stored.
 #[derive(Clone, Debug)]
 pub struct OnlineRecall {
@@ -332,6 +335,7 @@ impl OnlineRecall {
     /// requires `consecutive` matching states; the returned zero-based index is the
     /// confirmation tick, not the beginning of the streak. None means right-censored.
     /// This read-only measurement makes no anatomical or learning claim.
+    #[expect(clippy::too_many_arguments, reason = "Stable paired-study API; migrate callers before changing")]
     pub fn first_durable_inactive_region_recovery(
         &self,
         states: &[BooleanState],
@@ -379,6 +383,7 @@ impl OnlineRecall {
     /// recovery is right-censored, never counted as a zero-latency recovery.
     /// Returns (confirmation_tick_histogram, censored_trials), with zero-based ticks.
     /// No future observation influences circuit selection or historical counters.
+    #[expect(clippy::too_many_arguments, reason = "Stable paired-study API; migrate callers before changing")]
     pub fn inactive_region_recovery_histogram(
         &self,
         trials: &[Vec<BooleanState>],
@@ -441,6 +446,7 @@ impl OnlineRecall {
     /// Every trial uses the same horizon and the same historically frozen candidate.
     /// Returns (confirmed_by_tick, not_confirmed_by_tick); no probability estimate
     /// or biological inference is implied by these integer counts.
+    #[expect(clippy::too_many_arguments, reason = "Stable paired-study API; migrate callers before changing")]
     pub fn inactive_region_recovery_curve(
         &self,
         trials: &[Vec<BooleanState>],
@@ -475,6 +481,7 @@ impl OnlineRecall {
     /// Each row is (at_risk_at_tick, durable_confirmations_at_tick).
     /// Nonrecovering trials remain at risk through the final tick and are then
     /// right-censored. No biological hazard or causal interpretation is implied.
+    #[expect(clippy::too_many_arguments, reason = "Stable paired-study API; migrate callers before changing")]
     pub fn inactive_region_recovery_risk_table(
         &self,
         trials: &[Vec<BooleanState>],
@@ -508,6 +515,7 @@ impl OnlineRecall {
     /// Each trial has the same horizon. A censored result is not a zero-latency hit.
     /// Returns (A earlier, B earlier, equal confirmed, A only, B only, both censored).
     /// This is a paired descriptive count, not a significance test.
+    #[expect(clippy::too_many_arguments, reason = "Stable paired-study API; migrate callers before changing")]
     pub fn compare_inactive_region_recovery(
         &self,
         trials: &[Vec<BooleanState>],
@@ -591,6 +599,7 @@ impl OnlineRecall {
     /// candidates. Each pair contains zero-based confirmation ticks; None means
     /// right-censored at the common horizon. No trial changes selection or counters.
     /// This preserves pairing information lost in aggregate win/loss counts.
+    #[expect(clippy::too_many_arguments, reason = "Stable paired-study API; migrate callers before changing")]
     pub fn paired_inactive_region_recovery_latencies(
         &self,
         trials: &[Vec<BooleanState>],
@@ -600,7 +609,7 @@ impl OnlineRecall {
         maximum_members: usize,
         minimum_active: usize,
         consecutive: usize,
-    ) -> Result<Vec<(Option<usize>, Option<usize>)>, RecallError> {
+    ) -> Result<PairedInactiveRecoveryLatencies, RecallError> {
         if trials.is_empty() || trials.len() > 1000 {
             return Err(RecallError::ZeroBudget);
         }
@@ -667,6 +676,7 @@ impl OnlineRecall {
     /// Confirmed recovery beats censoring; earlier confirmations win.
     /// Equal outcomes are non-decisive. Returns None on a tie or insufficient
     /// decisive trials; the returned index is 0 or 1 in the threshold pair.
+    #[expect(clippy::too_many_arguments, reason = "Stable paired-study API; migrate callers before changing")]
     pub fn select_inactive_region_recovery_policy(
         &self,
         training_trials: &[Vec<BooleanState>],
@@ -714,6 +724,7 @@ impl OnlineRecall {
     /// beats a censored result; two censored results remain a separate category.
     /// Returns (wins, losses, equal confirmations, both censored).
     /// This read-only evaluation does not adjust or reselect the policy.
+    #[expect(clippy::too_many_arguments, reason = "Stable paired-study API; migrate callers before changing")]
     pub fn evaluate_inactive_region_recovery_policy(
         &self,
         held_out_trials: &[Vec<BooleanState>],
@@ -756,6 +767,7 @@ impl OnlineRecall {
     /// Returns (wins, losses, ties with recovery, jointly censored) per tick.
     /// A recovery confirmed after a horizon remains censored at that horizon.
     /// The selected policy is fixed by the caller; no fitting occurs here.
+    #[expect(clippy::too_many_arguments, reason = "Stable paired-study API; migrate callers before changing")]
     pub fn evaluate_inactive_region_policy_by_horizon(
         &self,
         held_out_trials: &[Vec<BooleanState>],
@@ -806,6 +818,7 @@ impl OnlineRecall {
     /// trials cost horizon + 1. The common bound avoids treating missing recovery
     /// as an immediate hit. Returns (selected_cost, control_cost) as exact integers.
     /// This is an experimental comparison, not a biological or causal estimate.
+    #[expect(clippy::too_many_arguments, reason = "Stable paired-study API; migrate callers before changing")]
     pub fn held_out_recovery_latency_costs(
         &self,
         held_out_trials: &[Vec<BooleanState>],
@@ -844,6 +857,7 @@ impl OnlineRecall {
     /// trial costs horizon + 1. Preserves pairing and trial order for subsequent
     /// uncertainty analysis without reselecting the historical circuit.
     /// Returns (chosen-policy cost, control cost) for each trial.
+    #[expect(clippy::too_many_arguments, reason = "Stable paired-study API; migrate callers before changing")]
     pub fn held_out_recovery_trial_costs(
         &self,
         held_out_trials: &[Vec<BooleanState>],
@@ -885,6 +899,7 @@ impl OnlineRecall {
     /// Returns (chosen_better, control_better, equal, chosen_total, control_total).
     /// Lower cost means earlier durable recovery; censored trials cost horizon + 1.
     /// This is descriptive experimental accounting, not biological evidence.
+    #[expect(clippy::too_many_arguments, reason = "Stable paired-study API; migrate callers before changing")]
     pub fn held_out_recovery_cost_comparison(
         &self,
         held_out_trials: &[Vec<BooleanState>],
