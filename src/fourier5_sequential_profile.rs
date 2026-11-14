@@ -48,7 +48,45 @@ pub struct AcceptanceStatistics {
     pub rejected: Option<SequentialStatistics>,
 }
 
+/// An inconsistent trace must not be used for policy calibration or reporting.
+/// Checks counts, gate totals and elapsed time with checked arithmetic.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TraceIntegrityError {
+    CountMismatch,
+    GateMismatch,
+    TimeMismatch,
+    Overflow,
+}
+
 impl SequentialProfile {
+    /// Validate aggregate counters against the actual intervention samples.
+    /// No timing measurements are altered; malformed or overflowing traces fail closed.
+    pub fn validate_integrity(&self) -> Result<(), TraceIntegrityError> {
+        let mut accepted = 0_usize;
+        let mut rejected = 0_usize;
+        let mut gates = 0_usize;
+        let mut elapsed = 0_u128;
+        for sample in &self.samples {
+            if sample.accepted {
+                accepted = accepted.checked_add(1).ok_or(TraceIntegrityError::Overflow)?;
+            } else {
+                rejected = rejected.checked_add(1).ok_or(TraceIntegrityError::Overflow)?;
+            }
+            gates = gates.checked_add(sample.updated_gates).ok_or(TraceIntegrityError::Overflow)?;
+            elapsed = elapsed.checked_add(sample.elapsed_ns).ok_or(TraceIntegrityError::Overflow)?;
+        }
+        if accepted != self.accepted_count || rejected != self.rejected_count {
+            return Err(TraceIntegrityError::CountMismatch);
+        }
+        if gates != self.updated_gates {
+            return Err(TraceIntegrityError::GateMismatch);
+        }
+        if elapsed != self.total_ns {
+            return Err(TraceIntegrityError::TimeMismatch);
+        }
+        Ok(())
+    }
+
     /// Calculate independent latency distributions for accepted and rejected steps.
     /// Each denominator is the sum of its own measured step durations, never
     /// the overall trace duration. Empty subsets have no statistics.
@@ -235,6 +273,33 @@ pub fn profile_verified_sequence(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn integrity_oracle_rejects_corrupt_and_overflowed_traces() {
+        let mut trace = SequentialProfile {
+            samples: vec![
+                SequentialSample { accepted: true, output: 1, updated_gates: 3, elapsed_ns: 11 },
+                SequentialSample { accepted: false, output: 0, updated_gates: 0, elapsed_ns: 7 },
+            ],
+            total_ns: 18,
+            accepted_count: 1,
+            rejected_count: 1,
+            updated_gates: 3,
+            vm_hwm_kib: None,
+        };
+        assert_eq!(trace.validate_integrity(), Ok(()));
+        trace.accepted_count = 2;
+        assert_eq!(trace.validate_integrity(), Err(TraceIntegrityError::CountMismatch));
+        trace.accepted_count = 1;
+        trace.updated_gates = 4;
+        assert_eq!(trace.validate_integrity(), Err(TraceIntegrityError::GateMismatch));
+        trace.updated_gates = 3;
+        trace.total_ns = 19;
+        assert_eq!(trace.validate_integrity(), Err(TraceIntegrityError::TimeMismatch));
+        trace.total_ns = 18;
+        trace.samples[0].elapsed_ns = u128::MAX;
+        assert_eq!(trace.validate_integrity(), Err(TraceIntegrityError::Overflow));
+    }
+
     use crate::fourier5_hierarchy::{FiveCircleHierarchy, GateKind, LeafRouting};
 
     #[test]
