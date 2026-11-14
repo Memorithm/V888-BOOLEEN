@@ -11,6 +11,7 @@ use v888_booleen::consolidation::{
     Scenario, ALL_STRATEGIES,
 };
 use v888_booleen::consolidation_scale as scale;
+use v888_booleen::context_cue as cc;
 use v888_booleen::eligibility_trace as et;
 use v888_booleen::engine::BooleanEngine;
 use v888_booleen::error_gated as eg;
@@ -136,6 +137,7 @@ fn help() {
     println!("  bench-consolidated-graded [--graph brain.v888b] [--seeds 1,..,10] [--init 1] [--csv out.csv]  (consolidation 1-of-4 + bounded 1-in-8 A rehearsal on supervised control, trace-group-8, trace-per-target; equal budget; GENERATED synthetic graph by default)");
     println!("  bench-importance-protection [--graph brain.v888b] [--seeds 1,..,10] [--init 1] [--csv out.csv]  (importance-weighted freeze of top-credit A edges 25%/50% + task-gated plasticity vs #39 consolidate; equal budget; GENERATED synthetic graph by default)");
     println!("  bench-error-gated [--graph brain.v888b] [--seeds 1,..,20] [--init 1] [--csv out.csv]  (error-gated / margin-gated-4 supervised updates vs matched supervised control; agree/conflict forgetting split; bootstrap CIs; equal budget; GENERATED synthetic graph by default)");
+    println!("  bench-context-cue [--graph brain.v888b] [--seeds 1,..,20] [--flips 25,50,100] [--init 1] [--csv out.csv]  (task-context cue on reserved existing input lines vs no cue, supervised and error-gated; conflict-pair floor; structural ceiling; bootstrap CIs; equal budget; GENERATED synthetic graph by default)");
     println!("  bench-graded-reward [--graph brain.v888b] [--seeds 1,..,10] [--init 1] [--csv out.csv]  (graded reward ladder bit/fraction/group-k/per-target through the #36 trace + episode-stamped tags for delayed scalars; GENERATED synthetic graph by default)");
     println!("  train-plasticity --graph brain.v888b --episodes labeled.csv --output weights.v888pls [--epochs 1]");
     println!("  score-plasticity --graph brain.v888b --weights weights.v888pls --episodes labeled.csv [--threshold 1]");
@@ -1148,6 +1150,156 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("H2_margin_gated_4_passes={h2}");
             println!("H3_generalisation_gain={h3}");
             println!("H4_control_agree_forgetting_avoidable={h4}");
+            println!(
+                "topology_unchanged={}",
+                rows.iter().all(|r| r.topology_unchanged)
+            );
+            println!("evaluation_scope=synthetic_or_unverified_graph_artificial_labels_not_BANC_not_biological");
+        }
+        Some("bench-context-cue") => {
+            let allowed = ["--graph", "--seeds", "--flips", "--init", "--csv"];
+            for flag in args.iter().skip(1).filter(|arg| arg.starts_with("--")) {
+                if !allowed.contains(&flag.as_str()) {
+                    return Err(format!("unknown bench-context-cue option: {flag}").into());
+                }
+            }
+            let seeds = optional(&args, "--seeds")
+                .unwrap_or("1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20")
+                .split(',')
+                .map(str::parse::<u64>)
+                .collect::<Result<Vec<_>, _>>()?;
+            let flips = optional(&args, "--flips")
+                .unwrap_or("25,50,100")
+                .split(',')
+                .map(str::parse::<u32>)
+                .collect::<Result<Vec<_>, _>>()?;
+            let init = optional(&args, "--init").unwrap_or("1").parse::<u8>()?;
+            let shape = genbench::GraphShape {
+                sources: 64,
+                targets: 24,
+                fan_in: 6,
+            };
+            let spec = genbench::GenSpec {
+                active: 4,
+                train_patterns: 32,
+                test_patterns: 64,
+                rounds_a: 8,
+                rounds_b: 8,
+                positive_pct: 50,
+                flip_pct: cc::PRIMARY_FLIP,
+                init_weight: init,
+            };
+            let owned = match optional(&args, "--graph") {
+                Some(path) => Some(Connectome::load(Path::new(path))?),
+                None => None,
+            };
+            let graph_label = if owned.is_some() {
+                "PROVIDED_GRAPH"
+            } else {
+                "GENERATED_SYNTHETIC"
+            };
+            let rows = cc::run_grid(owned.as_ref(), &shape, &spec, &flips, &seeds)?;
+            if let Some(path) = optional(&args, "--csv") {
+                use std::io::Write;
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)?
+                    .write_all(cc::to_csv(&rows, graph_label).as_bytes())?;
+            }
+            println!("v888_context_cue_schema=b888-4-context-cue-v1");
+            if owned.is_some() {
+                println!("graph=PROVIDED_GRAPH (task labels artificial)");
+            } else {
+                println!("graph=GENERATED_SYNTHETIC sources=64 targets=24 fan_in=6 (not BANC; real BANC V888 graph DOI 10.7910/DVN/7WTH1N not available here)");
+            }
+            println!(
+                "seeds={} flips={flips:?} init={init} active=4 train_patterns=32 test_patterns=64 rounds_a=8 rounds_b=8 threshold={} cue_cap={} metric=balanced_accuracy boot_resamples={} boot_seed={:#x}",
+                seeds.len(),
+                cc::THRESHOLD,
+                cc::CUE_CAP,
+                eg::BOOT_RESAMPLES,
+                eg::BOOT_SEED,
+            );
+            let fmt = |s: genbench::Spread| format!("{:.3}±{:.3}", s.mean, s.sd);
+            let stat = |flip: u32, a: cc::Arm, f: &dyn Fn(&cc::Row) -> f64| {
+                let v: Vec<f64> = rows
+                    .iter()
+                    .filter(|r| r.flip == flip && r.arm == a)
+                    .map(f)
+                    .collect();
+                genbench::spread(&v)
+            };
+            println!("arm_summary: flip,arm,cue_lines_a/b,cue_reach_a/b,a_train,a_test_after_a,a_test_after_b,forgetting,b_test,agree_forgetting,conflict_forgetting,conflict_b_test,conflict_both_correct,ceiling,weights_changed(A+B),cue_weight_mean");
+            for &flip in &flips {
+                for a in cc::ARMS {
+                    println!(
+                        "{flip},{},{:.1}/{:.1},{:.1}/{:.1},{},{},{},{},{},{},{},{},{},{},{:.1},{:.2}",
+                        a.label(),
+                        stat(flip, a, &|r| r.cue_lines_a as f64).mean,
+                        stat(flip, a, &|r| r.cue_lines_b as f64).mean,
+                        stat(flip, a, &|r| r.cue_reach_a as f64).mean,
+                        stat(flip, a, &|r| r.cue_reach_b as f64).mean,
+                        fmt(stat(flip, a, &|r| r.a_train_after_a.balanced())),
+                        fmt(stat(flip, a, &|r| r.a_test_after_a.all.balanced())),
+                        fmt(stat(flip, a, &|r| r.a_test_after_b.all.balanced())),
+                        fmt(stat(flip, a, &cc::Row::forgetting)),
+                        fmt(stat(flip, a, &|r| r.b_test_after_b.all.balanced())),
+                        fmt(stat(flip, a, &cc::Row::forgetting_agree)),
+                        fmt(stat(flip, a, &cc::Row::forgetting_conflict)),
+                        fmt(stat(flip, a, &|r| r.b_test_after_b.conflict.balanced())),
+                        fmt(stat(flip, a, &cc::Row::both_frac)),
+                        fmt(stat(flip, a, &cc::Row::ceiling_frac)),
+                        stat(
+                            flip,
+                            a,
+                            &|r| (r.cost_a.weights_changed + r.cost_b.weights_changed) as f64
+                        )
+                        .mean,
+                        stat(flip, a, &|r| r.cue_weight_mean).mean,
+                    );
+                }
+            }
+            let p = |d: &eg::Paired| {
+                format!(
+                    "{:+.3}±{:.3}[{:+.3},{:+.3}]{}/{}/{}",
+                    d.mean, d.sd, d.ci_lo, d.ci_hi, d.better, d.ties, d.worse
+                )
+            };
+            println!("comparison: flip,x,base,n,d_forget(+=x_less),d_forget_agree,d_forget_conflict,d_a_test,d_retained_a,d_b_test,d_b_conflict,d_both_correct,passes_rule,breaks_floor  (each: mean±sd[boot95_lo,hi]better/tie/worse)");
+            for &flip in &flips {
+                let mut cmps = cc::cue_comparisons(&rows, flip);
+                cmps.push(cc::compare(&rows, flip, cc::ERROR_GATED, cc::SUPERVISED));
+                cmps.push(cc::compare(
+                    &rows,
+                    flip,
+                    cc::ERROR_GATED_CUE,
+                    cc::SUPERVISED,
+                ));
+                for c in cmps {
+                    println!(
+                        "{flip},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                        c.x.label(),
+                        c.base.label(),
+                        c.forget.n,
+                        p(&c.forget),
+                        p(&c.forget_agree),
+                        p(&c.forget_conflict),
+                        p(&c.a_test),
+                        p(&c.retained),
+                        p(&c.b),
+                        p(&c.b_conflict),
+                        p(&c.both),
+                        c.passes(),
+                        c.breaks_floor(),
+                    );
+                }
+            }
+            let (h1, h2, h3, h4) = cc::readings(&rows);
+            println!("H1_supervised_cue_passes_flip50={h1}");
+            println!("H2_error_gated_cue_passes_flip50={h2}");
+            println!("H3_conflict_floor_broken_flip50={h3}");
+            println!("H4_cue_passes_at_flip25_or_flip100={h4}");
             println!(
                 "topology_unchanged={}",
                 rows.iter().all(|r| r.topology_unchanged)

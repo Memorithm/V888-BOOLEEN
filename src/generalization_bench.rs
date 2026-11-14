@@ -185,16 +185,29 @@ pub struct Task {
     pub valence_b: Vec<bool>,
 }
 
-fn usable(graph: &Connectome, edge: usize) -> bool {
+pub(crate) fn usable(graph: &Connectome, edge: usize) -> bool {
     graph.counts[edge] != 0
 }
 
 /// Draw the task for one seed. Fails if the graph cannot supply enough
 /// distinct patterns.
 pub fn build_task(graph: &Connectome, spec: &GenSpec, seed: u64) -> io::Result<Task> {
+    build_task_excluding(graph, spec, seed, &[])
+}
+
+/// [`build_task`] with some input nodes removed from the pattern pool (used
+/// by the context-cue bench to reserve cue lines). With `exclude` empty this
+/// is exactly `build_task` (tested).
+pub fn build_task_excluding(
+    graph: &Connectome,
+    spec: &GenSpec,
+    seed: u64,
+    exclude: &[usize],
+) -> io::Result<Task> {
     graph.validate()?;
     spec.validate()?;
     let pool: Vec<usize> = (0..graph.ids.len())
+        .filter(|s| !exclude.contains(s))
         .filter(|&s| (graph.offsets[s]..graph.offsets[s + 1]).any(|e| usable(graph, e as usize)))
         .collect();
     if pool.len() < spec.active {
