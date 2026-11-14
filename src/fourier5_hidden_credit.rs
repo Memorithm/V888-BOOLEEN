@@ -481,16 +481,26 @@ mod tests {
             7,
             ids,
             [
-                WalshGate { mask: 13, phase: false },
-                WalshGate { mask: 22, phase: false },
-                WalshGate { mask: 27, phase: false },
+                WalshGate {
+                    mask: 13,
+                    phase: false,
+                },
+                WalshGate {
+                    mask: 22,
+                    phase: false,
+                },
+                WalshGate {
+                    mask: 27,
+                    phase: false,
+                },
             ],
-            WalshGate { mask: 7, phase: false },
+            WalshGate {
+                mask: 7,
+                phase: false,
+            },
         )
         .unwrap();
-        let first: Vec<_> = (0..4)
-            .map(|i| sample(0, &teacher, 1000 + i))
-            .collect();
+        let first: Vec<_> = (0..4).map(|i| sample(0, &teacher, 1000 + i)).collect();
         let mut learner = HiddenCircuit::new(7, ids).unwrap();
         let gained = learner.fit_joint(&first, &[]).unwrap();
         assert!(gained.accepted);
@@ -507,7 +517,9 @@ mod tests {
             })
             .collect();
         let saved = learner.checkpoint();
-        let update = learner.fit_coordinate(&opposite, &[first.as_slice()]).unwrap();
+        let update = learner
+            .fit_coordinate(&opposite, &[first.as_slice()])
+            .unwrap();
         assert!(!update.accepted);
         assert_eq!(update.reward_before, 0);
         assert_eq!(update.reward_after, 0);
