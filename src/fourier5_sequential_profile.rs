@@ -39,7 +39,41 @@ pub struct SequentialStatistics {
     pub steps_per_second: Option<u128>,
 }
 
+/// Separate accepted and rejected interventions before aggregating latencies.
+/// This avoids hiding expensive cache updates inside a pooled percentile.
+/// Both subsets include independent Full-oracle verification time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AcceptanceStatistics {
+    pub accepted: Option<SequentialStatistics>,
+    pub rejected: Option<SequentialStatistics>,
+}
+
 impl SequentialProfile {
+    /// Calculate independent latency distributions for accepted and rejected steps.
+    /// Each denominator is the sum of its own measured step durations, never
+    /// the overall trace duration. Empty subsets have no statistics.
+    pub fn statistics_by_acceptance(&self) -> AcceptanceStatistics {
+        let subset = |accepted: bool| {
+            let samples: Vec<SequentialSample> = self.samples.iter().copied()
+                .filter(|sample| sample.accepted == accepted).collect();
+            let total_ns = samples.iter().fold(0_u128, |sum, sample| {
+                sum.saturating_add(sample.elapsed_ns)
+            });
+            SequentialProfile {
+                samples,
+                total_ns,
+                accepted_count: 0,
+                rejected_count: 0,
+                updated_gates: 0,
+                vm_hwm_kib: None,
+            }.statistics()
+        };
+        AcceptanceStatistics {
+            accepted: subset(true),
+            rejected: subset(false),
+        }
+    }
+
     /// Nearest-rank p95; median is the lower middle observation for even samples.
     /// All calculations are overflow-safe and avoid floating-point precision loss.
     pub fn statistics(&self) -> Option<SequentialStatistics> {
@@ -174,6 +208,35 @@ pub fn profile_verified_sequence(
 mod tests {
     use super::*;
     use crate::fourier5_hierarchy::{FiveCircleHierarchy, GateKind, LeafRouting};
+
+    #[test]
+    fn acceptance_statistics_keep_heterogeneous_costs_separate() {
+        let mut profile = SequentialProfile {
+            samples: Vec::new(),
+            total_ns: 0,
+            accepted_count: 0,
+            rejected_count: 0,
+            updated_gates: 0,
+            vm_hwm_kib: None,
+        };
+        assert_eq!(profile.statistics_by_acceptance(), AcceptanceStatistics {
+            accepted: None, rejected: None,
+        });
+        for (accepted, elapsed_ns) in [(true, 100_u128), (false, 2), (true, 300), (false, 4)] {
+            profile.samples.push(SequentialSample {
+                accepted, output: 0, updated_gates: 0, elapsed_ns,
+            });
+            profile.total_ns += elapsed_ns;
+        }
+        let stats = profile.statistics_by_acceptance();
+        let accepted = stats.accepted.unwrap();
+        let rejected = stats.rejected.unwrap();
+        assert_eq!((accepted.steps, accepted.min_ns, accepted.max_ns), (2, 100, 300));
+        assert_eq!((rejected.steps, rejected.min_ns, rejected.max_ns), (2, 2, 4));
+        assert_eq!(accepted.steps_per_second, Some(5_000_000));
+        assert_eq!(rejected.steps_per_second, Some(333_333_333));
+        assert_ne!(accepted.steps_per_second, profile.statistics().unwrap().steps_per_second);
+    }
 
     #[test]
     fn integer_statistics_cover_nonuniform_latency_and_empty_trace() {
