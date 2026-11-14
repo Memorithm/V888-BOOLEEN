@@ -78,7 +78,7 @@ pub fn select_heldout_ablation(
             worst_member: circuit.members()[worst_position],
             total_member_activations: cost,
         };
-        let replace = best.as_ref().is_none_or( |(_, current)| {
+        let replace = best.as_ref().is_none_or(|(_, current)| {
             report.worst_case_matches > current.worst_case_matches
                 || (report.worst_case_matches == current.worst_case_matches
                     && report.total_member_activations < current.total_member_activations)
