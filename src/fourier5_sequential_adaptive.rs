@@ -126,6 +126,8 @@ mod tests {
                         cache_build_ns: 0,
                     },
                 ).unwrap();
+                assert_eq!(result.engine, Engine::Full);
+                assert_eq!(result.cone_gates, 0);
                 assert_eq!(result.output, expected.infer_bitplanes(&inputs).unwrap());
                 assert_eq!(model.infer_bitplanes(&inputs).unwrap(),
                     if accept { result.output } else { before });
