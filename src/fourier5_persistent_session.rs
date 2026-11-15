@@ -116,6 +116,25 @@ impl PersistentSession {
         Ok(trace)
     }
 
+    /// Measure an entire atomic verified batch, including the transaction clone,
+    /// independent Full oracles, accepted cache refreshes and commit. Unlike
+    /// per-step telemetry this duration is suitable for end-to-end comparisons.
+    /// The optional VmHWM is process-wide, not memory allocated by this call.
+    /// On failure the original session is preserved by the atomic executor.
+    pub fn execute_atomic_profiled_end_to_end(
+        &mut self,
+        interventions: &[(PackedIntervention, bool)],
+        max_steps: usize,
+    ) -> Result<(Vec<VerifiedStepTelemetry>, u128, Option<u64>), HierarchyError> {
+        if interventions.len() > max_steps {
+            return Err(HierarchyError::InvalidInput);
+        }
+        let start = std::time::Instant::now();
+        let trace = self.execute_atomic_profiled_verified_sequence(interventions, max_steps)?;
+        let elapsed_ns = start.elapsed().as_nanos();
+        Ok((trace, elapsed_ns, linux_vmhwm_kib()))
+    }
+
     /// Profile a heterogeneous sequential workload without freezing the model.
     /// Each accepted intervention updates the exact persistent cache before the
     /// next proposal. Prefix semantics apply on a later invalid intervention.
@@ -1201,6 +1220,47 @@ mod tests {
             assert_eq!(session.rebuilt_gates, reference.neuron_count());
         }
     }
+    #[test]
+    fn atomic_end_to_end_includes_transaction_and_preserves_oracle() {
+        let base = FiveCircleHierarchy::from_modes(
+            &[GateKind::Majority, GateKind::Parity],
+            LeafRouting::SeededShuffle(53),
+        )
+        .unwrap();
+        let planes: Vec<u64> = (0..base.input_bits())
+            .map(|i| (i as u64 + 5).wrapping_mul(0x9e3779b97f4a7c15))
+            .collect();
+        let mut session = PersistentSession::new(base.clone(), planes.clone()).unwrap();
+        let valid = PackedIntervention::LeafSwap { first: 0, second: 7 };
+        let invalid = PackedIntervention::LeafSwap {
+            first: 0,
+            second: base.input_bits(),
+        };
+        let original = session.output();
+        assert!(matches!(
+            session.execute_atomic_profiled_end_to_end(&[(valid, true), (invalid, true)], 2),
+            Err(HierarchyError::InvalidRouting)
+        ));
+        assert_eq!(session.output(), original);
+        assert_eq!(session.model().routing(), base.routing());
+        let (trace, total_ns, peak) = session
+            .execute_atomic_profiled_end_to_end(&[(valid, true), (valid, false)], 2)
+            .unwrap();
+        assert_eq!(trace.len(), 2);
+        assert!(trace[0].accepted);
+        assert!(!trace[1].accepted);
+        assert!(total_ns >= trace.iter().map(|step| step.elapsed_ns).sum::<u128>());
+        if let (Some(end), Some(last)) = (peak, trace.last().and_then(|step| step.vmhwm_kib)) {
+            assert!(end >= last);
+        }
+        let mut routing = base.routing().to_vec();
+        routing.swap(0, 7);
+        assert_eq!(
+            session.output(),
+            base.rerouted(routing).unwrap().infer_bitplanes(&planes).unwrap()
+        );
+    }
+
     #[test]
     fn atomic_profiled_sequence_rolls_back_and_commits_exact_cache() {
         let base = FiveCircleHierarchy::from_modes(
