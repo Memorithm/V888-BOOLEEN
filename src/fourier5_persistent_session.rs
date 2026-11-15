@@ -27,6 +27,52 @@ fn linux_vmhwm_kib() -> Option<u64> {
     line.split_whitespace().nth(1)?.parse().ok()
 }
 
+
+/// Aggregate measured cost of an evolving, verified synthetic circuit.
+/// The duration includes oracle verification and accepted-cache maintenance.
+/// Throughput is a whole-number lower bound in interventions/second.
+/// VmHWM is the process-wide high-water mark, not attributable per intervention.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifiedSequenceSummary {
+    pub interventions: usize,
+    pub accepted: usize,
+    pub updated_gates: usize,
+    pub elapsed_ns: u128,
+    pub interventions_per_second: u128,
+    pub max_vmhwm_kib: Option<u64>,
+}
+
+impl VerifiedSequenceSummary {
+    pub fn from_trace(trace: &[VerifiedStepTelemetry]) -> Option<Self> {
+        let mut elapsed_ns = 0u128;
+        let mut updated_gates = 0usize;
+        let mut accepted = 0usize;
+        let mut max_vmhwm_kib: Option<u64> = None;
+        for step in trace {
+            elapsed_ns = elapsed_ns.checked_add(step.elapsed_ns)?;
+            updated_gates = updated_gates.checked_add(step.updated_gates)?;
+            accepted = accepted.checked_add(usize::from(step.accepted))?;
+            if let Some(kib) = step.vmhwm_kib {
+                max_vmhwm_kib = Some(max_vmhwm_kib.map_or(kib, |prev| prev.max(kib)));
+            }
+        }
+        let interventions_per_second = if elapsed_ns == 0 {
+            0 // Insufficient timer resolution: never claim infinite throughput.
+        } else {
+            (trace.len() as u128).checked_mul(1_000_000_000)?
+                / elapsed_ns
+        };
+        Some(Self {
+            interventions: trace.len(),
+            accepted,
+            updated_gates,
+            elapsed_ns,
+            interventions_per_second,
+            max_vmhwm_kib,
+        })
+    }
+}
+
 pub struct PersistentSession {
     model: FiveCircleHierarchy,
     stages: Vec<Vec<u64>>,
@@ -595,6 +641,30 @@ impl PersistentSession {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn sequence_summary_aggregates_heterogeneous_workload_without_inventing_memory() {
+        let trace = [
+            VerifiedStepTelemetry { output: 1, accepted: true, updated_gates: 7, elapsed_ns: 250_000_000, vmhwm_kib: None },
+            VerifiedStepTelemetry { output: 0, accepted: false, updated_gates: 0, elapsed_ns: 500_000_000, vmhwm_kib: Some(1024) },
+            VerifiedStepTelemetry { output: 1, accepted: true, updated_gates: 3, elapsed_ns: 250_000_000, vmhwm_kib: Some(900) },
+        ];
+        let s = VerifiedSequenceSummary::from_trace(&trace).unwrap();
+        assert_eq!(s.interventions, 3);
+        assert_eq!(s.accepted, 2);
+        assert_eq!(s.updated_gates, 10);
+        assert_eq!(s.elapsed_ns, 1_000_000_000);
+        assert_eq!(s.interventions_per_second, 3);
+        assert_eq!(s.max_vmhwm_kib, Some(1024));
+        assert_eq!(VerifiedSequenceSummary::from_trace(&[]).unwrap().interventions_per_second, 0);
+        let overflow = [
+            VerifiedStepTelemetry { elapsed_ns: u128::MAX, ..trace[0].clone() },
+            trace[1].clone(),
+        ];
+        assert!(VerifiedSequenceSummary::from_trace(&overflow).is_none());
+        let no_memory = VerifiedSequenceSummary::from_trace(&trace[..1]).unwrap();
+        assert_eq!(no_memory.max_vmhwm_kib, None);
+    }
     use super::*;
     use crate::fourier5::FiveCircle;
     use crate::fourier5_hierarchy::{GateKind, LeafRouting};
