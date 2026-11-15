@@ -230,5 +230,121 @@ cargo +1.89 run --release -- bench-cue-partner --csv results/cue-partner-v1.csv 
 
 ## Results
 
-Pending (main run after the pre-registration, harness and tests + pilot
-commits are pushed).
+Run once after the pre-registration commit 1bf5a43, the harness + tests
+commit 3bd4f75 and the pilot commit 939f9f6 had been pushed. The grid has
+18000 rows: 3 k × 3 flips × 40 seeds × 5 orders × 10 arms, on 7 worker
+threads (2757 s wall).
+CSV sha256 `9bfa800b520aadaa44e57442972e4956118e5c050bddbbf79496144377a1cbba`.
+A second, independent run with 5 worker threads is in progress (thread-count reproducibility check).
+Every row keeps the original topology (`topology_unchanged_all=true`).
+Files: `results/cue-partner-v1.csv`, `results/cue-partner-report-v1.txt`,
+pilot `results/cue-partner-census-v1.txt`. All numbers are on the
+**GENERATED_SYNTHETIC** graph with artificial labels, not on BANC.
+
+### 1. Design gates (reported first)
+
+* **G1 passes:** topology, initial weights, allowances, `paced100` identity of
+  E, guard/ledger consistency, orders and codes (Z1/Zg1 = the blocks; share-2
+  codes: σ one k-cycle, every line in exactly 2 codes, codes distinct, own
+  block included; Zg2c = the #134 share-2 code; matched / anti = the
+  pre-registered best / worst candidate tour; random = the Sattolo cycle) hold
+  in every row.
+* **G2 passes.** matched ≥ cyclic ≥ anti partner agreement in 40/40 seeds at
+  every (k, flip) (also at k = 8). Mean gaps (k = 16 / k = 24): matched − anti
+  0.875 / 0.917 at flip 100 (≥ 0.20) and 0.167 / 0.158 at flip 50 (≥ 0.05);
+  matched − random 0.388 / 0.440 at flip 100 (≥ 0.20) and 0.082 / 0.079 at
+  flip 50 (≥ 0.02). Zg2m defers in 100 % of held-out rows at every (k, flip).
+  The matched tour is the cyclic tour in 28/40 seeds at k = 16, flip 25 (37/40
+  at k = 24; 33/40 at k = 8) and in 0/40 seeds at flips 50 and 100.
+* **G3 passes:** median CN pairs per (seed, task) at k = 24, flip 50 is 110
+  (61 at k = 8, 64 at k = 16).
+
+All gates pass, so H1–H13 are evaluated.
+
+### 2. Arms, held-out orders (ACC_all, mean over 40 seeds × 4 orders)
+
+| k | flip | S1 | R1 | E | Z1 | Zg1 | Zg2c | **Zg2m** | Zg2a | Zg2r | Z2m |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 8 | 25 | 0.598 | 0.631 | 0.653 | 0.679 | 0.702 | 0.688 | 0.688 | 0.652 | 0.671 | 0.683 |
+| 8 | 50 | 0.546 | 0.565 | 0.570 | 0.606 | 0.639 | 0.606 | 0.619 | 0.601 | 0.610 | 0.607 |
+| 8 | 100 | 0.509 | 0.512 | 0.521 | 0.570 | 0.601 | 0.496 | **0.631** | 0.496 | 0.583 | 0.603 |
+| 16 | 25 | 0.562 | 0.593 | 0.584 | 0.600 | 0.610 | 0.622 | 0.622 | 0.600 | 0.609 | 0.611 |
+| 16 | 50 | 0.533 | 0.547 | 0.542 | 0.565 | 0.576 | 0.573 | **0.589** | 0.567 | 0.577 | 0.572 |
+| 16 | 100 | 0.507 | 0.511 | 0.521 | 0.546 | 0.559 | 0.508 | **0.602** | 0.508 | 0.566 | 0.584 |
+| 24 | 25 | 0.546 | 0.580 | 0.566 | 0.572 | 0.575 | 0.579 | 0.579 | 0.571 | 0.574 | 0.575 |
+| 24 | 50 | 0.522 | 0.539 | 0.533 | 0.541 | 0.545 | 0.545 | 0.551 | 0.542 | 0.546 | 0.545 |
+| 24 | 100 | 0.507 | 0.513 | 0.524 | 0.532 | 0.534 | 0.516 | **0.553** | 0.516 | 0.537 | 0.549 |
+
+Equal budget holds: within a (k, flip) the S1 / E / Zg arms make the same
+effective writes up to 0.5 % (e.g. k = 16, flip 100: 630.7–633.1 per run;
+k = 24, flip 100: 1365.3–1367.6); the unguarded Z1 / Z2m arms stay within the
+same allowance and use slightly fewer (k = 16, flip 100: 623.7 / 616.9). At
+flip 100 the anti code coincides with the cyclic code (Zg2a = Zg2c, as stated
+in the pilot).
+
+### 3. Pre-registered hypotheses (held-out orders, k = 16 unless stated)
+
+Δ = mean [95 % CI] better/ties/worse over 40 seeds.
+
+| H | comparison | Δ | verdict |
+|---|---|---|---|
+| H1 | flip 100, ACC_all Zg2m − Zg2c | +0.094 [+0.087, +0.101] 40/0/0 | **pass** |
+| H2 | flip 100, Zg2m vs S1 sequence rule | ACC +0.095 [+0.088, +0.101] 40/0/0; LEARN +0.188; LAST +0.203 | **pass** |
+| H3 | flip 50, ACC_all Zg2m − Zg2c | +0.015 [+0.011, +0.020] 37/0/3 | **pass** |
+| H4 | flip 50, Zg2m vs S1 sequence rule | ACC +0.055 [+0.051, +0.060] 40/0/0; LEARN +0.238; LAST +0.256 | **pass** |
+| H5 | flip 100, ACC_all Zg2m − Zg1 | +0.043 [+0.038, +0.047] 40/0/0 | **pass** |
+| H6 | flip 50, ACC_all Zg2m − Zg1 | +0.013 [+0.010, +0.016] 36/0/4 | **pass** |
+| H7 | flip 100, FGT_all Zg1 − Zg2m **and** LEARN_all Zg2m − Zg1 CI lower bound > −0.02 | FGT +0.105 [+0.100, +0.110] 40/0/0; LEARN −0.055 [−0.060, −0.051] 0/0/40 | **fail** (LEARN clause) |
+| H8 | flip 100, ACC_all Zg2m − Zg2r | +0.036 [+0.029, +0.042] 38/0/2 | **pass** |
+| H9 | flip 50, ACC_all Zg2m − Zg2r | +0.012 [+0.008, +0.015] 33/0/7 | **pass** |
+| H10 | k = 24, flip 100, ACC_all Zg2m − Zg1 | +0.019 [+0.017, +0.021] 40/0/0 | **pass** |
+| H11 | flip 100, worst held-out order Zg2m − Zg2c | +0.067 [+0.059, +0.074] 40/0/0 | **pass** |
+| H12 | flip 100, ACC_all Z2m − Z1 | +0.038 [+0.034, +0.042] 40/0/0 | **pass** |
+| H13 | flip 50, ACC_all Zg2m − Zg2a | +0.022 [+0.018, +0.026] 38/0/2 | **pass** |
+
+12 of 13 pass; H7 fails. No multiplicity correction (as pre-registered).
+Most flip 50 effects are small (+0.012 to +0.022 ACC_all) even where the CI
+excludes 0.
+
+### 4. Secondary (descriptive, no pass/fail)
+
+* **The learning cost of sharing is not removed (H7).** At k = 16, flip 100
+  matched sharing cuts forgetting against private cues (FGT_all 0.229 vs
+  0.334) but still learns less (LEARN_all 0.817 vs 0.872, −0.055 in 40/40
+  seeds); the net ACC gain over Zg1 (+0.043) is the forgetting cut minus that
+  learning loss. Same direction at flip 50 (LEARN −0.060, FGT +0.078).
+* **The random partner sits between cyclic and matched at flip 100**
+  (k = 16: Zg2c 0.508 < Zg2r 0.566 < Zg2m 0.602; Zg2r − Zg2c +0.058 40/0/0),
+  in line with its partner agreement (0.000 / 0.487 / 0.875). At flip 50 the
+  random partner is close to cyclic (+0.004 [+0.000, +0.007]), and Zg2r is not
+  above private cues at flip 50 (Zg2r − Zg1 +0.001 [−0.002, +0.004]).
+* **Flip 25: the matched code is mostly the cyclic code** (identical in 28/40
+  seeds at k = 16); Zg2m − Zg2c = −0.000 [−0.002, +0.001] 6/28/6. Anti and
+  random codes are worse there (Zg2m − Zg2a +0.022, Zg2m − Zg2r +0.013).
+* **k = 8: private cues still win at flips 25 and 50** (Zg1 0.702 / 0.639 vs
+  Zg2m 0.688 / 0.619); at flip 100 Zg2m is level with Zg1 in the worst
+  held-out order (+0.004 [−0.001, +0.009]). Sharing pays only as k grows or
+  conflict grows.
+* **k = 24, flip 50 (secondary):** Zg2m − Zg2c is small but positive on the
+  mean (0.551 vs 0.545), Zg2m − S1 = 0.029 ACC_all: the 0.05 lead over S1 at
+  flip 50 is reached at k = 16 only.
+* **Worst held-out order at flip 50 (secondary):** per seed, the minimum over
+  the 4 held-out orders of Zg2m − Zg2c is −0.004 [−0.010, +0.002] at k = 16 and
+  −0.004 [−0.006, −0.001] at k = 24: the flip 50 gain over the cyclic code is
+  not robust to the worst order, unlike flip 100 (+0.067 / +0.025, 40/0/0).
+* **Identity order and CN pairs** follow the held-out direction (k = 16,
+  flip 100: identity Zg2m − Zg2c +0.098; CN pairs +0.067).
+* **Limitation:** partner agreement is an oracle read from the task rules
+  before training, not something the learner measures; every number is on the
+  synthetic graph and the artificial OR-rule task.
+
+**Reading:** with a partner rule that cannot fall below the task-id rule, all
+three design gates pass and 12 of the 13 pre-registered hypotheses pass on new
+seeds 521..560. On this synthetic benchmark, sharing reserved cue lines with
+the task that agrees most beats the cyclic code, private cues, a random
+partner and the supervised control at equal lines and equal write budget, at
+flip 100 (large: +0.094 over cyclic at k = 16) and at flip 50 (small: +0.015
+over cyclic, +0.055 over S1). It does not remove the learning cost of sharing
+(H7 fails: LEARN −0.055 vs private cues at flip 100), and the flip 50 gain over
+the cyclic code vanishes in the worst held-out order (secondary). Nothing here
+is a claim about biology or about the BANC graph.
