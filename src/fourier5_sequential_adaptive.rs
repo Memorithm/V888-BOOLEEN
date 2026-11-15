@@ -96,6 +96,48 @@ pub fn evaluate_and_apply(
     })
 }
 
+
+/// A conservative break-even gate budget for a *frozen* batch, evaluated
+/// before allocating a cache. Returns None when calibration is missing or
+/// the cache cannot amortize. All arithmetic is checked in u128.
+///
+/// Unlike a gate-count-only heuristic this includes cold-cache construction
+/// and the requested minimum saving in parts per million (0..=1_000_000).
+/// The returned limit is the largest total cone size whose estimated cost
+/// still satisfies the saving. It is an estimate, not a performance claim.
+pub fn frozen_batch_cone_budget(
+    baseline_gates: usize,
+    proposal_count: usize,
+    calibration: EngineCalibration,
+    minimum_saving_ppm: u32,
+) -> Option<u128> {
+    if baseline_gates == 0
+        || proposal_count == 0
+        || minimum_saving_ppm > 1_000_000
+        || calibration.full_ns_per_gate == 0
+        || calibration.incremental_ns_per_gate == 0
+    {
+        return None;
+    }
+    let full = (baseline_gates as u128)
+        .checked_mul(proposal_count as u128)?
+        .checked_mul(u128::from(calibration.full_ns_per_gate))?;
+    let build = (baseline_gates as u128)
+        .checked_mul(u128::from(calibration.full_ns_per_gate))?
+        .checked_add(u128::from(calibration.cache_build_ns))?;
+    // Strict saving: incremental * 1_000_000 <
+    // full * (1_000_000 - minimum_saving_ppm).
+    // Use quotient/remainder to avoid overflow on the full product.
+    let allowance = full
+        .checked_mul(u128::from(1_000_000 - minimum_saving_ppm))?
+        / 1_000_000;
+    if build >= allowance {
+        return None;
+    }
+    // Require strict improvement even with integer truncation.
+    Some((allowance - build - 1) / u128::from(calibration.incremental_ns_per_gate))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BatchEvaluation {
     pub outputs: Vec<u64>,
@@ -230,6 +272,26 @@ mod tests {
         (0..count)
             .map(|i| (i as u64 + 17).wrapping_mul(0x9e3779b97f4a7c15))
             .collect()
+    }
+
+
+    #[test]
+    fn cone_budget_accounts_for_cold_build_margin_and_invalid_calibration() {
+        let calibration = EngineCalibration {
+            full_ns_per_gate: 10,
+            incremental_ns_per_gate: 2,
+            cache_build_ns: 5,
+        };
+        // Four full passes cost 400; cold build costs 105.
+        assert_eq!(frozen_batch_cone_budget(10, 4, calibration, 0), Some(147));
+        // 25% margin reduces allowance to 300.
+        assert_eq!(frozen_batch_cone_budget(10, 4, calibration, 250_000), Some(97));
+        assert_eq!(frozen_batch_cone_budget(10, 1, calibration, 0), None);
+        assert_eq!(frozen_batch_cone_budget(10, 4, calibration, 1_000_001), None);
+        assert_eq!(frozen_batch_cone_budget(0, 4, calibration, 0), None);
+        assert_eq!(frozen_batch_cone_budget(10, 0, calibration, 0), None);
+        assert_eq!(frozen_batch_cone_budget(usize::MAX, usize::MAX,
+            EngineCalibration { full_ns_per_gate: u64::MAX, ..calibration }, 0), None);
     }
 
     #[test]
