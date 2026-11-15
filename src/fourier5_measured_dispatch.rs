@@ -164,3 +164,71 @@ mod tests {
             EngineChoice::Full);
     }
 }
+
+
+/// Freeze a TRAIN-calibrated policy against a disjoint VALID slice.
+/// The gate never tunes thresholds or learns from validation timings.
+/// Every VALID observation for this bucket must preserve outputs/decisions,
+/// and an Incremental choice must not regress on any individual sample.
+/// Missing VALID coverage fails closed to Full.
+pub fn gate_on_validation(
+    trained: BucketPolicy,
+    validation: &[PairedCost],
+    min_validation_pairs: usize,
+) -> Result<BucketPolicy, PolicyError> {
+    if min_validation_pairs == 0 {
+        return Err(PolicyError::InvalidConfiguration);
+    }
+    let mut observed = 0usize;
+    let mut safe = true;
+    for sample in validation.iter().filter(|sample| sample.bucket == trained.bucket) {
+        observed = observed.checked_add(1).ok_or(PolicyError::Overflow)?;
+        if sample.full_ns == 0 || sample.incremental_ns == 0 {
+            return Err(PolicyError::InvalidSample);
+        }
+        safe &= sample.same_output
+            && sample.same_decision
+            && sample.incremental_ns <= sample.full_ns;
+    }
+    let choice = if trained.choice == EngineChoice::Incremental
+        && observed >= min_validation_pairs && safe {
+        EngineChoice::Incremental
+    } else {
+        EngineChoice::Full
+    };
+    Ok(BucketPolicy { choice, ..trained })
+}
+
+#[cfg(test)]
+mod validation_gate_tests {
+    use super::*;
+
+    const B: ConeBucket = ConeBucket { gates: 32, cone_gates: 3, accepted: true };
+    fn paired(full: u128, inc: u128, same: bool) -> PairedCost {
+        PairedCost { bucket: B, full_ns: full, incremental_ns: inc,
+            same_output: same, same_decision: same }
+    }
+
+    #[test]
+    fn disjoint_validation_never_recalibrates_and_rejects_single_regression() {
+        let train = [paired(100, 20, true), paired(200, 40, true)];
+        let frozen = calibrate(B, &train, PolicyConfig {
+            min_pairs: 2, required_saving_bps: 1000,
+        }).unwrap();
+        assert_eq!(frozen.choice, EngineChoice::Incremental);
+        let valid = [paired(100, 10, true), paired(50, 49, true)];
+        assert_eq!(gate_on_validation(frozen, &valid, 2).unwrap(), frozen);
+        // The aggregate still improves, but one slower accepted update fails.
+        let regressed = [paired(100, 10, true), paired(50, 51, true)];
+        let guarded = gate_on_validation(frozen, &regressed, 2).unwrap();
+        assert_eq!(guarded.choice, EngineChoice::Full);
+        assert_eq!(guarded.full_total_ns, frozen.full_total_ns);
+        assert_eq!(guarded.incremental_total_ns, frozen.incremental_total_ns);
+        assert_eq!(gate_on_validation(frozen, &valid[..1], 2).unwrap().choice,
+            EngineChoice::Full);
+        assert_eq!(gate_on_validation(frozen, &[paired(100, 10, false)], 1)
+            .unwrap().choice, EngineChoice::Full);
+        assert_eq!(gate_on_validation(frozen, &[], 0),
+            Err(PolicyError::InvalidConfiguration));
+    }
+}
