@@ -96,6 +96,26 @@ impl PersistentSession {
         Ok(trace)
     }
 
+    /// Transactional profiling of an evolving synthetic circuit. All accepted
+    /// interventions and cache refreshes commit only after every Full oracle
+    /// agrees. A late invalid intervention leaves the original session intact.
+    /// Timing includes the Full oracle, cache updates, and process-wide VmHWM.
+    /// Cloning the cache is intentionally outside the per-step timing; callers
+    /// must account for that additional cost in end-to-end benchmarks.
+    pub fn execute_atomic_profiled_verified_sequence(
+        &mut self,
+        interventions: &[(PackedIntervention, bool)],
+        max_steps: usize,
+    ) -> Result<Vec<VerifiedStepTelemetry>, HierarchyError> {
+        if interventions.len() > max_steps {
+            return Err(HierarchyError::InvalidInput);
+        }
+        let mut staged = self.clone();
+        let trace = staged.execute_profiled_verified_sequence(interventions, max_steps)?;
+        *self = staged;
+        Ok(trace)
+    }
+
     /// Profile a heterogeneous sequential workload without freezing the model.
     /// Each accepted intervention updates the exact persistent cache before the
     /// next proposal. Prefix semantics apply on a later invalid intervention.
@@ -1181,4 +1201,52 @@ mod tests {
             assert_eq!(session.rebuilt_gates, reference.neuron_count());
         }
     }
+    #[test]
+    fn atomic_profiled_sequence_rolls_back_and_commits_exact_cache() {
+        let base = FiveCircleHierarchy::from_modes(
+            &[GateKind::Majority, GateKind::Majority, GateKind::Majority],
+            LeafRouting::SeededShuffle(47),
+        )
+        .unwrap();
+        let planes: Vec<u64> = (0..base.input_bits())
+            .map(|i| (i as u64 + 11).wrapping_mul(0x9e3779b97f4a7c15))
+            .collect();
+        let mut session = PersistentSession::new(base.clone(), planes.clone()).unwrap();
+        let initial = session.output();
+        let valid = PackedIntervention::LeafSwap { first: 0, second: 17 };
+        let invalid = PackedIntervention::LeafSwap {
+            first: 0,
+            second: base.input_bits(),
+        };
+        assert!(matches!(
+            session.execute_atomic_profiled_verified_sequence(
+                &[(valid, true), (invalid, true)], 2
+            ),
+            Err(HierarchyError::InvalidRouting)
+        ));
+        assert_eq!(session.output(), initial);
+        assert_eq!(session.model().routing(), base.routing());
+        assert_eq!(session.updated_gates, 0);
+        assert!(matches!(
+            session.execute_atomic_profiled_verified_sequence(&[(valid, true)], 0),
+            Err(HierarchyError::InvalidInput)
+        ));
+        let trace = session
+            .execute_atomic_profiled_verified_sequence(
+                &[(valid, true), (valid, false)], 2
+            )
+            .unwrap();
+        assert_eq!(trace.len(), 2);
+        assert!(trace[0].accepted);
+        assert!(!trace[1].accepted);
+        assert_eq!(trace[1].updated_gates, 0);
+        let mut routing = base.routing().to_vec();
+        routing.swap(0, 17);
+        let accepted = base.rerouted(routing).unwrap();
+        assert_eq!(session.output(), accepted.infer_bitplanes(&planes).unwrap());
+        assert_eq!(trace[0].output, session.output());
+        assert_eq!(trace[1].output, initial);
+    }
+
+
 }
