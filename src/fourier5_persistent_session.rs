@@ -6,8 +6,6 @@ use crate::fourier5_hierarchy::{shannon_64, FiveCircleHierarchy, HierarchyError}
 use crate::fourier5_incremental::PackedIntervention;
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Clone)]
-
 /// Per-intervention telemetry for a sequential, independently verified run.
 /// elapsed_ns includes the Full oracle and accepted-cache refresh, not just
 /// incremental prediction. VmHWM is Linux process-wide high-water RSS in KiB;
@@ -26,7 +24,6 @@ fn linux_vmhwm_kib() -> Option<u64> {
     let line = status.lines().find(|line| line.starts_with("VmHWM:"))?;
     line.split_whitespace().nth(1)?.parse().ok()
 }
-
 
 /// Aggregate measured cost of an evolving, verified synthetic circuit.
 /// The duration includes oracle verification and accepted-cache maintenance.
@@ -59,8 +56,7 @@ impl VerifiedSequenceSummary {
         let interventions_per_second = if elapsed_ns == 0 {
             0 // Insufficient timer resolution: never claim infinite throughput.
         } else {
-            (trace.len() as u128).checked_mul(1_000_000_000)?
-                / elapsed_ns
+            (trace.len() as u128).checked_mul(1_000_000_000)? / elapsed_ns
         };
         Some(Self {
             interventions: trace.len(),
@@ -73,6 +69,7 @@ impl VerifiedSequenceSummary {
     }
 }
 
+#[derive(Clone)]
 pub struct PersistentSession {
     model: FiveCircleHierarchy,
     stages: Vec<Vec<u64>>,
@@ -645,9 +642,27 @@ mod tests {
     #[test]
     fn sequence_summary_aggregates_heterogeneous_workload_without_inventing_memory() {
         let trace = [
-            VerifiedStepTelemetry { output: 1, accepted: true, updated_gates: 7, elapsed_ns: 250_000_000, vmhwm_kib: None },
-            VerifiedStepTelemetry { output: 0, accepted: false, updated_gates: 0, elapsed_ns: 500_000_000, vmhwm_kib: Some(1024) },
-            VerifiedStepTelemetry { output: 1, accepted: true, updated_gates: 3, elapsed_ns: 250_000_000, vmhwm_kib: Some(900) },
+            VerifiedStepTelemetry {
+                output: 1,
+                accepted: true,
+                updated_gates: 7,
+                elapsed_ns: 250_000_000,
+                vmhwm_kib: None,
+            },
+            VerifiedStepTelemetry {
+                output: 0,
+                accepted: false,
+                updated_gates: 0,
+                elapsed_ns: 500_000_000,
+                vmhwm_kib: Some(1024),
+            },
+            VerifiedStepTelemetry {
+                output: 1,
+                accepted: true,
+                updated_gates: 3,
+                elapsed_ns: 250_000_000,
+                vmhwm_kib: Some(900),
+            },
         ];
         let s = VerifiedSequenceSummary::from_trace(&trace).unwrap();
         assert_eq!(s.interventions, 3);
@@ -656,9 +671,17 @@ mod tests {
         assert_eq!(s.elapsed_ns, 1_000_000_000);
         assert_eq!(s.interventions_per_second, 3);
         assert_eq!(s.max_vmhwm_kib, Some(1024));
-        assert_eq!(VerifiedSequenceSummary::from_trace(&[]).unwrap().interventions_per_second, 0);
+        assert_eq!(
+            VerifiedSequenceSummary::from_trace(&[])
+                .unwrap()
+                .interventions_per_second,
+            0
+        );
         let overflow = [
-            VerifiedStepTelemetry { elapsed_ns: u128::MAX, ..trace[0].clone() },
+            VerifiedStepTelemetry {
+                elapsed_ns: u128::MAX,
+                ..trace[0].clone()
+            },
             trace[1].clone(),
         ];
         assert!(VerifiedSequenceSummary::from_trace(&overflow).is_none());
@@ -695,7 +718,12 @@ mod tests {
                 };
                 let mut routing = model.routing().to_vec();
                 routing.swap(first, second);
-                baseline ^ model.rerouted(routing).unwrap().infer_bitplanes(&planes).unwrap()
+                baseline
+                    ^ model
+                        .rerouted(routing)
+                        .unwrap()
+                        .infer_bitplanes(&planes)
+                        .unwrap()
             })
             .collect();
         let expected_index = (0..oracle.len())
@@ -703,7 +731,11 @@ mod tests {
             .unwrap();
         assert_eq!(
             session.most_sensitive_proposal(&proposals, 12).unwrap(),
-            Some((expected_index, oracle[expected_index].count_ones(), oracle[expected_index]))
+            Some((
+                expected_index,
+                oracle[expected_index].count_ones(),
+                oracle[expected_index]
+            ))
         );
         assert!(matches!(
             session.most_sensitive_proposal(&proposals, 11),
@@ -762,7 +794,10 @@ mod tests {
                 assert_eq!(step.updated_gates, 0);
             }
         }
-        assert_eq!(session.output(), reference.infer_bitplanes(&planes).unwrap());
+        assert_eq!(
+            session.output(),
+            reference.infer_bitplanes(&planes).unwrap()
+        );
         assert_eq!(
             session.updated_gates,
             trace.iter().map(|step| step.updated_gates).sum::<usize>()
@@ -831,7 +866,10 @@ mod tests {
             .collect();
         let mut session = PersistentSession::new(base.clone(), planes.clone()).unwrap();
         let initial = session.output();
-        let accepted = PackedIntervention::LeafSwap { first: 0, second: 7 };
+        let accepted = PackedIntervention::LeafSwap {
+            first: 0,
+            second: 7,
+        };
         let invalid = PackedIntervention::LeafSwap {
             first: 0,
             second: base.input_bits(),
@@ -844,7 +882,16 @@ mod tests {
         assert_eq!(session.updated_gates, 0);
         assert_eq!(session.rebuilt_gates, base.neuron_count());
 
-        let steps = [(accepted, true), (PackedIntervention::LeafSwap { first: 3, second: 9 }, false)];
+        let steps = [
+            (accepted, true),
+            (
+                PackedIntervention::LeafSwap {
+                    first: 3,
+                    second: 9,
+                },
+                false,
+            ),
+        ];
         let trace = session.execute_atomic_verified_sequence(&steps, 2).unwrap();
         let mut routing = base.routing().to_vec();
         routing.swap(0, 7);
@@ -854,10 +901,17 @@ mod tests {
         rejected_routing.swap(3, 9);
         assert_eq!(
             trace[1].0,
-            committed.rerouted(rejected_routing).unwrap().infer_bitplanes(&planes).unwrap()
+            committed
+                .rerouted(rejected_routing)
+                .unwrap()
+                .infer_bitplanes(&planes)
+                .unwrap()
         );
         assert_eq!(trace[1].1, 0);
-        assert_eq!(session.output(), committed.infer_bitplanes(&planes).unwrap());
+        assert_eq!(
+            session.output(),
+            committed.infer_bitplanes(&planes).unwrap()
+        );
         assert_eq!(session.model().routing(), committed.routing());
         assert!(session.updated_gates > 0);
     }

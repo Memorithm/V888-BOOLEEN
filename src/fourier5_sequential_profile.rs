@@ -98,9 +98,7 @@ impl SequentialProfile {
     /// Fail-closed statistics for policy calibration: never derive a throughput
     /// or percentile from a trace whose counters or elapsed time disagree.
     /// The unchecked statistics() method remains for backwards compatibility.
-    pub fn checked_statistics(
-        &self,
-    ) -> Result<Option<SequentialStatistics>, TraceIntegrityError> {
+    pub fn checked_statistics(&self) -> Result<Option<SequentialStatistics>, TraceIntegrityError> {
         self.validate_integrity()?;
         Ok(self.statistics())
     }
@@ -303,8 +301,18 @@ mod tests {
     fn checked_policy_statistics_reject_corruption_before_calibration() {
         let mut profile = SequentialProfile {
             samples: vec![
-                SequentialSample { accepted: true, output: 7, updated_gates: 2, elapsed_ns: 10 },
-                SequentialSample { accepted: false, output: 7, updated_gates: 0, elapsed_ns: 30 },
+                SequentialSample {
+                    accepted: true,
+                    output: 7,
+                    updated_gates: 2,
+                    elapsed_ns: 10,
+                },
+                SequentialSample {
+                    accepted: false,
+                    output: 7,
+                    updated_gates: 0,
+                    elapsed_ns: 30,
+                },
             ],
             total_ns: 40,
             accepted_count: 1,
@@ -319,7 +327,10 @@ mod tests {
         assert_eq!(split.accepted.unwrap().steps_per_second, Some(100_000_000));
         assert_eq!(split.rejected.unwrap().steps_per_second, Some(33_333_333));
         profile.total_ns = 1;
-        assert_eq!(profile.checked_statistics(), Err(TraceIntegrityError::TimeMismatch));
+        assert_eq!(
+            profile.checked_statistics(),
+            Err(TraceIntegrityError::TimeMismatch)
+        );
         assert_eq!(
             profile.checked_statistics_by_acceptance(),
             Err(TraceIntegrityError::TimeMismatch)
@@ -327,7 +338,10 @@ mod tests {
         profile.total_ns = 40;
         profile.samples[0].updated_gates = usize::MAX;
         profile.samples[1].updated_gates = 1;
-        assert_eq!(profile.checked_statistics(), Err(TraceIntegrityError::Overflow));
+        assert_eq!(
+            profile.checked_statistics(),
+            Err(TraceIntegrityError::Overflow)
+        );
     }
 
     #[test]
