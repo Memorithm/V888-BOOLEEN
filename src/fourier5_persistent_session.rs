@@ -1213,15 +1213,16 @@ mod tests {
             .collect();
         let mut session = PersistentSession::new(base.clone(), planes.clone()).unwrap();
         let initial = session.output();
-        let valid = PackedIntervention::LeafSwap { first: 0, second: 17 };
+        let valid = PackedIntervention::LeafSwap {
+            first: 0,
+            second: 17,
+        };
         let invalid = PackedIntervention::LeafSwap {
             first: 0,
             second: base.input_bits(),
         };
         assert!(matches!(
-            session.execute_atomic_profiled_verified_sequence(
-                &[(valid, true), (invalid, true)], 2
-            ),
+            session.execute_atomic_profiled_verified_sequence(&[(valid, true), (invalid, true)], 2),
             Err(HierarchyError::InvalidRouting)
         ));
         assert_eq!(session.output(), initial);
@@ -1232,9 +1233,7 @@ mod tests {
             Err(HierarchyError::InvalidInput)
         ));
         let trace = session
-            .execute_atomic_profiled_verified_sequence(
-                &[(valid, true), (valid, false)], 2
-            )
+            .execute_atomic_profiled_verified_sequence(&[(valid, true), (valid, false)], 2)
             .unwrap();
         assert_eq!(trace.len(), 2);
         assert!(trace[0].accepted);
@@ -1247,6 +1246,4 @@ mod tests {
         assert_eq!(trace[0].output, session.output());
         assert_eq!(trace[1].output, initial);
     }
-
-
 }
