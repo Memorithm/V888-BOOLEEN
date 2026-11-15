@@ -399,6 +399,7 @@ pub struct IdentifiedCost {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SplitError {
     DuplicateOrLeakedWorkload,
+    LeakedCircuitAcrossSplits,
     InvalidObservation,
     Policy(PolicyError),
 }
@@ -416,8 +417,21 @@ pub fn evaluate_disjoint_splits(
     min_valid_pairs: usize,
 ) -> Result<(Vec<BucketPolicy>, HoldoutAudit, HoldoutAudit), SplitError> {
     let mut ids = std::collections::HashSet::new();
-    for split in [train, valid, test, ood] {
+    // A different intervention seed on the same synthetic circuit is not an
+    // independent holdout: the circuit topology itself can be memorised.
+    // Permit multiple interventions on one circuit within a split, but never
+    // allow that circuit to cross the TRAIN/VALID/TEST/OOD boundary.
+    let mut circuit_owner = std::collections::HashMap::<u64, usize>::new();
+    for (split_index, split) in [train, valid, test, ood].into_iter().enumerate() {
         for observation in split {
+            match circuit_owner.entry(observation.id.circuit_seed) {
+                std::collections::hash_map::Entry::Vacant(entry) => { entry.insert(split_index); }
+                std::collections::hash_map::Entry::Occupied(entry)
+                    if *entry.get() != split_index => {
+                        return Err(SplitError::LeakedCircuitAcrossSplits);
+                    }
+                _ => {}
+            }
             if !ids.insert(observation.id) {
                 return Err(SplitError::DuplicateOrLeakedWorkload);
             }
@@ -475,7 +489,7 @@ mod disjoint_split_tests {
         assert_eq!(ood_audit.regressions, 0);
         assert_eq!(evaluate_disjoint_splits(
             &train, &valid, &train[..1], &ood, &[bucket], config, 1
-        ), Err(SplitError::DuplicateOrLeakedWorkload));
+        ), Err(SplitError::LeakedCircuitAcrossSplits));
         assert_eq!(evaluate_disjoint_splits(
             &train, &[valid[0], valid[0]], &test, &ood, &[bucket], config, 1
         ), Err(SplitError::DuplicateOrLeakedWorkload));
@@ -554,5 +568,34 @@ mod predecision_holdout_tests {
         assert_eq!(audit_predecision_holdout(
             &[observation(no, 0, 20)], &both,
         ), Err(PolicyError::InvalidSample));
+    }
+}
+
+#[cfg(test)]
+mod circuit_isolation_tests {
+    use super::*;
+
+    #[test]
+    fn same_circuit_different_intervention_cannot_cross_holdout_boundary() {
+        let bucket = ConeBucket { gates: 12, cone_gates: 2, accepted: true };
+        let make = |circuit_seed, workload_seed| IdentifiedCost {
+            id: WorkloadId { circuit_seed, workload_seed },
+            cost: PairedCost { bucket, full_ns: 100, incremental_ns: 20,
+                same_output: true, same_decision: true },
+        };
+        let config = PolicyConfig { min_pairs: 1, required_saving_bps: 1000 };
+        let train = [make(1, 10), make(1, 11)];
+        let valid = [make(2, 10)];
+        let test = [make(3, 10)];
+        let ood = [make(4, 10)];
+        assert!(evaluate_disjoint_splits(&train, &valid, &test, &ood,
+            &[bucket], config, 1).is_ok());
+        let leaked = [make(1, 99)];
+        assert_eq!(evaluate_disjoint_splits(&train, &valid, &leaked, &ood,
+            &[bucket], config, 1), Err(SplitError::LeakedCircuitAcrossSplits));
+        // Exact duplicate inside TRAIN is still a separate provenance error.
+        assert_eq!(evaluate_disjoint_splits(&[train[0], train[0]], &valid,
+            &test, &ood, &[bucket], config, 1),
+            Err(SplitError::DuplicateOrLeakedWorkload));
     }
 }
