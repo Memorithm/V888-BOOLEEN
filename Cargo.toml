@@ -13,3 +13,9 @@ path = "src/lib.rs"
 [[bin]]
 name = "v888-booleen"
 path = "src/main.rs"
+
+# Grid/determinism tests are CPU-heavy; optimise test builds so the
+# RemoteOps offline qualification stays well inside its time budget.
+# overflow-checks and debug-assertions stay on (inherited from dev).
+[profile.test]
+opt-level = 2
