@@ -88,6 +88,71 @@ pub struct VerifiedPairedSequenceAudit {
 }
 
 impl VerifiedPairedSequenceAudit {
+    /// Fail-closed comparison with structural proof of identical intervention
+    /// schedules. This checks the complete synthetic proposal (including every
+    /// circle parameter), not just outputs or an externally supplied fingerprint.
+    /// Both traces must correspond to the supplied schedules; callers must
+    /// generate each trace from its respective schedule.
+    pub fn compare_matched_workloads(
+        baseline_workload: &[(PackedIntervention, bool)],
+        candidate_workload: &[(PackedIntervention, bool)],
+        baseline: &[VerifiedStepTelemetry],
+        candidate: &[VerifiedStepTelemetry],
+    ) -> Option<Self> {
+        if baseline_workload.len() != baseline.len()
+            || candidate_workload.len() != candidate.len()
+            || baseline_workload.len() != candidate_workload.len()
+        {
+            return None;
+        }
+        for (&(left, left_accept), &(right, right_accept)) in
+            baseline_workload.iter().zip(candidate_workload)
+        {
+            if left_accept != right_accept {
+                return None;
+            }
+            let same_proposal = match (left, right) {
+                (
+                    PackedIntervention::LeafSwap {
+                        first: a,
+                        second: b,
+                    },
+                    PackedIntervention::LeafSwap {
+                        first: c,
+                        second: d,
+                    },
+                ) => a == c && b == d,
+                (
+                    PackedIntervention::Parameter {
+                        layer: a,
+                        neuron: b,
+                        model: c,
+                    },
+                    PackedIntervention::Parameter {
+                        layer: d,
+                        neuron: e,
+                        model: f,
+                    },
+                ) => a == d && b == e && c == f,
+                _ => false,
+            };
+            if !same_proposal {
+                return None;
+            }
+        }
+        if baseline
+            .iter()
+            .zip(baseline_workload)
+            .any(|(step, (_, accepted))| step.accepted != *accepted)
+            || candidate
+                .iter()
+                .zip(candidate_workload)
+                .any(|(step, (_, accepted))| step.accepted != *accepted)
+        {
+            return None;
+        }
+        Self::compare(baseline, candidate)
+    }
     pub fn compare(
         baseline: &[VerifiedStepTelemetry],
         candidate: &[VerifiedStepTelemetry],
@@ -1306,6 +1371,45 @@ mod paired_sequence_audit_tests {
     use super::{VerifiedPairedSequenceAudit, VerifiedStepTelemetry};
     fn step(output: u64, accepted: bool, gates: usize, ns: u128, mem: Option<u64>) -> VerifiedStepTelemetry {
         VerifiedStepTelemetry { output, accepted, updated_gates: gates, elapsed_ns: ns, vmhwm_kib: mem }
+    }
+
+
+
+    #[test]
+    fn matched_workloads_reject_hidden_proposal_and_schedule_drift() {
+        use crate::fourier5_incremental::PackedIntervention;
+        let left = [
+            (PackedIntervention::LeafSwap { first: 1, second: 3 }, true),
+            (PackedIntervention::LeafSwap { first: 2, second: 4 }, false),
+        ];
+        let changed = [
+            (PackedIntervention::LeafSwap { first: 1, second: 3 }, true),
+            (PackedIntervention::LeafSwap { first: 2, second: 5 }, false),
+        ];
+        let wrong_accept = [
+            (PackedIntervention::LeafSwap { first: 1, second: 3 }, false),
+            (PackedIntervention::LeafSwap { first: 2, second: 4 }, false),
+        ];
+        let old = [step(7, true, 3, 400, None), step(9, false, 0, 200, None)];
+        let new = [step(7, true, 3, 200, None), step(9, false, 0, 100, None)];
+        assert_eq!(
+            VerifiedPairedSequenceAudit::compare_matched_workloads(&left, &left, &old, &new)
+                .unwrap()
+                .speedup_milli,
+            Some(2000)
+        );
+        assert!(VerifiedPairedSequenceAudit::compare_matched_workloads(
+            &left, &changed, &old, &new
+        )
+        .is_none());
+        assert!(VerifiedPairedSequenceAudit::compare_matched_workloads(
+            &left, &wrong_accept, &old, &new
+        )
+        .is_none());
+        assert!(VerifiedPairedSequenceAudit::compare_matched_workloads(
+            &left[..1], &left[..1], &old, &new
+        )
+        .is_none());
     }
 
     #[test]
