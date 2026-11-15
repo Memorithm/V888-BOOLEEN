@@ -232,3 +232,99 @@ mod validation_gate_tests {
             Err(PolicyError::InvalidConfiguration));
     }
 }
+
+
+/// Freeze a whole dispatch table after VALID, rejecting duplicate buckets.
+/// Every trained bucket is independently gated; a missing VALID bucket
+/// conservatively resolves to Full. TEST/OOD must never be passed here.
+pub fn freeze_validated_table(
+    trained: &[BucketPolicy],
+    validation: &[PairedCost],
+    min_validation_pairs: usize,
+) -> Result<Vec<BucketPolicy>, PolicyError> {
+    if min_validation_pairs == 0 {
+        return Err(PolicyError::InvalidConfiguration);
+    }
+    // Duplicate buckets make dispatch ambiguous, even if choices agree.
+    for (index, policy) in trained.iter().enumerate() {
+        if trained[..index].iter().any(|prior| prior.bucket == policy.bucket) {
+            return Err(PolicyError::InvalidConfiguration);
+        }
+        if policy.bucket.gates == 0 || policy.bucket.cone_gates > policy.bucket.gates {
+            return Err(PolicyError::InvalidConfiguration);
+        }
+    }
+    // A malformed or uncalibrated VALID observation must not be silently
+    // ignored just because its bucket was absent from TRAIN.
+    for sample in validation {
+        if sample.full_ns == 0 || sample.incremental_ns == 0 {
+            return Err(PolicyError::InvalidSample);
+        }
+    }
+    trained.iter().copied().map(|policy| {
+        gate_on_validation(policy, validation, min_validation_pairs)
+    }).collect()
+}
+
+/// The frozen table is the only source of dispatch choices. An unseen or
+/// duplicated bucket is always Full; no held-out observation changes it.
+pub fn select_frozen(bucket: ConeBucket, frozen: &[BucketPolicy]) -> EngineChoice {
+    select(bucket, frozen)
+}
+
+#[cfg(test)]
+mod frozen_table_tests {
+    use super::*;
+
+    #[test]
+    fn disjoint_bucket_coverage_and_no_holdout_recalibration() {
+        let a = ConeBucket { gates: 128, cone_gates: 2, accepted: true };
+        let b = ConeBucket { gates: 128, cone_gates: 40, accepted: false };
+        let config = PolicyConfig { min_pairs: 2, required_saving_bps: 1000 };
+        let make = |bucket, full_ns, incremental_ns| PairedCost {
+            bucket, full_ns, incremental_ns, same_output: true, same_decision: true,
+        };
+        let train = [
+            make(a, 100, 20), make(a, 100, 20),
+            make(b, 100, 20), make(b, 100, 20),
+        ];
+        let trained = [
+            calibrate(a, &train, config).unwrap(),
+            calibrate(b, &train, config).unwrap(),
+        ];
+        // VALID is disjoint from TRAIN by caller contract. Bucket b has no
+        // coverage, and must not inherit bucket a's successful validation.
+        let valid = [make(a, 90, 30), make(a, 110, 40)];
+        let frozen = freeze_validated_table(&trained, &valid, 2).unwrap();
+        assert_eq!(select_frozen(a, &frozen), EngineChoice::Incremental);
+        assert_eq!(select_frozen(b, &frozen), EngineChoice::Full);
+        assert_eq!(select_frozen(ConeBucket { cone_gates: 3, ..a }, &frozen),
+            EngineChoice::Full);
+        assert_eq!(frozen[0].full_total_ns, trained[0].full_total_ns);
+        assert_eq!(frozen[0].incremental_total_ns, trained[0].incremental_total_ns);
+        assert_eq!(freeze_validated_table(&[trained[0], trained[0]], &valid, 2),
+            Err(PolicyError::InvalidConfiguration));
+        assert_eq!(freeze_validated_table(&trained, &[make(b, 0, 1)], 1),
+            Err(PolicyError::InvalidSample));
+        assert_eq!(freeze_validated_table(&trained, &valid, 0),
+            Err(PolicyError::InvalidConfiguration));
+    }
+
+    #[test]
+    fn single_validation_regression_blocks_only_its_bucket() {
+        let a = ConeBucket { gates: 64, cone_gates: 1, accepted: true };
+        let b = ConeBucket { gates: 64, cone_gates: 2, accepted: false };
+        let trained = [a, b].map(|bucket| BucketPolicy {
+            bucket, choice: EngineChoice::Incremental, pairs: 4,
+            full_total_ns: 400, incremental_total_ns: 100,
+        });
+        let valid = [a, b].map(|bucket| PairedCost {
+            bucket, full_ns: 100,
+            incremental_ns: if bucket == a { 101 } else { 50 },
+            same_output: true, same_decision: true,
+        });
+        let frozen = freeze_validated_table(&trained, &valid, 1).unwrap();
+        assert_eq!(select_frozen(a, &frozen), EngineChoice::Full);
+        assert_eq!(select_frozen(b, &frozen), EngineChoice::Incremental);
+    }
+}
