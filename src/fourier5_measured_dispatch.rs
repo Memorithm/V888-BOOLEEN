@@ -470,7 +470,8 @@ mod disjoint_split_tests {
             &train, &valid, &test, &ood, &[bucket], config, 1
         ).unwrap();
         assert_eq!(select_frozen(bucket, &frozen), EngineChoice::Incremental);
-        assert_eq!(test_audit.regressions, 1);
+        assert_eq!(test_audit.regressions, 0);
+        assert_eq!(test_audit.incremental_chosen, 0);
         assert_eq!(ood_audit.regressions, 0);
         assert_eq!(evaluate_disjoint_splits(
             &train, &valid, &train[..1], &ood, &[bucket], config, 1
