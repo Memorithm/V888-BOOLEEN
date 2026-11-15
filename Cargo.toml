@@ -19,3 +19,6 @@ path = "src/main.rs"
 # overflow-checks and debug-assertions stay on (inherited from dev).
 [profile.test]
 opt-level = 2
+# No debuginfo: the qualification /tmp tmpfs is 3 GiB and holds dev,
+# test and release artifacts together.
+debug = false
