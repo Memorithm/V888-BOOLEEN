@@ -1,0 +1,203 @@
+# B888-4 cycle 23: with a partner rule that cannot fall below the task-id rule, does pairing shared cue lines by task agreement beat the cyclic code, private cues, a random partner and the supervised control at equal lines and equal write budget? (synthetic graph)
+
+**Synthetic data only.** The real BANC V888 graph (Harvard Dataverse
+DOI 10.7910/DVN/7WTH1N; Bates, Phelps, Kim et al. 2026, *Nature*,
+https://doi.org/10.1038/s41586-026-10735-w; BANC/FlyWire consortium; see
+[SOURCES.md](SOURCES.md)) is **not** in this repository and is not built on the
+build machine. Every number comes from the deterministic generated graph of
+`consolidation_scale::generate_graph` and the artificial OR-rule task of
+[NOVEL_SPLIT.md](NOVEL_SPLIT.md) (#123), with the k-task fixture of
+[SEQ_GENERALISATION.md](SEQ_GENERALISATION.md) (#131), the consolidation guard
+engine of [CONSOLIDATION_GUARD.md](CONSOLIDATION_GUARD.md) (#132), the
+order/statistics protocol of [CUE_ROBUSTNESS.md](CUE_ROBUSTNESS.md) (#133), the
+share-r codes of [CUE_CAPACITY.md](CUE_CAPACITY.md) (#134) and the agreement
+matrix of [CUE_SIMILARITY.md](CUE_SIMILARITY.md) (#135). "Cue", "code",
+"partner", "tour", "agreement", "guard", "task order" and "forgetting" name
+parts of an update rule and an artificial benchmark on a Boolean graph with
+4-bit weights. Nothing here is a claim about synapses, biology, insect memory
+or BANC physiology.
+
+Module: `src/cue_partner.rs`. CLI: `bench-cue-partner` (`--census` for the
+pilot).
+
+## Motivation (what #135 left open)
+
+Cycle 22 (#135) paired the tasks that share reserved cue lines along a
+greedy nearest-neighbour tour of the task-rule agreement matrix (matched),
+against it (anti) or by task id (cyclic, = #134 share 2). Its manipulation
+gate G2 required matched ≥ cyclic partner agreement **in every seed**; the
+greedy tour is not optimal and fell below the cyclic tour at flip 25 in 8/40
+seeds at k = 16 (by ≤ 0.022) and 4/40 at k = 24. G2 failed and H1–H11 were
+declared not evaluable. Descriptively the matched code was +0.089 ACC_all
+over the cyclic code at flip 100 (k = 16), and at flip 50 — pre-registered as
+a null — it was +0.016 over cyclic and +0.055 over S1, so flip 50 was not a
+null.
+
+This cycle repairs the manipulation and re-asks the question on **new
+seeds**, with the claims that #135 suggested as primary (flip 100 and
+flip 50), plus a **random-partner** control that #135 lacked (the cyclic code
+is a structured, not a neutral, reference: at flip 100 it pairs each task
+with its exact inverse).
+
+## Codes (pre-registered construction, no tuning)
+
+* **Blocks** `B_0 … B_{k−1}`: the #131–#135 disjoint cues of the k-task
+  fixture (`seq_generalisation::fixture`, cap ⌊64 / k⌋ lines). Pool excludes
+  their union, as before.
+* **Agreement** `a(i, j)`: exactly #135 (`cue_similarity::agreement`, fraction
+  of usable pool edges on which tasks i and j have the same valence),
+  computed once per (k, flip, seed) from the task rules before training.
+* **Candidate tours** (deterministic, no search beyond this list): the cyclic
+  tour 0, 1, …, k − 1 first, then the #135 greedy tour started at each task
+  s = 0, …, k − 1 (from s, repeatedly move to the not-yet-visited task with the
+  highest (matched) or lowest (anti) agreement with the current one, ties to
+  the lowest id; the tour closes back to s).
+* **Matched** = the candidate with the **highest** mean partner agreement
+  `mean_j a(j, σ(j))`; **anti** = the candidate with the **lowest**; a later
+  candidate replaces the current best only if it is better by more than
+  1e-12 (so ties keep the cyclic tour, then the earliest start). Because the
+  cyclic tour is a candidate, **matched ≥ cyclic ≥ anti in every seed by
+  construction** (the #135 G2 failure cannot recur; G2 still checks it).
+* **Random** (new control): one k-cycle drawn by Sattolo's algorithm from the
+  #133 LCG seeded with `seed ^ 0x0DE5_B888_4C23_5A77 ^ k`; independent of the
+  agreement, the flip and the order.
+* Partner map `σ(tour[p]) = tour[(p + 1) mod k]`; code of task j
+  `C_j = sorted(B_j ∪ B_{σ(j)})`. Every share-2 code (cyclic, matched, anti,
+  random) is one k-cycle, so every reserved line is in exactly 2 codes, codes
+  are pairwise distinct, each has the lines of 2 blocks and their union is
+  the union of blocks — the #134 share-2 invariants. The cyclic code is
+  bit-identical to #134 share 2 / #135 cyclic (tested).
+* Cue-line edges start at 0 in every cued arm (silent cue, #128).
+
+## Arms (10 rows per (k, flip, seed, order))
+
+All rules are unchanged code paths of #132–#135
+(`consolidation_guard::run_setting`); only the fixture's per-task cue lists
+change.
+
+* `supervised@paced100` (**S1**, control; on this teacher-clamped task the
+  associative co-activation rule is the same update, see CONSOLIDATION.md).
+* `reward@paced100` (**R1**, reward-modulated).
+* `error-gated@free` (**E**, = its `paced100` run, gated in G1).
+* `E/E-cue0@paced100` private blocks (**Z1**) and
+  `E/E-cue0+last-resort@paced100` private blocks (**Zg1**).
+* `E/E-cue0+last-resort@paced100` with the cyclic (**Zg2c**), matched
+  (**Zg2m**), anti (**Zg2a**) and random (**Zg2r**) share-2 codes.
+* `E/E-cue0@paced100` with the matched code (**Z2m**, no guard).
+
+**Equal budget:** every capped arm uses the `paced100` per-episode cumulative
+write curve of uncapped E in the same (k, flip, seed, order); cue writes are
+charged. **Equal resources:** all cued arms of a (k, seed) use the same
+reserved lines and the same cue-line edges; the share-2 arms also have the
+same number of lines per task and the same line multiplicity.
+
+## Design (pre-registered)
+
+* Graph, task, pool, splits, budget: exactly #131–#135 (128 inputs / 32
+  targets / fan-in 8, threshold 1, init weight 1, 4-bit weights, 6 active
+  inputs, 32 training patterns per task, 8 rounds, one shared TEST set of 128
+  patterns, pair classes seen / CN / ICN / UE, no rehearsal, original edges
+  only, topology checked per row).
+* **k = 8, 16, 24** (own fixtures). **Flips 25, 50, 100.** Flips 100 and 50
+  carry the primary hypotheses; flip 25 (matched ≈ cyclic, see #135) is
+  secondary only.
+* **Seeds 521..560** (40 seeds, never used by an earlier B888-4 cycle).
+* **Orders:** 0 = identity (secondary only); held-out 1 = reversed, 2..4 =
+  seeded Fisher–Yates permutations (#133 generator) with a **new salt**
+  `0x0DE5_B888_4C23_0A1D`, shared by every flip and arm. Partner maps do not
+  depend on the order.
+* **Metrics** as #131–#135 (stage coordinates): ACC, LEARN, FGT, LAST on all /
+  CN pairs; per seed the mean over its 4 held-out orders (n = 40 paired
+  seeds). Worst order: per seed, min over held-out orders of the paired
+  difference.
+* **Instrumentation per row:** code kind, partner map, mean partner agreement,
+  conflicting links (a < 0.5), lines per task, mean cue reach per task,
+  cue-line edges, live / full cue edges, cap, charged / effective / cue
+  writes, refused, overwrites, deferred, net reversals, consolidated edges,
+  saturated edges, init / paced / cap / code flags, weight digest, topology.
+* **Checkpoint/resume:** the #132 engine checkpoint, re-tested bit-exact for
+  Zg2m and Zg2r at k = 16-shaped small fixtures on the reversed order.
+* **Reproducibility:** rows, CSV and report do not depend on the worker thread
+  count (tested); the main run is repeated with a different thread count and
+  must give a byte-identical CSV (sha256 reported).
+
+Statistics as #123–#135: bootstrap 95 % percentile CI (2000 resamples, seed
+0xB0075EED); better/ties/worse over 40 seeds.
+
+* **strong:** mean ≥ 0.05, > 0 in ≥ 32 of 40 seeds and CI lower bound > 0.
+* **positive:** mean > 0 and CI lower bound > 0.
+* **sequence rule:** Δ ACC strong, Δ LAST ≥ −0.05 and Δ LEARN ≥ −0.05.
+
+## Design gates (reported first)
+
+* **G1 (integrity):** every row keeps its topology, starts from its documented
+  initial weights, makes charged writes ≤ its allowance; `error-gated@paced100`
+  is bit-identical to uncapped E with zero refusals; guard counters match
+  guard and ledger; orders valid; codes valid (Z1/Zg1 = the blocks; share-2
+  codes: σ one k-cycle, each line in exactly 2 codes, codes distinct, own
+  block included; Zg2c = the #134 share-2 code; matched / anti = the
+  pre-registered best / worst candidate tour; random = the pre-registered
+  Sattolo cycle).
+* **G2 (manipulation):** at k = 16 and k = 24: matched ≥ cyclic ≥ anti
+  partner agreement in **every** seed at every flip; mean matched − anti
+  ≥ 0.20 at flip 100 and ≥ 0.05 at flip 50; mean matched − random ≥ 0.20 at
+  flip 100 and ≥ 0.02 at flip 50; Zg2m defers in ≥ 50 % of held-out rows at
+  every (k, flip).
+* **G3 (novel pairs):** median CN pairs per (seed, task) at k = 24, flip 50
+  ≥ 20.
+
+If any gate fails, H1–H13 are declared **not evaluable**.
+
+## Hypotheses (held-out orders, seeds 521..560, k = 16 unless stated)
+
+* **H1 (primary, mechanism):** flip 100, ACC_all(Zg2m) − ACC_all(Zg2c) is
+  positive.
+* **H2 (primary, vs control):** flip 100, Zg2m vs S1 passes the sequence rule
+  on all pairs.
+* **H3 (primary, mechanism):** flip 50, ACC_all(Zg2m) − ACC_all(Zg2c) is
+  positive.
+* **H4 (primary, vs control):** flip 50, Zg2m vs S1 passes the sequence rule
+  on all pairs (retest of #133 H4 / #134 H1 / #135 H8).
+* **H5:** flip 100, ACC_all(Zg2m) − ACC_all(Zg1) is positive.
+* **H6:** flip 50, ACC_all(Zg2m) − ACC_all(Zg1) is positive.
+* **H7 (the trade is broken, not just moved):** flip 100,
+  FGT_all(Zg1) − FGT_all(Zg2m) is positive **and** LEARN_all(Zg2m) −
+  LEARN_all(Zg1) has CI lower bound > −0.02.
+* **H8 (random-partner control):** flip 100, ACC_all(Zg2m) − ACC_all(Zg2r) is
+  positive.
+* **H9 (random-partner control):** flip 50, ACC_all(Zg2m) − ACC_all(Zg2r) is
+  positive.
+* **H10 (k = 24):** flip 100, ACC_all(Zg2m) − ACC_all(Zg1) is positive.
+* **H11 (worst order):** flip 100, per-seed worst held-out order
+  ACC_all(Zg2m) − ACC_all(Zg2c) is positive.
+* **H12 (not guard-specific):** flip 100, ACC_all(Z2m) − ACC_all(Z1) is
+  positive.
+* **H13 (anti control):** flip 50, ACC_all(Zg2m) − ACC_all(Zg2a) is positive.
+
+**Secondary (reported, no pass/fail):** all flip 25 comparisons; all
+comparisons at k = 8; k = 24 at flip 50; identity order; CN pairs; every arm
+vs S1 / R1 / E per (k, flip); Zg2r vs Zg2c and Zg1; per-order breakdown;
+agreement, conflicting links, reach, live cue edges, cue writes, overwrites
+and deferred per code; how often the matched / anti tour is the cyclic tour.
+
+No multiplicity correction is applied. The analysis is run once. Nothing
+above the Results heading is changed after the main run except the "pending"
+placeholder; the design-stage pilot section below is filled in before the
+main run from the label-free census only (seeds 1..5: agreement, writes,
+guard counters, reach; **no accuracy**).
+
+## Design-stage pilot
+
+Pending (label-free census, filled in before the main run).
+
+## Command
+
+```bash
+cargo +1.89 run --release -- bench-cue-partner --csv results/cue-partner-v1.csv > results/cue-partner-report-v1.txt
+# pilot: cargo +1.89 run --release -- bench-cue-partner --census > results/cue-partner-census-v1.txt
+```
+
+## Results
+
+Pending (main run after the pre-registration, harness and tests + pilot
+commits are pushed).
