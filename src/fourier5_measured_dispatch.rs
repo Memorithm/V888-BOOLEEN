@@ -444,8 +444,8 @@ pub fn evaluate_disjoint_splits(
         .map_err(SplitError::Policy)?;
     let test_costs: Vec<_> = test.iter().map(|item| item.cost).collect();
     let ood_costs: Vec<_> = ood.iter().map(|item| item.cost).collect();
-    let test_audit = audit_holdout(&test_costs, &frozen).map_err(SplitError::Policy)?;
-    let ood_audit = audit_holdout(&ood_costs, &frozen).map_err(SplitError::Policy)?;
+    let test_audit = audit_predecision_holdout(&test_costs, &frozen).map_err(SplitError::Policy)?;
+    let ood_audit = audit_predecision_holdout(&ood_costs, &frozen).map_err(SplitError::Policy)?;
     Ok((frozen, test_audit, ood_audit))
 }
 
@@ -481,5 +481,77 @@ mod disjoint_split_tests {
         assert_eq!(evaluate_disjoint_splits(
             &train, &valid, &test, &ood, &[bucket, bucket], config, 1
         ), Err(SplitError::Policy(PolicyError::InvalidConfiguration)));
+    }
+}
+
+
+/// Holdout audit using only pre-intervention information for dispatch.
+/// The accepted flag is an observed outcome, never an input to selection.
+/// This avoids optimistic evaluation from hindsight-selected buckets.
+pub fn audit_predecision_holdout(
+    samples: &[PairedCost],
+    frozen: &[BucketPolicy],
+) -> Result<HoldoutAudit, PolicyError> {
+    let mut audit = HoldoutAudit {
+        samples: 0, mismatches: 0, incremental_chosen: 0, regressions: 0,
+    };
+    for sample in samples {
+        if sample.bucket.gates == 0
+            || sample.bucket.cone_gates > sample.bucket.gates
+            || sample.full_ns == 0 || sample.incremental_ns == 0
+        {
+            return Err(PolicyError::InvalidSample);
+        }
+        audit.samples = audit.samples.checked_add(1).ok_or(PolicyError::Overflow)?;
+        if !sample.same_output || !sample.same_decision {
+            audit.mismatches = audit.mismatches.checked_add(1).ok_or(PolicyError::Overflow)?;
+        }
+        if select_before_decision(sample.bucket.gates, sample.bucket.cone_gates, frozen)
+            == EngineChoice::Incremental
+        {
+            audit.incremental_chosen = audit.incremental_chosen
+                .checked_add(1).ok_or(PolicyError::Overflow)?;
+            if sample.incremental_ns > sample.full_ns {
+                audit.regressions = audit.regressions
+                    .checked_add(1).ok_or(PolicyError::Overflow)?;
+            }
+        }
+    }
+    Ok(audit)
+}
+
+#[cfg(test)]
+mod predecision_holdout_tests {
+    use super::*;
+
+    #[test]
+    fn oracle_rejects_hindsight_selection_and_reports_regressions() {
+        let yes = ConeBucket { gates: 64, cone_gates: 3, accepted: true };
+        let no = ConeBucket { accepted: false, ..yes };
+        let policy = |bucket| BucketPolicy {
+            bucket, choice: EngineChoice::Incremental, pairs: 2,
+            full_total_ns: 200, incremental_total_ns: 80,
+        };
+        let observation = |bucket, full_ns, incremental_ns| PairedCost {
+            bucket, full_ns, incremental_ns,
+            same_output: true, same_decision: true,
+        };
+        let samples = [
+            observation(yes, 100, 30),
+            observation(no, 100, 120),
+        ];
+        // Outcome-aware audit would incorrectly count the accepted sample.
+        let only_yes = [policy(yes)];
+        assert_eq!(audit_holdout(&samples, &only_yes).unwrap().incremental_chosen, 1);
+        assert_eq!(audit_predecision_holdout(&samples, &only_yes).unwrap().incremental_chosen, 0);
+        let both = [policy(yes), policy(no)];
+        let audited = audit_predecision_holdout(&samples, &both).unwrap();
+        assert_eq!(audited.samples, 2);
+        assert_eq!(audited.incremental_chosen, 2);
+        assert_eq!(audited.regressions, 1);
+        assert_eq!(audited.mismatches, 0);
+        assert_eq!(audit_predecision_holdout(
+            &[observation(no, 0, 20)], &both,
+        ), Err(PolicyError::InvalidSample));
     }
 }
