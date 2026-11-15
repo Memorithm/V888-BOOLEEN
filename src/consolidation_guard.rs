@@ -283,6 +283,50 @@ pub fn step(
     ledger: &mut WriteLedger,
     cost: &mut PhaseCost,
 ) -> io::Result<()> {
+    let mut skipped = 0;
+    step_masked(
+        circuit,
+        graph,
+        guard,
+        dir,
+        stamp,
+        stage,
+        pattern,
+        valence,
+        cue,
+        &[],
+        &mut skipped,
+        stats,
+        g,
+        ledger,
+        cost,
+    )
+}
+
+/// [`step`] with a set of **frozen** source lines (cycle 24, owned-write
+/// cue codes): frozen lines stay active in the drive, but their edges are
+/// never written, never offered to the budget and never count as a free
+/// edge for `last-resort`. `skipped` counts the edge steps the mask removed
+/// (offered target, weight would change). With `frozen` empty this is
+/// exactly [`step`] (tested).
+#[allow(clippy::too_many_arguments)]
+pub fn step_masked(
+    circuit: &mut PlasticCircuit,
+    graph: &Connectome,
+    guard: Guard,
+    dir: &[i8],
+    stamp: &[u8],
+    stage: usize,
+    pattern: &[usize],
+    valence: &[bool],
+    cue: &[usize],
+    frozen: &[usize],
+    skipped: &mut u64,
+    stats: &mut Stats,
+    g: &mut GuardStats,
+    ledger: &mut WriteLedger,
+    cost: &mut PhaseCost,
+) -> io::Result<()> {
     if dir.len() != graph.edges()
         || stamp.len() != graph.edges()
         || circuit.weights().len() != graph.edges()
@@ -320,7 +364,7 @@ pub fn step(
     // among the active sources (weights before the update; budget ignored)?
     let mut has_free = vec![false; n];
     if guard == Guard::LastResort {
-        for &source in &sources {
+        for &source in sources.iter().filter(|s| !frozen.contains(s)) {
             for edge in graph.offsets[source]..graph.offsets[source + 1] {
                 let edge = edge as usize;
                 let t = graph.targets[edge] as usize;
@@ -337,6 +381,7 @@ pub fn step(
     let mut over_used = vec![false; n];
     for &source in &sources {
         let on_cue = cue.contains(&source);
+        let is_frozen = frozen.contains(&source);
         for edge in graph.offsets[source]..graph.offsets[source + 1] {
             let edge = edge as usize;
             let t = graph.targets[edge] as usize;
@@ -346,6 +391,12 @@ pub fn step(
             let up = want[t];
             let w = circuit.weights()[edge];
             let next = next_of(w, up);
+            if is_frozen {
+                if next != w {
+                    *skipped += 1;
+                }
+                continue;
+            }
             let over = next != w && against(edge, up);
             if over {
                 match guard {
@@ -598,6 +649,38 @@ pub fn train_range(
     cp: &mut Checkpoint,
     end: usize,
 ) -> io::Result<()> {
+    let mut skipped = 0;
+    train_range_masked(
+        circuit,
+        fx,
+        spec,
+        seed,
+        s,
+        limit,
+        cp,
+        end,
+        &[],
+        &mut skipped,
+    )
+}
+
+/// [`train_range`] with the stage's frozen lines (see [`step_masked`]);
+/// adds the mask's skipped edge steps to `skipped`. The mask is a pure
+/// function of the fixture and code, not engine state, so the
+/// [`Checkpoint`] is unchanged and resuming with the same mask is bit-exact.
+#[allow(clippy::too_many_arguments)]
+pub fn train_range_masked(
+    circuit: &mut PlasticCircuit,
+    fx: &Fixture,
+    spec: &GenSpec,
+    seed: u64,
+    s: Setting,
+    limit: &Limit,
+    cp: &mut Checkpoint,
+    end: usize,
+    frozen: &[usize],
+    skipped: &mut u64,
+) -> io::Result<()> {
     if s.guard() != Some(cp.guard) {
         return Err(bad("checkpoint guard does not match the setting"));
     }
@@ -621,7 +704,7 @@ pub fn train_range(
     for (e, &ix) in eps.iter().enumerate().take(end).skip(o.inner.inner.episode) {
         let c = &mut o.inner.inner;
         c.ledger.allow = limit_at(limit, e);
-        step(
+        step_masked(
             circuit,
             &fx.graph,
             cp.guard,
@@ -631,6 +714,8 @@ pub fn train_range(
             &fx.task.train[i][ix],
             &fx.task.valence[i],
             cue,
+            frozen,
+            skipped,
             &mut c.stats,
             &mut cp.g,
             &mut c.ledger,
@@ -691,10 +776,47 @@ pub fn train_stage(
     dir: &mut [i8],
     stamp: &mut [u8],
 ) -> io::Result<(sg::Checkpoint, GuardLog)> {
+    let mut skipped = 0;
+    train_stage_masked(
+        circuit,
+        fx,
+        spec,
+        seed,
+        s,
+        order,
+        i,
+        limit,
+        dir,
+        stamp,
+        &[],
+        &mut skipped,
+    )
+}
+
+/// [`train_stage`] with the stage's frozen lines (guarded-step settings
+/// only; a non-empty mask on a setting without a guarded step is an error).
+#[allow(clippy::too_many_arguments)]
+pub fn train_stage_masked(
+    circuit: &mut PlasticCircuit,
+    fx: &Fixture,
+    spec: &GenSpec,
+    seed: u64,
+    s: Setting,
+    order: &[usize],
+    i: usize,
+    limit: &Limit,
+    dir: &mut [i8],
+    stamp: &mut [u8],
+    frozen: &[usize],
+    skipped: &mut u64,
+) -> io::Result<(sg::Checkpoint, GuardLog)> {
     let t = *order.get(i).ok_or_else(|| bad("stage out of range"))?;
     let episodes = ts::task_order(spec, seed, t).len();
     let start = circuit.weights().to_vec();
     let (inner, stats) = match s.guard() {
+        None if !frozen.is_empty() => {
+            return Err(bad("frozen lines need a guarded-step setting"));
+        }
         None => {
             let mut cp = sg::Checkpoint::start(order, i, fx.graph.edges(), limit)?;
             sg::train_range(circuit, fx, spec, seed, s.base(), limit, &mut cp, episodes)?;
@@ -702,7 +824,9 @@ pub fn train_stage(
         }
         Some(gd) => {
             let mut cp = Checkpoint::start(order, i, limit, gd, dir, stamp, &start)?;
-            train_range(circuit, fx, spec, seed, s, limit, &mut cp, episodes)?;
+            train_range_masked(
+                circuit, fx, spec, seed, s, limit, &mut cp, episodes, frozen, skipped,
+            )?;
             (cp.inner, Some(cp.g))
         }
     };
@@ -738,11 +862,63 @@ pub fn run_setting(
     order: &[usize],
     limits: &[Limit],
 ) -> io::Result<Run> {
+    Ok(run_setting_masked(fx, spec, seed, s, order, limits, &[])?.0)
+}
+
+/// Per-stage record of the frozen-line mask of [`run_setting_masked`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MaskLog {
+    /// Edge steps removed by the mask, per stage.
+    pub skipped: Vec<u64>,
+    /// Edges of the stage's frozen lines whose weight changed during that
+    /// stage, per stage (0 by construction; checked, not assumed).
+    pub moved: Vec<u64>,
+}
+
+/// Edges leaving `lines` whose weight differs between `before` and `after`.
+#[must_use]
+pub fn moved_on_lines(graph: &Connectome, lines: &[usize], before: &[u8], after: &[u8]) -> u64 {
+    lines
+        .iter()
+        .map(|&src| {
+            let (lo, hi) = (graph.offsets[src] as usize, graph.offsets[src + 1] as usize);
+            before[lo..hi]
+                .iter()
+                .zip(&after[lo..hi])
+                .filter(|(a, b)| a != b)
+                .count() as u64
+        })
+        .sum()
+}
+
+/// [`run_setting`] with per-task frozen lines: `frozen` is empty (no mask,
+/// bit-identical to [`run_setting`], tested) or has one line list per task
+/// (indexed by task id, applied while that task is trained).
+pub fn run_setting_masked(
+    fx: &Fixture,
+    spec: &GenSpec,
+    seed: u64,
+    s: Setting,
+    order: &[usize],
+    limits: &[Limit],
+    frozen: &[Vec<usize>],
+) -> io::Result<(Run, MaskLog)> {
     let graph = &fx.graph;
     let k = fx.task.train.len();
     if fx.cues.len() != k || fx.splits.len() != k || limits.len() != k {
         return Err(bad("need k tasks, cues, splits and limits"));
     }
+    if !frozen.is_empty() && frozen.len() != k {
+        return Err(bad("need no mask or one frozen-line list per task"));
+    }
+    if frozen
+        .iter()
+        .flatten()
+        .any(|&src| src + 1 >= graph.offsets.len())
+    {
+        return Err(bad("frozen line out of range"));
+    }
+    let mut mask = MaskLog::default();
     if !sg::is_permutation(order, k) {
         return Err(bad("order is not a permutation of the tasks"));
     }
@@ -758,7 +934,10 @@ pub fn run_setting(
     let mut glogs = Vec::with_capacity(k);
     let mut cost = Vec::with_capacity(k);
     for i in 0..k {
-        let (inner, gl) = train_stage(
+        let fz: &[usize] = frozen.get(order[i]).map_or(&[], Vec::as_slice);
+        let before = circuit.weights().to_vec();
+        let mut skipped = 0;
+        let (inner, gl) = train_stage_masked(
             &mut circuit,
             fx,
             spec,
@@ -769,7 +948,12 @@ pub fn run_setting(
             &limits[i],
             &mut dir,
             &mut stamp,
+            fz,
+            &mut skipped,
         )?;
+        let moved = moved_on_lines(graph, fz, &before, circuit.weights());
+        mask.skipped.push(skipped);
+        mask.moved.push(moved);
         glogs.push(gl);
         let (mut nz, mut mass) = (0, 0);
         for (&x, &on) in circuit.weights().iter().zip(&cue) {
@@ -800,16 +984,19 @@ pub fn run_setting(
         }
         ev.push(row);
     }
-    Ok(Run {
-        ev,
-        logs,
-        glogs,
-        cost,
-        topology_unchanged: *graph == original
-            && circuit.topology_fingerprint() == fingerprint
-            && circuit.weights().len() == graph.edges(),
-        weights: circuit.weights().to_vec(),
-    })
+    Ok((
+        Run {
+            ev,
+            logs,
+            glogs,
+            cost,
+            topology_unchanged: *graph == original
+                && circuit.topology_fingerprint() == fingerprint
+                && circuit.weights().len() == graph.edges(),
+            weights: circuit.weights().to_vec(),
+        },
+        mask,
+    ))
 }
 
 struct Lcg(u64);

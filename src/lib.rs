@@ -12,6 +12,7 @@ pub mod cue_capacity;
 pub mod cue_displacement;
 pub mod cue_gating;
 pub mod cue_init;
+pub mod cue_ownership;
 pub mod cue_partner;
 pub mod cue_reach;
 pub mod cue_robustness;
