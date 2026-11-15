@@ -69,6 +69,58 @@ impl VerifiedSequenceSummary {
     }
 }
 
+
+/// Paired, decision-preserving comparison of two verified sequential traces.
+/// The caller must supply traces from identical intervention sequences and
+/// independently verify that their input workloads are identical.
+/// A mismatch fails closed; no speedup is reported for divergent decisions.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifiedPairedSequenceAudit {
+    pub steps: usize,
+    pub baseline_ns: u128,
+    pub candidate_ns: u128,
+    /// Baseline duration divided by candidate duration, in thousandths.
+    /// None means the candidate timer reported zero or multiplication overflowed.
+    pub speedup_milli: Option<u128>,
+    /// Process-wide high-water marks; not per-step allocation measurements.
+    pub baseline_vmhwm_kib: Option<u64>,
+    pub candidate_vmhwm_kib: Option<u64>,
+}
+
+impl VerifiedPairedSequenceAudit {
+    pub fn compare(
+        baseline: &[VerifiedStepTelemetry],
+        candidate: &[VerifiedStepTelemetry],
+    ) -> Option<Self> {
+        if baseline.len() != candidate.len() {
+            return None;
+        }
+        for (old, new) in baseline.iter().zip(candidate) {
+            if old.output != new.output
+                || old.accepted != new.accepted
+                || old.updated_gates != new.updated_gates
+            {
+                return None;
+            }
+        }
+        let old = VerifiedSequenceSummary::from_trace(baseline)?;
+        let new = VerifiedSequenceSummary::from_trace(candidate)?;
+        let speedup_milli = if new.elapsed_ns == 0 {
+            None
+        } else {
+            old.elapsed_ns.checked_mul(1000).map(|ns| ns / new.elapsed_ns)
+        };
+        Some(Self {
+            steps: baseline.len(),
+            baseline_ns: old.elapsed_ns,
+            candidate_ns: new.elapsed_ns,
+            speedup_milli,
+            baseline_vmhwm_kib: old.max_vmhwm_kib,
+            candidate_vmhwm_kib: new.max_vmhwm_kib,
+        })
+    }
+}
+
 #[derive(Clone)]
 pub struct PersistentSession {
     model: FiveCircleHierarchy,
@@ -1245,5 +1297,39 @@ mod tests {
         assert_eq!(session.output(), accepted.infer_bitplanes(&planes).unwrap());
         assert_eq!(trace[0].output, session.output());
         assert_eq!(trace[1].output, initial);
+    }
+}
+
+
+#[cfg(test)]
+mod paired_sequence_audit_tests {
+    use super::{VerifiedPairedSequenceAudit, VerifiedStepTelemetry};
+    fn step(output: u64, accepted: bool, gates: usize, ns: u128, mem: Option<u64>) -> VerifiedStepTelemetry {
+        VerifiedStepTelemetry { output, accepted, updated_gates: gates, elapsed_ns: ns, vmhwm_kib: mem }
+    }
+
+    #[test]
+    fn paired_audit_preserves_decisions_and_reports_integer_speedup() {
+        let baseline = vec![step(0x55, true, 4, 300, Some(120)), step(0xaa, false, 0, 100, None)];
+        let candidate = vec![step(0x55, true, 4, 120, Some(90)), step(0xaa, false, 0, 80, None)];
+        let audit = VerifiedPairedSequenceAudit::compare(&baseline, &candidate).unwrap();
+        assert_eq!(audit.steps, 2);
+        assert_eq!(audit.baseline_ns, 400);
+        assert_eq!(audit.candidate_ns, 200);
+        assert_eq!(audit.speedup_milli, Some(2000));
+        assert_eq!(audit.baseline_vmhwm_kib, Some(120));
+        assert_eq!(audit.candidate_vmhwm_kib, Some(90));
+        for mismatch in [
+            vec![step(0x54, true, 4, 120, None), candidate[1].clone()],
+            vec![step(0x55, false, 4, 120, None), candidate[1].clone()],
+            vec![step(0x55, true, 5, 120, None), candidate[1].clone()],
+            vec![candidate[0].clone()],
+        ] {
+            assert!(VerifiedPairedSequenceAudit::compare(&baseline, &mismatch).is_none());
+        }
+        let zero = vec![step(0x55, true, 4, 0, None), step(0xaa, false, 0, 0, None)];
+        assert_eq!(VerifiedPairedSequenceAudit::compare(&baseline, &zero).unwrap().speedup_milli, None);
+        let huge = vec![step(0x55, true, 4, u128::MAX, None), step(0xaa, false, 0, 0, None)];
+        assert_eq!(VerifiedPairedSequenceAudit::compare(&huge, &candidate).unwrap().speedup_milli, None);
     }
 }
