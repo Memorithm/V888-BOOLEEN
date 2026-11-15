@@ -482,6 +482,73 @@ mod tests {
     use crate::fourier5_hierarchy::{GateKind, LeafRouting};
 
     #[test]
+    fn flip_per_cone_ranking_matches_full_oracle_and_preserves_cache() {
+        let model = FiveCircleHierarchy::from_modes(
+            &[GateKind::Majority, GateKind::Parity, GateKind::Or],
+            LeafRouting::SeededShuffle(91),
+        )
+        .unwrap();
+        let planes: Vec<u64> = (0..model.input_bits())
+            .map(|i| (i as u64 + 31).wrapping_mul(0x9e3779b97f4a7c15))
+            .collect();
+        let session = PersistentSession::new(model.clone(), planes.clone()).unwrap();
+        let proposals = [
+            PackedIntervention::LeafSwap { first: 0, second: 1 },
+            PackedIntervention::LeafSwap { first: 0, second: 17 },
+            PackedIntervention::LeafSwap { first: 12, second: 79 },
+        ];
+        let baseline = model.infer_bitplanes(&planes).unwrap();
+        let mut reference: Option<(usize, u32, usize)> = None;
+        for (index, proposal) in proposals.iter().enumerate() {
+            let PackedIntervention::LeafSwap { first, second } = *proposal else {
+                unreachable!()
+            };
+            let mut routing = model.routing().to_vec();
+            routing.swap(first, second);
+            let full = model.rerouted(routing).unwrap().infer_bitplanes(&planes).unwrap();
+            let flips = (baseline ^ full).count_ones();
+            let mut nodes = BTreeSet::from([first / CIRCLES, second / CIRCLES]);
+            let mut gates = 0usize;
+            for _ in 0..model.depth() {
+                gates += nodes.len();
+                nodes = nodes.into_iter().map(|n| n / CIRCLES).collect();
+            }
+            let better = match reference {
+                None => true,
+                Some((_, old_flips, old_gates)) => {
+                    (flips as u128) * (old_gates as u128)
+                        > (old_flips as u128) * (gates as u128)
+                        || ((flips as u128) * (old_gates as u128)
+                            == (old_flips as u128) * (gates as u128)
+                            && (flips > old_flips
+                                || (flips == old_flips && gates < old_gates)))
+                }
+            };
+            if better {
+                reference = Some((index, flips, gates));
+            }
+        }
+        assert_eq!(
+            session.most_efficient_output_flip(&proposals, 3).unwrap(),
+            reference
+        );
+        assert_eq!(session.most_efficient_output_flip(&[], 0).unwrap(), None);
+        assert!(matches!(
+            session.most_efficient_output_flip(&proposals, 2),
+            Err(HierarchyError::InvalidInput)
+        ));
+        assert!(matches!(
+            session.most_efficient_output_flip(
+                &[PackedIntervention::LeafSwap { first: 0, second: model.input_bits() }],
+                1
+            ),
+            Err(HierarchyError::InvalidRouting)
+        ));
+        assert_eq!(session.output(), baseline);
+        assert_eq!(session.updated_gates, 0);
+    }
+
+    #[test]
     fn verified_adaptive_matches_full_after_sequential_acceptances() {
         use crate::fourier5_sequential_adaptive::EngineCalibration;
         let base = FiveCircleHierarchy::from_modes(
