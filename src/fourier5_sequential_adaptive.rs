@@ -227,12 +227,34 @@ pub fn evaluate_frozen_batch(
         });
     }
     let cache = FiveCircleIncrementalCache::new(baseline, planes)?;
-    let deltas = proposals
-        .iter()
-        .copied()
-        .map(|p| cache.evaluate(p))
-        .collect::<Result<Vec<_>, _>>()?;
-    let cone_gates: usize = deltas.iter().map(|d| d.gate_evaluations).sum();
+    // Stop evaluating counterfactual cones as soon as their accumulated
+    // measured-cost lower bound cannot beat Full. This avoids wasting work
+    // on the rest of a heterogeneous batch with large affected cones.
+    let cone_budget = frozen_batch_cone_budget(
+        baseline.neuron_count(),
+        proposals.len(),
+        calibration,
+        0,
+    );
+    let mut deltas = Vec::with_capacity(proposals.len());
+    let mut cone_gates = 0usize;
+    for &proposal in proposals {
+        let delta = cache.evaluate(proposal)?;
+        cone_gates = cone_gates.saturating_add(delta.gate_evaluations);
+        if cone_budget.is_none_or(|budget| (cone_gates as u128) > budget) {
+            return Ok(BatchEvaluation {
+                outputs: candidates
+                    .iter()
+                    .map(|candidate| candidate.infer_bitplanes(planes))
+                    .collect::<Result<Vec<_>, _>>()?,
+                engine: Engine::Full,
+                full_gates,
+                incremental_gates: cone_gates,
+                cache_build_gates: cache.build_gate_evaluations(),
+            });
+        }
+        deltas.push(delta);
+    }
     let full_cost = (full_gates as u128).saturating_mul(calibration.full_ns_per_gate as u128);
     let incremental_cost = (cache.build_gate_evaluations() as u128)
         .saturating_mul(calibration.full_ns_per_gate as u128)
@@ -390,6 +412,47 @@ mod tests {
             assert_eq!(outcome.cache_build_gates, 0);
             assert_eq!(outcome.incremental_gates, 0);
         }
+    }
+
+    #[test]
+    fn large_cones_abort_incremental_batch_without_changing_oracle() {
+        let model = FiveCircleHierarchy::from_modes(
+            &[GateKind::Majority, GateKind::Parity, GateKind::Or],
+            LeafRouting::SeededShuffle(29),
+        )
+        .unwrap();
+        let input = planes(model.input_bits());
+        let proposals: Vec<_> = (0..8)
+            .map(|i| PackedIntervention::LeafSwap {
+                first: i,
+                second: i + 25,
+            })
+            .collect();
+        let expected: Vec<_> = proposals
+            .iter()
+            .map(|p| {
+                let PackedIntervention::LeafSwap { first, second } = *p else {
+                    unreachable!()
+                };
+                let mut routing = model.routing().to_vec();
+                routing.swap(first, second);
+                model.rerouted(routing).unwrap().infer_bitplanes(&input).unwrap()
+            })
+            .collect();
+        let result = evaluate_frozen_batch(
+            &model,
+            &input,
+            &proposals,
+            EngineCalibration {
+                full_ns_per_gate: 1,
+                incremental_ns_per_gate: 1_000_000,
+                cache_build_ns: 0,
+            },
+        )
+        .unwrap();
+        assert_eq!(result.engine, Engine::Full);
+        assert_eq!(result.outputs, expected);
+        assert!(result.incremental_gates > 0);
     }
 
     #[test]
