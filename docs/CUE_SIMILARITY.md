@@ -180,7 +180,41 @@ guard counters, reach; **no accuracy**).
 
 ## Design-stage pilot
 
-Pending (label-free census, seeds 1..5).
+`results/cue-similarity-census-v1.txt` (seeds 1..5, identity order, flips 25 /
+50 / 100, k = 8 / 16 / 24; partner agreement, writes, guard counters and cue
+reach only; **no accuracy computed**). Ranges over the 5 seeds:
+
+| k | flip | partner agreement Zg2c / Zg2m / Zg2a | conflicting links (a < 0.5) Zg2c / Zg2m / Zg2a | effective writes (every arm) | Zg2c / Zg2m / Zg2a overwrites |
+|---|---|---|---|---|---|
+| 8 | 25 | 0.70–0.73 / 0.70–0.73 / 0.47–0.55 | 1 / 1 / 4–5 | 120–156 | 14–23 / 14–23 / 12–18 |
+| 8 | 50 | 0.49–0.54 / 0.55–0.58 / 0.42–0.50 | 3–4 / 0–3 / 5–8 | 208–258 | 37–52 / 33–53 / 31–42 |
+| 8 | 100 | 0 / 0.75 / 0 | 8 / 2 / 8 | 412–498 | 86–111 / 64–84 / 86–111 |
+| 16 | 25 | 0.73–0.76 / 0.73–0.76 / 0.45–0.49 | 0–1 / 0–1 / 9–14 | 228–288 | 93–127 / 93–127 / 85–117 |
+| 16 | 50 | 0.48–0.53 / 0.57–0.59 / 0.42–0.45 | 3–11 / 1–3 / 13–14 | 426–515 | 215–260 / 208–253 / 203–250 |
+| 16 | 100 | 0 / 0.875 / 0 | 16 / 2 / 16 | 800–1008 | 382–485 / 338–470 / 382–485 |
+| 24 | 25 | 0.73–0.75 / 0.73–0.75 / 0.43–0.47 | 0–1 / 0–1 / 18–23 | 558–629 | 317–386 / 317–386 / 324–373 |
+| 24 | 50 | 0.48–0.51 / 0.57–0.58 / 0.41–0.43 | 8–16 / 1–2 / 21–24 | 1036–1174 | 662–738 / 668–756 / 675–758 |
+| 24 | 100 | 0 / 0.917 / 0 | 24 / 2 / 24 | 1826–2248 | 1190–1424 / 1142–1343 / 1190–1424 |
+
+Readings stated before the main run (they do not change any hypothesis):
+
+* **The manipulation works at flip 100:** the cyclic code pairs every task
+  with its exact inverse (agreement 0, all k links conflicting); the matched
+  tour pairs tasks two ids apart (identical tasks) except for the 2 links
+  where the tour switches parity (agreement 0.75 / 0.875 / 0.917 at
+  k = 8 / 16 / 24). At flip 100 the **anti code coincides with the cyclic
+  code** (same partner map, same writes), so Zg2a = Zg2c there.
+* **At flip 25 the matched tour is the identity tour in these pilot seeds:**
+  Zg2m and Zg2c have the same partner map and identical counters at k = 8 and
+  16 (and the same agreement range at k = 24). At flip 25, H5/H6 therefore
+  compare the cycle 21 share-2 code against the anti code and the private
+  cue on new seeds; the anti code drops agreement to ≈ 0.45.
+* **At flip 50 the tasks are unrelated** but the greedy tour still finds
+  partners above chance (≈ 0.58 vs ≈ 0.50 cyclic, ≈ 0.43 anti); H7 tests
+  whether that small agreement gap moves accuracy.
+* Writes stay equal across arms within a (k, flip, seed) (`paced100`), so any
+  accuracy difference between codes is not a budget difference. Nothing was
+  tuned on the pilot.
 
 ## Command
 

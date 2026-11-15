@@ -342,6 +342,9 @@ pub fn code_fixture(
     let mut out = fx.clone();
     if code.shared() {
         out.cues = codes_from(&fx.cues, &sigma)?;
+    } else if code == Code::Own {
+        // Sorted blocks, as the cycle 21 share-1 code (bit-identical rows).
+        out.cues = ccap::share_codes(&fx.cues, 1)?;
     }
     let ok = codes_valid(&fx.cues, &out.cues, code, &sigma);
     Ok((out, sigma, ok))
@@ -1399,4 +1402,328 @@ pub fn census(
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::generalization_bench::GraphShape;
+    use crate::plasticity::PlasticCircuit;
+    use crate::task_sequence as ts;
+
+    fn small() -> Design {
+        Design {
+            shape: GraphShape {
+                sources: 48,
+                targets: 12,
+                fan_in: 6,
+            },
+            spec: GenSpec {
+                active: 4,
+                train_patterns: 8,
+                test_patterns: 24,
+                rounds_a: 2,
+                rounds_b: 2,
+                ..ns::DESIGN.spec
+            },
+            cue_cap: 4,
+        }
+    }
+
+    fn tmp(tag: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("v888-cue-similarity-{tag}-{}", std::process::id()))
+    }
+
+    #[test]
+    fn tours_partners_and_codes_follow_the_preregistered_construction() {
+        // Tasks 0 and 2 agree, 1 and 3 agree, cross pairs disagree.
+        let a = vec![
+            vec![1.0, 0.1, 0.9, 0.2],
+            vec![0.1, 1.0, 0.3, 0.8],
+            vec![0.9, 0.3, 1.0, 0.1],
+            vec![0.2, 0.8, 0.1, 1.0],
+        ];
+        assert_eq!(tour(&a, true), vec![0, 2, 1, 3]);
+        assert_eq!(tour(&a, false), vec![0, 1, 2, 3]);
+        let s = partners(&[0, 2, 1, 3]);
+        assert_eq!(s, vec![2, 3, 1, 0]);
+        assert!(single_cycle(&s));
+        assert!(!single_cycle(&[1, 0, 3, 2]));
+        assert!(!single_cycle(&[0, 1, 2]));
+        // Ties go to the lowest id.
+        let flat = vec![vec![0.5; 4]; 4];
+        assert_eq!(tour(&flat, true), vec![0, 1, 2, 3]);
+        assert_eq!(tour(&flat, false), vec![0, 1, 2, 3]);
+        let blocks = vec![vec![5, 1], vec![2, 9], vec![7, 3], vec![4, 8]];
+        let c = codes_from(&blocks, &s).unwrap();
+        assert_eq!(c[0], vec![1, 3, 5, 7]);
+        assert_eq!(c[3], vec![1, 4, 5, 8]);
+        assert!(codes_valid(&blocks, &c, Code::Matched, &s));
+        let (ag, conf) = partner_agreement(&a, &s);
+        assert!((ag - (0.9 + 0.8 + 0.3 + 0.2) / 4.0).abs() < 1e-12);
+        assert_eq!(conf, 2);
+        // Cyclic = the cycle 21 share-2 code; it is not valid under a
+        // non-cyclic partner map and vice versa.
+        let cyc = partner_map(Code::Cyclic, &a);
+        let cc = codes_from(&blocks, &cyc).unwrap();
+        assert_eq!(cc, ccap::share_codes(&blocks, 2).unwrap());
+        assert!(codes_valid(&blocks, &cc, Code::Cyclic, &cyc));
+        assert!(!codes_valid(&blocks, &c, Code::Cyclic, &s));
+        // Tampering is rejected: foreign line, 2-cycles, wrong partner.
+        let mut bad_c = c.clone();
+        bad_c[0][0] = 99;
+        assert!(!codes_valid(&blocks, &bad_c, Code::Matched, &s));
+        let two = vec![1, 0, 3, 2];
+        let c2 = codes_from(&blocks, &two).unwrap();
+        assert!(!codes_valid(&blocks, &c2, Code::Matched, &two));
+        assert!(!codes_valid(&blocks, &c, Code::Matched, &cyc));
+        assert!(codes_from(&blocks, &[0, 1]).is_err());
+        let own = partner_map(Code::Own, &a);
+        assert_eq!(partner_agreement(&a, &own), (1.0, 0));
+        assert_eq!(partner_agreement(&a, &[]), (0.0, 0));
+    }
+
+    #[test]
+    fn code_fixtures_change_only_the_cue_assignment_and_track_agreement() {
+        let d = small();
+        let k = 6;
+        for flip in [25, 50, 100] {
+            let fx = sg::fixture(None, &d, k, flip, 3).unwrap();
+            let a = agreement(&fx).unwrap();
+            for i in 0..k {
+                assert!((a[i][i] - 1.0).abs() < 1e-12);
+                for j in 0..k {
+                    assert!((a[i][j] - a[j][i]).abs() < 1e-12);
+                }
+            }
+            let mut ags = Vec::new();
+            for code in [Code::Own, Code::Cyclic, Code::Matched, Code::Anti] {
+                let (f, s, ok) = code_fixture(&fx, code, &a).unwrap();
+                assert!(ok, "{code:?} flip {flip}");
+                assert_eq!(f.graph, fx.graph);
+                assert_eq!(f.task, fx.task);
+                assert_eq!(ci::cue_edges(&f).unwrap(), ci::cue_edges(&fx).unwrap());
+                let z = ci::initial_circuit(&f, &d.spec, Setting::Z.base().arm()).unwrap();
+                let z0 = ci::initial_circuit(&fx, &d.spec, Setting::Z.base().arm()).unwrap();
+                assert_eq!(z.weights(), z0.weights());
+                ags.push(partner_agreement(&a, &s).0);
+            }
+            assert!(ags[2] >= ags[3]);
+            if flip == 100 {
+                // Task i+1 is the exact inverse of task i.
+                assert!(a[0][1].abs() < 1e-12 && (a[0][2] - 1.0).abs() < 1e-12);
+                assert!(ags[1].abs() < 1e-12);
+                assert!(ags[2] > 0.5);
+            }
+        }
+    }
+
+    #[test]
+    fn orders_use_the_new_salt_and_include_the_reversal() {
+        for seed in [1, 481, 520] {
+            for k in KS {
+                let o = orders(seed, k, RANDOM_ORDERS).unwrap();
+                assert_eq!(o.len(), 1 + HELDOUT_ORDERS);
+                assert_eq!(o[1], (0..k).rev().collect::<Vec<_>>());
+                assert!(o.iter().all(|p| sg::is_permutation(p, k)));
+                let old = ccap::orders(seed, k, RANDOM_ORDERS).unwrap();
+                assert!(o[2..].iter().all(|p| !old[2..].contains(p)));
+            }
+        }
+        assert_eq!(
+            orders_salted(7, 8, 3, ccap::ORDER_SALT).unwrap(),
+            ccap::orders(7, 8, 3).unwrap()
+        );
+        assert!(orders(1, 2, 1).is_err());
+        assert!(orders(1, 3, 5).is_err());
+    }
+
+    #[test]
+    fn rows_are_the_engine_and_own_and_cyclic_are_the_cycle21_cues() {
+        let d = small();
+        let (k, flip, seed) = (6, 100, 2);
+        let rows = run_seed(None, &d, k, flip, seed, 2).unwrap();
+        assert_eq!(rows.len(), 4 * ARMS.len());
+        let spec = GenSpec {
+            flip_pct: flip,
+            ..d.spec
+        };
+        let fx = sg::fixture(None, &d, k, flip, seed).unwrap();
+        let a = agreement(&fx).unwrap();
+        for r in &rows {
+            let order = &r.inner.order;
+            let e = cgd::run_setting(&fx, &spec, seed, Setting::Err, order, &sg::free(k)).unwrap();
+            let curves: Vec<Vec<u64>> = e.logs.iter().map(|t| t.ledger.cum.clone()).collect();
+            let lim = if r.inner.setting == Setting::Err {
+                sg::free(k)
+            } else {
+                cgd::paced_limits(&curves)
+            };
+            let (f, _, ok) = code_fixture(&fx, r.code, &a).unwrap();
+            let x = cgd::run_setting(&f, &spec, seed, r.inner.setting, order, &lim).unwrap();
+            assert_eq!(r.inner.ev, x.ev);
+            assert_eq!(r.inner.logs, x.logs);
+            assert_eq!(r.inner.digest, wa::digest(&x.weights));
+            assert!(ok && r.codes_ok);
+        }
+        // Cycle 21 harness: same rows on the reversed order for S1, Z1, Zg
+        // share 1 (= Zg1) and Zg share 2 (= Zg2c).
+        let old = ccap::run_seed(None, &d, k, flip, seed, 2).unwrap();
+        for (mine, theirs) in [
+            (ZG1, ccap::ZG1),
+            (S1, ccap::S1),
+            (ZG2C, ccap::ZG2),
+            (Z1, ccap::Z1),
+        ] {
+            let x = rows
+                .iter()
+                .find(|r| r.arm() == mine && r.inner.order_ix == 1)
+                .unwrap();
+            let y = old
+                .iter()
+                .find(|r| r.arm() == theirs && r.inner.order_ix == 1)
+                .unwrap();
+            assert_eq!(x.inner.ev, y.inner.ev);
+            assert_eq!(x.inner.digest, y.inner.digest);
+        }
+        // At flip 100 the matched code differs from the cyclic one.
+        let m = rows.iter().find(|r| r.arm() == ZG2M).unwrap();
+        let c = rows.iter().find(|r| r.arm() == ZG2C).unwrap();
+        assert_ne!(m.sigma, c.sigma);
+        assert!(m.agree > c.agree);
+    }
+
+    #[test]
+    fn checkpoint_resume_is_bit_exact_for_zg_matched() {
+        let d = small();
+        let (k, flip, seed) = (6, 100, 4);
+        let spec = GenSpec {
+            flip_pct: flip,
+            ..d.spec
+        };
+        let base = sg::fixture(None, &d, k, flip, seed).unwrap();
+        let a = agreement(&base).unwrap();
+        let (fx, _, ok) = code_fixture(&base, Code::Matched, &a).unwrap();
+        assert!(ok);
+        let g = &fx.graph;
+        let order: Vec<usize> = (0..k).rev().collect();
+        let e = cgd::run_setting(&fx, &spec, seed, Setting::Err, &order, &sg::free(k)).unwrap();
+        let curves: Vec<Vec<u64>> = e.logs.iter().map(|t| t.ledger.cum.clone()).collect();
+        let lim = cgd::paced_limits(&curves);
+        let s = Setting::Zg;
+        let full = cgd::run_setting(&fx, &spec, seed, s, &order, &lim).unwrap();
+        let mut c = ci::initial_circuit(&fx, &spec, s.base().arm()).unwrap();
+        let mut dir = vec![0_i8; g.edges()];
+        let mut stamp = vec![0_u8; g.edges()];
+        for (i, &t) in order.iter().enumerate() {
+            let n = ts::task_order(&spec, seed, t).len();
+            let start = c.weights().to_vec();
+            let mut cp = cgd::Checkpoint::start(
+                &order,
+                i,
+                &lim[i],
+                cgd::Guard::LastResort,
+                &dir,
+                &stamp,
+                &start,
+            )
+            .unwrap();
+            for end in [n / 4, n / 2, n] {
+                cgd::train_range(&mut c, &fx, &spec, seed, s, &lim[i], &mut cp, end).unwrap();
+                let (pw, pc) = (tmp("w"), tmp("c"));
+                c.save(&pw).unwrap();
+                cp.save(&pc).unwrap();
+                c = PlasticCircuit::load(&pw, g).unwrap();
+                cp = cgd::Checkpoint::load(&pc, g.edges()).unwrap();
+                std::fs::remove_file(&pw).unwrap();
+                std::fs::remove_file(&pc).unwrap();
+            }
+            assert_eq!(Some(cp.g), full.glogs[i].stats, "stage {i}");
+            assert_eq!(cp.inner.inner.inner.ledger, full.logs[i].ledger);
+            cgd::consolidate(&mut dir, &mut stamp, i, &cp.start, c.weights()).unwrap();
+        }
+        assert_eq!(c.weights(), &full.weights[..]);
+    }
+
+    #[test]
+    fn grid_is_deterministic_thread_independent_and_gates_detect_tampering() {
+        let d = small();
+        let ks = [6, 8];
+        let a = run_grid_threads(None, &d, &ks, &[50, 100], &[1, 2, 3], 2, 1).unwrap();
+        let b = run_grid_threads(None, &d, &ks, &[50, 100], &[1, 2, 3], 2, 4).unwrap();
+        assert_eq!(a, b);
+        let csv = to_csv(&a, "GENERATED_SYNTHETIC");
+        assert_eq!(csv, to_csv(&b, "GENERATED_SYNTHETIC"));
+        assert_eq!(csv.lines().count(), 1 + a.len());
+        let cols = csv_header().split(',').count();
+        assert!(csv.lines().all(|l| l.split(',').count() == cols));
+        let rep = report(&a);
+        assert_eq!(rep, report(&b));
+        assert!(rep.contains("readings: G1_integrity=true"));
+        assert!(gates(&a).0);
+        // k = 16 / 24 absent: every hypothesis stays not evaluable.
+        assert_eq!(readings(&a).1, [None; N_HYP]);
+        let q = Sel {
+            k: 8,
+            flip: 100,
+            orders: Orders::Heldout,
+        };
+        assert_eq!(compare(&a, q, 8, Slice::All, ZG2M, ZG2M).acc.ties, 3);
+        let w = worst_order(&a, 8, 100, ZG2M, S1);
+        assert!(w.mean <= compare(&a, q, 8, Slice::All, ZG2M, S1).acc.mean + 1e-12);
+        assert!(run_grid_threads(None, &d, &ks, &[50], &[], 2, 1).is_err());
+        // Tampering fails G1: a bad code flag, wrong lines, a partner map
+        // changed in one row, a swapped reversal and an over-cap run.
+        let ix = a.iter().position(|r| r.arm() == ZG2M).unwrap();
+        let mut t = a.clone();
+        t[ix].codes_ok = false;
+        assert!(!gates(&t).0);
+        let mut t = a.clone();
+        t[ix].cue.lines_per_task += 1;
+        assert!(!gates(&t).0);
+        let mut t = a.clone();
+        t[ix].sigma.swap(0, 1);
+        assert!(!gates(&t).0);
+        let mut t = a.clone();
+        let j = t.iter().position(|r| r.inner.order_ix == 1).unwrap();
+        t[j].inner.order.swap(0, 1);
+        assert!(!gates(&t).0);
+        let mut t = a;
+        let j = t.iter().position(|r| r.arm() == S1).unwrap();
+        t[j].inner.logs[0].ledger.writes = t[j].inner.logs[0].ledger.cap + 1;
+        assert!(!gates(&t).0);
+    }
+
+    #[test]
+    fn readings_are_evaluated_on_the_preregistered_ks_and_flips() {
+        let d = small();
+        let rows = run_grid_threads(None, &d, &[8, 16], &[25, 50, 100], &[1, 2], 2, 4).unwrap();
+        let (g, h) = readings(&rows);
+        assert!(g.0);
+        if g.0 && g.1 && g.2 {
+            assert!(h[..8].iter().all(Option::is_some));
+            assert!(h[8].is_none());
+            assert!(h[9..].iter().all(Option::is_some));
+        } else {
+            assert_eq!(h, [None; N_HYP]);
+        }
+    }
+
+    #[test]
+    fn census_counts_agreement_writes_and_reach_without_accuracy() {
+        let d = small();
+        let lines = census(None, &d, 6, 100, &[1, 2]).unwrap();
+        assert_eq!(lines.len(), 2 * ARMS.len());
+        for (k, flip, a, _, ag, _, rch, v) in &lines {
+            assert_eq!((*k, *flip), (6, 100));
+            assert_eq!(*rch > 0.0, a.code != Code::None);
+            assert_eq!(v[4].is_some(), a.setting.guard().is_some());
+            if a.code == Code::Own {
+                assert!((ag - 1.0).abs() < 1e-12);
+            }
+            if a.code == Code::Cyclic {
+                assert!(ag.abs() < 1e-12);
+            }
+        }
+    }
 }
