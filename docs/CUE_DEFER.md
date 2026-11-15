@@ -204,6 +204,35 @@ drawn. The pilot can only lead to stopping the cycle before the main run
 (e.g. if a manipulation cannot bind); it cannot change a threshold, an arm
 or a hypothesis above.
 
+## Pilot result (label-free, seeds 1..5, identity order; written before the main run)
+
+File: `results/cue-defer-census-v1.txt` (no accuracy computed, no held-out
+order drawn). Means over the 5 pilot seeds:
+
+| k, flip | partner-line moves, half 1 / half 2: Zg2m | Zge2m | Zgl2m | Zgl2m skips half 1 | cue writes Zg1 / Zg2m / Zgo2m / Zgl2m / Zge2m |
+|---|---|---|---|---|---|
+| 16, 100 | 61.2 / 0.0 | 61.2 / 0.0 | 0.0 / 0.6 | 438.4 | 305.8 / 491.8 / 309.8 / 309.6 / 491.8 |
+| 16, 50 | 50.0 / 0.2 | 50.0 / 0.0 | 0.0 / 0.6 | 585.0 | 118.6 / 207.8 / 122.6 / 123.6 / 207.2 |
+| 24, 100 | 60.4 / 1.8 | 59.4 / 0.0 | 0.0 / 1.6 | 318.4 | 431.8 / 766.8 / 434.8 / 437.8 / 765.2 |
+| 24, 50 | 53.8 / 1.0 | 53.4 / 0.0 | 0.0 / 1.6 | 498.6 | 171.4 / 323.6 / 180.0 / 183.2 / 322.0 |
+
+* Under the shared write, almost every partner-line edge change happens in
+  the **first** half of a stage (the guarded error gate writes while errors
+  are frequent). The early window (Zge2m) reproduces the shared code's
+  partner moves and cue writes; the late window (Zgl2m) has the owned code's
+  cue writes and ≈ 1 partner-line edge change per run in its second half.
+* Pilot fraction of identity-order Zgl2m runs with a second-half partner
+  move (G2 (a)): 0.6 / 0.4 / 0.8 / 0.6 at (16, 50) / (16, 100) / (24, 50) /
+  (24, 100) — G2 (a) is close to its 0.5 threshold and may fail on the
+  hypothesis seeds. Skips (G2 (b)) and early moves (G2 (c)) bind in 5/5.
+* **Expectation stated before the main run:** if G2 passes, Zgl2m should
+  behave like the owned code and Zge2m like the shared code, i.e. H1 / H3
+  likely fail and H2 / H4 / H12 are expected to be small. The pilot does not
+  show a manipulation that cannot bind (skips and early moves bind in every
+  run), so the cycle is **not** stopped: the main run is executed exactly as
+  pre-registered above (no threshold, arm or hypothesis changed) and its
+  outcome, pass, fail or not evaluable, is reported.
+
 ## Reproduce
 
 ```bash
