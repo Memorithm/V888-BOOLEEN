@@ -5,6 +5,7 @@ pub mod circuit_explorer;
 pub mod connectome;
 pub mod consolidated_graded;
 pub mod consolidation;
+pub mod consolidation_guard;
 pub mod consolidation_scale;
 pub mod context_cue;
 pub mod cue_displacement;
