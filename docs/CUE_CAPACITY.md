@@ -206,7 +206,8 @@ Run once after the pre-registration commit 00f376b (and the harness commit
 5db91b0) had been pushed. The grid has 16200 rows: 3 k × 3 flips × 40 seeds
 × 5 orders × 9 arms. It took 30.5 min on 8 worker threads (202 CPU-min).
 CSV sha256 `7a17a41b738595a84dce16c183635118d6aa88167faef0f4bbf55b2f0ab00a03`.
-RERUN_LINE
+A second, independent run with 5 worker threads gave a byte-identical CSV
+(same sha256) and an identical report.
 Every row keeps the original topology (`topology_unchanged_all=true`).
 Files: `results/cue-capacity-v1.csv`, `results/cue-capacity-report-v1.txt`,
 pilot `results/cue-capacity-census-v1.txt`.
