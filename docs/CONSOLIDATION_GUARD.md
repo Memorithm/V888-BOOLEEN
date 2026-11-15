@@ -235,5 +235,99 @@ cargo +1.89 run --release -- bench-consolidation-guard --csv results/consolidati
 
 ## Results
 
-Pending: the main run happens only after this pre-registration has been
-committed and pushed.
+Run once after the pre-registration commit 93af1b4 had been pushed. The
+grid has 6480 rows: 2 k × 3 flips × 40 seeds × 3 orders × 9 settings. It
+takes about 95 s on 8 CPU threads (12 CPU-min). Two runs (8 and 3 worker
+threads) give a byte-identical CSV (sha256 `25d0b243…b80c61`, full
+`25d0b24344e5ce3cc5c6390d10cbe54512efd017a58d7b4d3442605fd8b80c61`) and an
+identical report. Every row keeps the original topology
+(`topology_unchanged_all=true`). Files: `results/consolidation-guard-v1.csv`,
+`results/consolidation-guard-report-v1.txt`, pilot
+`results/consolidation-guard-census-v1.txt`.
+
+### 1. Design gates (reported first)
+
+* **G1 passes:** every row keeps its topology, starts from its documented
+  initial weights and stays within its allowance.
+  `error-gated@paced100` is bit-identical to uncapped E with zero
+  refusals everywhere. Guard counters match the guard and the ledger in
+  every stage. Orders are valid, distinct and shared.
+* **G2 passes:** at k = 8, flip 50 on held-out orders, E overwrites, Gb
+  and Gr block, Gc overwrites and Zg defers in 100 % of rows.
+* **G3 passes:** median CN pairs per (seed, task) is 59 ≥ 20.
+
+### 2. Settings at flip 50, held-out orders (mean over 40 seeds × 2 orders)
+
+k = 8:
+
+| setting | ACC_all | ACC_CN | LEARN_all | FGT_all | FGT_CN | LAST_all | effective writes | overwrites | blocked / deferred |
+|---|---|---|---|---|---|---|---|---|---|
+| supervised @ paced100 (S1) | 0.547 | 0.528 | 0.639 | 0.105 | 0.042 | 0.606 | 256 | – | – |
+| reward @ paced100 (R1) | 0.575 | 0.566 | 0.603 | 0.032 | −0.008 | 0.562 | 256 | – | – |
+| error-gated @ free (E) | 0.569 | 0.582 | 0.990 | 0.481 | 0.427 | 0.992 | 256 | 187 | – |
+| E/E-cue0 @ paced100 (Z) | 0.610 | 0.587 | 0.886 | 0.315 | 0.295 | 0.857 | 255 | 118 | – |
+| E + block (Gb) | 0.509 | 0.515 | 0.628 | 0.136 | 0.138 | 0.508 | 118 | 0 | 6180 blocked |
+| E + block-recent2 (Gr) | 0.544 | 0.549 | 0.769 | 0.257 | 0.216 | 0.766 | 194 | 86 | 3311 blocked |
+| E + charge4 (Gc) | 0.537 | 0.543 | 0.711 | 0.199 | 0.193 | 0.630 | 118 (250 charged) | 44 | – |
+| E + last-resort (Gl) | 0.569 | 0.580 | 0.983 | 0.474 | 0.411 | 0.984 | 252 | 183 | 16 deferred |
+| **Z + last-resort (Zg)** | **0.644** | **0.602** | 0.858 | 0.245 | 0.241 | 0.830 | 256 | 72 | 870 deferred |
+
+k = 4 (own fixture): S1 0.578, R1 0.599, E 0.633 (FGT 0.449), Z 0.656
+(FGT 0.215), Gb 0.581, Gr 0.579 (FGT 0.274), Gc 0.598, Gl 0.632,
+**Zg 0.669** (FGT 0.143).
+
+### 3. Hypotheses (k = 8, flip 50, held-out orders; Δ = mean [95 % CI] better/ties/worse over 40 seeds)
+
+* **H1 fail (primary).** Gr vs E: the forgetting cut is large,
+  +0.224 [+0.216, +0.232] 40/0/0, but learning drops by −0.221
+  [−0.225, −0.218], beyond the 0.10 bound. ACC_all −0.025.
+* **H2 fail.** Gb vs E: FGT cut +0.345, LEARN −0.362, ACC_all −0.060.
+* **H3 fail.** Gc vs E: FGT cut +0.283, LEARN −0.279, ACC_all −0.032.
+* **H4 fail.** ACC_all(Gr) − ACC_all(E) = −0.025 [−0.031, −0.020] 3/0/37.
+* **H5 fail.** Gr vs S1: ACC_all −0.003 [−0.009, +0.003] 20/0/20, although
+  Gr learns +0.130 more.
+* **H6 fail.** Gr − R1 ACC_all = −0.031 [−0.038, −0.025].
+* **H7 pass.** Zg vs Z: FGT cut +0.071 [+0.065, +0.078] 40/0/0 and ACC_all
+  +0.034 [+0.029, +0.039] 40/0/0, for a learning cost of −0.028 and LAST
+  −0.027.
+* **H8 pass.** Forgetting E 0.481 > Gr 0.257 > Gb 0.136 and learning E
+  0.990 > Gr 0.769 > Gb 0.628. All four pairwise differences are positive
+  (40/0/0 each).
+* **H9 pass (pre-registered null).** Gl − E ACC_all = −0.001
+  [−0.001, +0.000]. Rationing overwrites does not bind on the uncued rule.
+* **H10 fail.** k = 4, Gr vs E: FGT cut +0.175 (positive), but LEARN
+  −0.186, beyond the 0.10 bound.
+
+### 4. Secondary
+
+* **On the uncued rule every guard trades forgetting for learning about
+  1:1.** Gr buys 0.224 less forgetting for 0.221 less learning, Gb 0.345
+  for 0.362 and Gc 0.283 for 0.279. The pattern is the same at k = 4 and
+  at flips 25 / 100 (Gr − E ACC_all −0.052 at flip 25 and −0.009 at flip
+  100). This repeats #39's 1:1 trade ([CONSOLIDATED_GRADED.md](CONSOLIDATED_GRADED.md))
+  at k = 8 with protection limited to recently consolidated edges. The
+  pilot gave the reason: most of E's overwrites are single-edge direct
+  conflicts (≈ 0.4 active edges per target and pattern). Protecting the
+  old value is the same as not learning the new one.
+* **The guard pays on the silent cue** because the cue gives each task its
+  own free edges. Zg is the best setting at equal writes at k = 8:
+  ACC_all 0.644, which is +0.034 over Z, +0.075 over E, +0.069 over R1
+  and +0.097 over S1. Zg vs S1 passes the sequence rule on all and on CN
+  pairs. The Zg − Z gain holds at k = 4 (+0.013), at flip 25 (+0.020),
+  at flip 100 (+0.029) and on the identity order (+0.031). From the k = 4
+  prefix to k = 8 of the same runs it does not grow: +0.005
+  [−0.002, +0.011].
+* Gr's deficit to E shrinks with k: growth from the k = 4 prefix to k = 8
+  is +0.032 [+0.026, +0.040]. At k = 8 Gr is level with S1 (−0.003).
+* On CN pairs Gr − E is −0.033 and Zg − Z is +0.014 [+0.005, +0.025].
+* E − S1 at k = 8 on these new seeds and orders is +0.023, which
+  replicates #131's +0.020 (#131 H1 failure).
+
+**Reading:** a consolidation guard on the original edges does cut the
+error gate's forgetting at k = 8, by up to 0.35. Without spare capacity it
+cuts learning by the same amount. None of the uncued guards beats E, S1 or
+R1 on final accuracy (H1–H6 and H10 fail; the 1:1 trade shows in H8). The
+guard only improves retention where spare capacity exists, on the silent
+cue's task-private edges. There, Z + last-resort cuts forgetting by 0.07
+for a 0.03 learning cost and gives the best equal-budget accuracy so far
+(H7). It does not change how the error gate's lead scales with k.
