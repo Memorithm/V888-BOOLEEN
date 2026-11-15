@@ -228,23 +228,34 @@ pub fn evaluate_frozen_batch_with_margin(
         });
     }
     let cache = FiveCircleIncrementalCache::new(baseline, planes)?;
-    let deltas = proposals
-        .iter()
-        .copied()
-        .map(|p| cache.evaluate(p))
-        .collect::<Result<Vec<_>, _>>()?;
-    let cone_gates: usize = deltas.iter().map(|d| d.gate_evaluations).sum();
-    let full_cost = (full_gates as u128).saturating_mul(calibration.full_ns_per_gate as u128);
-    let incremental_cost = (cache.build_gate_evaluations() as u128)
+    let build_cost = (cache.build_gate_evaluations() as u128)
         .saturating_mul(calibration.full_ns_per_gate as u128)
-        .saturating_add(calibration.cache_build_ns as u128)
-        .saturating_add(
-            (cone_gates as u128).saturating_mul(calibration.incremental_ns_per_gate as u128),
-        );
-    let use_incremental = incremental_cost.saturating_mul(1_000_000)
-        < full_cost.saturating_mul(retained_ppm);
+        .saturating_add(calibration.cache_build_ns as u128);
+    // Stop computing counterfactual cones as soon as the measured-cost
+    // budget is exhausted. Later cones cannot make Incremental profitable.
+    // This counts only cones actually evaluated, not estimated future cones.
+    let allowed_cost = full_cost.saturating_mul(retained_ppm) / 1_000_000;
+    let mut cone_gates = 0_usize;
+    let mut outputs_incremental = Vec::with_capacity(proposals.len());
+    let mut exhausted = build_cost >= allowed_cost;
+    if !exhausted {
+        for &proposal in proposals {
+            let delta = cache.evaluate(proposal)?;
+            cone_gates = cone_gates.saturating_add(delta.gate_evaluations);
+            let cost = build_cost.saturating_add(
+                (cone_gates as u128)
+                    .saturating_mul(calibration.incremental_ns_per_gate as u128),
+            );
+            if cost >= allowed_cost {
+                exhausted = true;
+                break;
+            }
+            outputs_incremental.push(delta.output);
+        }
+    }
+    let use_incremental = !exhausted;
     let outputs = if use_incremental {
-        deltas.iter().map(|d| d.output).collect()
+        outputs_incremental
     } else {
         candidates
             .iter()
@@ -434,6 +445,50 @@ mod tests {
         assert_eq!(conservative.engine, Engine::Full);
         assert_eq!(normal.outputs, conservative.outputs);
         assert_eq!(conservative.cache_build_gates, 0);
+    }
+
+    #[test]
+    fn heterogeneous_cones_stop_early_and_keep_full_oracle_outputs() {
+        let model = FiveCircleHierarchy::from_modes(
+            &[GateKind::Majority, GateKind::Parity, GateKind::Or],
+            LeafRouting::SeededShuffle(53),
+        )
+        .unwrap();
+        let input = planes(model.input_bits());
+        let proposals: Vec<_> = (0..24)
+            .map(|i| PackedIntervention::LeafSwap {
+                first: i,
+                second: i + 1,
+            })
+            .collect();
+        let expected: Vec<_> = proposals
+            .iter()
+            .map(|proposal| {
+                let PackedIntervention::LeafSwap { first, second } = *proposal else {
+                    unreachable!()
+                };
+                let mut routing = model.routing().to_vec();
+                routing.swap(first, second);
+                model.rerouted(routing).unwrap().infer_bitplanes(&input).unwrap()
+            })
+            .collect();
+        let result = evaluate_frozen_batch(
+            &model,
+            &input,
+            &proposals,
+            EngineCalibration {
+                full_ns_per_gate: 10,
+                incremental_ns_per_gate: 1_000_000,
+                cache_build_ns: 0,
+            },
+        )
+        .unwrap();
+        assert_eq!(result.engine, Engine::Full);
+        assert_eq!(result.outputs, expected);
+        assert_eq!(result.cache_build_gates, model.neuron_count());
+        // The first cone exhausts the entire budget; the rest are skipped.
+        assert!(result.incremental_gates > 0);
+        assert!(result.incremental_gates < model.neuron_count() * proposals.len());
     }
 
     #[test]
