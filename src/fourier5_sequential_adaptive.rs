@@ -157,6 +157,22 @@ pub fn evaluate_frozen_batch(
     proposals: &[PackedIntervention],
     calibration: EngineCalibration,
 ) -> Result<BatchEvaluation, HierarchyError> {
+    evaluate_frozen_batch_with_margin(baseline, planes, proposals, calibration, 0)
+}
+
+/// Evaluate a frozen batch with a conservative minimum estimated saving.
+/// An invalid margin is rejected before allocating candidates or caches.
+/// The saving is applied to the total Full cost, including cold-cache build.
+pub fn evaluate_frozen_batch_with_margin(
+    baseline: &FiveCircleHierarchy,
+    planes: &[u64],
+    proposals: &[PackedIntervention],
+    calibration: EngineCalibration,
+    minimum_saving_ppm: u32,
+) -> Result<BatchEvaluation, HierarchyError> {
+    if minimum_saving_ppm > 1_000_000 {
+        return Err(HierarchyError::InvalidInput);
+    }
     if planes.len() != baseline.input_bits() {
         return Err(HierarchyError::InvalidInput);
     }
@@ -214,7 +230,10 @@ pub fn evaluate_frozen_batch(
     let cache_build_bound = (baseline.neuron_count() as u128)
         .saturating_mul(u128::from(calibration.full_ns_per_gate))
         .saturating_add(u128::from(calibration.cache_build_ns));
-    if cache_build_bound >= full_cost_bound {
+    let allowed_cost = full_cost_bound
+        .saturating_mul(u128::from(1_000_000 - minimum_saving_ppm))
+        / 1_000_000;
+    if cache_build_bound >= allowed_cost {
         return Ok(BatchEvaluation {
             outputs: candidates
                 .iter()
@@ -234,7 +253,7 @@ pub fn evaluate_frozen_batch(
         baseline.neuron_count(),
         proposals.len(),
         calibration,
-        0,
+        minimum_saving_ppm,
     );
     let mut deltas = Vec::with_capacity(proposals.len());
     let mut cone_gates = 0usize;
@@ -262,7 +281,9 @@ pub fn evaluate_frozen_batch(
         .saturating_add(
             (cone_gates as u128).saturating_mul(calibration.incremental_ns_per_gate as u128),
         );
-    let use_incremental = incremental_cost < full_cost;
+    let use_incremental = incremental_cost < full_cost
+        .saturating_mul(u128::from(1_000_000 - minimum_saving_ppm))
+        / 1_000_000;
     let outputs = if use_incremental {
         deltas.iter().map(|d| d.output).collect()
     } else {
@@ -453,6 +474,34 @@ mod tests {
         assert_eq!(result.engine, Engine::Full);
         assert_eq!(result.outputs, expected);
         assert!(result.incremental_gates > 0);
+    }
+
+    #[test]
+    fn measured_margin_switches_engine_without_changing_full_oracle() {
+        let model = FiveCircleHierarchy::from_modes(
+            &[GateKind::Majority, GateKind::Parity, GateKind::Or],
+            LeafRouting::SeededShuffle(31),
+        ).unwrap();
+        let input = planes(model.input_bits());
+        let proposals: Vec<_> = (0..12).map(|i| PackedIntervention::LeafSwap {
+            first: i, second: i + 1,
+        }).collect();
+        let calibration = EngineCalibration {
+            full_ns_per_gate: 100, incremental_ns_per_gate: 1, cache_build_ns: 0,
+        };
+        let reference = evaluate_frozen_batch(&model, &input, &proposals, calibration).unwrap();
+        assert_eq!(reference.engine, Engine::Incremental);
+        let conservative = evaluate_frozen_batch_with_margin(
+            &model, &input, &proposals, calibration, 1_000_000,
+        ).unwrap();
+        assert_eq!(conservative.engine, Engine::Full);
+        assert_eq!(conservative.cache_build_gates, 0);
+        assert_eq!(reference.outputs, conservative.outputs);
+        assert!(matches!(
+            evaluate_frozen_batch_with_margin(
+                &model, &input, &proposals, calibration, 1_000_001
+            ), Err(HierarchyError::InvalidInput)
+        ));
     }
 
     #[test]
