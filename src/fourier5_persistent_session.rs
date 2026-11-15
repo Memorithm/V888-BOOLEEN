@@ -267,6 +267,30 @@ impl PersistentSession {
             .collect()
     }
 
+    /// Select the proposal with the greatest number of flipped output lanes.
+    /// This is label-free Boolean sensitivity, NOT credit assignment or a
+    /// learning objective. Equal scores retain the earliest proposal.
+    /// The accepted model and persistent cache are never modified.
+    pub fn most_sensitive_proposal(
+        &self,
+        proposals: &[PackedIntervention],
+        max_proposals: usize,
+    ) -> Result<Option<(usize, u32, u64)>, HierarchyError> {
+        if proposals.len() > max_proposals {
+            return Err(HierarchyError::InvalidInput);
+        }
+        let baseline = self.output();
+        let mut best: Option<(usize, u32, u64)> = None;
+        for (index, &proposal) in proposals.iter().enumerate() {
+            let mask = baseline ^ self.propose(proposal)?;
+            let flips = mask.count_ones();
+            if best.is_none_or(|(_, previous, _)| flips > previous) {
+                best = Some((index, flips, mask));
+            }
+        }
+        Ok(best)
+    }
+
     /// Select a counterfactual engine using externally measured nanoseconds per
     /// gate. Cache construction is already paid for by this persistent session.
     /// A zero calibration falls back to the independent full inference.
@@ -544,6 +568,51 @@ mod tests {
     use super::*;
     use crate::fourier5::FiveCircle;
     use crate::fourier5_hierarchy::{GateKind, LeafRouting};
+
+    #[test]
+    fn sensitivity_selection_matches_full_oracle_without_mutation() {
+        let model = FiveCircleHierarchy::from_modes(
+            &[GateKind::Majority, GateKind::Parity, GateKind::Or],
+            LeafRouting::SeededShuffle(307),
+        )
+        .unwrap();
+        let planes: Vec<u64> = (0..model.input_bits())
+            .map(|i| (i as u64 + 91).wrapping_mul(0x9e3779b97f4a7c15))
+            .collect();
+        let session = PersistentSession::new(model.clone(), planes.clone()).unwrap();
+        let proposals: Vec<_> = (0..12)
+            .map(|i| PackedIntervention::LeafSwap {
+                first: i,
+                second: i + 31,
+            })
+            .collect();
+        let baseline = model.infer_bitplanes(&planes).unwrap();
+        let oracle: Vec<_> = proposals
+            .iter()
+            .map(|proposal| {
+                let PackedIntervention::LeafSwap { first, second } = *proposal else {
+                    unreachable!()
+                };
+                let mut routing = model.routing().to_vec();
+                routing.swap(first, second);
+                baseline ^ model.rerouted(routing).unwrap().infer_bitplanes(&planes).unwrap()
+            })
+            .collect();
+        let expected_index = (0..oracle.len())
+            .max_by_key(|&i| (oracle[i].count_ones(), std::cmp::Reverse(i)))
+            .unwrap();
+        assert_eq!(
+            session.most_sensitive_proposal(&proposals, 12).unwrap(),
+            Some((expected_index, oracle[expected_index].count_ones(), oracle[expected_index]))
+        );
+        assert!(matches!(
+            session.most_sensitive_proposal(&proposals, 11),
+            Err(HierarchyError::InvalidInput)
+        ));
+        assert_eq!(session.most_sensitive_proposal(&[], 0).unwrap(), None);
+        assert_eq!(session.output(), baseline);
+        assert_eq!(session.updated_gates, 0);
+    }
 
     #[test]
     fn profiled_mixed_sequence_refreshes_cache_and_matches_full_oracle() {
