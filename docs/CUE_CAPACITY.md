@@ -202,4 +202,104 @@ cargo +1.89 run --release -- bench-cue-capacity --csv results/cue-capacity-v1.cs
 
 ## Results
 
-Pending.
+Run once after the pre-registration commit 00f376b (and the harness commit
+5db91b0) had been pushed. The grid has 16200 rows: 3 k × 3 flips × 40 seeds
+× 5 orders × 9 arms. It took 30.5 min on 8 worker threads (202 CPU-min).
+CSV sha256 `7a17a41b738595a84dce16c183635118d6aa88167faef0f4bbf55b2f0ab00a03`.
+RERUN_LINE
+Every row keeps the original topology (`topology_unchanged_all=true`).
+Files: `results/cue-capacity-v1.csv`, `results/cue-capacity-report-v1.txt`,
+pilot `results/cue-capacity-census-v1.txt`.
+
+### 1. Design gates (reported first)
+
+* **G1 passes:** topology, initial weights, allowances, `paced100` identity
+  of E, guard/ledger consistency, orders and codes (share 1 = the cycle 20
+  blocks, every reserved line in exactly r codes, codes distinct, same
+  cue-line edges for every share) hold in every row.
+* **G2 passes:** at flip 50 on held-out orders, Zg2 defers and Z2 writes cue
+  edges in 100 % of rows at every k; mean cue reach per task rises with the
+  share (k = 8: 23.1 → 29.3 → 31.8; k = 16: 12.1 → 19.2 → 26.9;
+  k = 24: 6.8 → 11.9 → 19.4 targets of 32).
+* **G3 passes:** median CN pairs per (seed, task) is 109 at k = 24 (62 at
+  k = 8, 65 at k = 16).
+
+### 2. Arms at flip 50, held-out orders (mean over 40 seeds × 4 orders)
+
+| k | S1 | R1 | E | Z1 | **Zg1** | Z2 | Zg2 | Z4 | Zg4 | Zg1 / Zg2 / Zg4 LEARN_all | Zg1 / Zg2 / Zg4 FGT_all |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 8 | 0.549 | 0.571 | 0.568 | 0.609 | **0.643** | 0.598 | 0.608 | 0.572 | 0.569 | 0.858 / 0.800 / 0.760 | 0.245 / 0.219 / 0.218 |
+| 16 | 0.528 | 0.548 | 0.544 | 0.566 | **0.575** | 0.561 | 0.572 | 0.555 | 0.556 | 0.908 / 0.850 / 0.783 | 0.356 / 0.297 / 0.242 |
+| 24 | 0.521 | 0.539 | 0.532 | 0.541 | **0.545** | 0.541 | 0.544 | 0.536 | 0.539 | 0.910 / 0.865 / 0.800 | 0.381 / 0.335 / 0.273 |
+
+ACC_all shown. All arms make the same number of effective writes within a
+(k, flip, seed, order) up to 0.3 % (k = 16: 512.8–514.4 per run; k = 24:
+1132–1135). Zg1 (the cycle 20 cue) is the best arm at every k; its k = 8
+and k = 16 numbers replicate #133 on new seeds and orders (0.643 / 0.575 vs
+0.643 / 0.575).
+
+### 3. Hypotheses (flip 50, held-out orders; Δ = mean [95 % CI] better/ties/worse over 40 seeds)
+
+* **H1 fail (primary).** k = 16, Zg2 vs S1: ACC_all +0.043 [+0.038, +0.048]
+  40/0/0 (LEARN +0.242, LAST +0.235 pass). Sharing does not lift the lead
+  over the supervised control above 0.05; it is no larger than Zg1's own
+  lead on these seeds (+0.046 [+0.042, +0.051], also < 0.05).
+* **H2 fail.** k = 16, Zg2 − Zg1 ACC_all = −0.003 [−0.006, −0.000] 17/0/23.
+* **H3 pass.** k = 16, FGT_all(Zg1) − FGT_all(Zg2) = +0.059 [+0.055, +0.063]
+  40/0/0. But LEARN falls by −0.059 [−0.061, −0.056] (LAST −0.079): the
+  forgetting cut is paid 1:1 in learning.
+* **H4 fail.** k = 16, Z2 − Z1 ACC_all = −0.004 [−0.007, −0.001] 12/0/28
+  (same trade without the guard: FGT +0.047, LEARN −0.049).
+* **H5 fail.** k = 16, Zg4 − Zg2 ACC_all = −0.015 [−0.019, −0.012] 5/0/35.
+* **H6 fail.** k = 16, worst held-out order Zg2 − Zg1 = −0.019 [−0.024,
+  −0.015] 3/0/37.
+* **H7 fail.** k = 24, Zg2 vs S1: ACC_all +0.023 [+0.021, +0.026] 40/0/0.
+* **H8 fail.** k = 24, Zg2 − Zg1 ACC_all = −0.000 [−0.002, +0.001] 21/0/19.
+* **H9 pass.** In the k = 24 runs, growth of Zg2 − S1 from the k = 8 prefix
+  to k = 24 is −0.013 [−0.017, −0.010] 3/0/37 (CI lower bound > −0.05; the
+  lead shrinks a little but not by 0.05).
+* **H10 fail.** k = 8, Zg2 − Zg1 ACC_all = −0.035 [−0.039, −0.030] 0/0/40:
+  with ample capacity, sharing clearly hurts (Zg4 − Zg1: −0.074).
+
+### 4. Secondary
+
+* **Sharing converts learning into retention ~1:1 at every k.** Each step
+  up in share cuts FGT_all by ≈ 0.05–0.06 and cuts LEARN_all by about the
+  same amount (table above), so ACC_all stays flat (k = 16, 24) or falls
+  (k = 8). This is the same 1:1 trade that #132 found for uncued guards.
+  More reach per task does not buy more net accuracy at equal writes.
+* **Interference tracks label conflict between tasks.** At flip 25 (tasks
+  agree more), sharing helps a little: Zg2 − Zg1 = +0.013 [+0.009, +0.017]
+  35/0/5 at k = 16 and +0.005 [+0.003, +0.006] at k = 24. At k = 16, flip 25
+  Zg2 vs S1 then passes the sequence rule (+0.058 [+0.051, +0.065] 40/0/0).
+  At flip 100 it hurts a lot: Zg2 − Zg1 = −0.046 [−0.049, −0.043] 0/0/40
+  (k = 16), and Zg2 is level with S1 (+0.002). A shared cue edge carries
+  updates of tasks with opposite labels, so the shared code is only as good
+  as the agreement between the tasks that share it.
+* **Per order at k = 16 (Zg2 − Zg1):** reversed −0.014 [−0.020, −0.009]; the
+  three random orders −0.000, +0.001, +0.001 (all CI include 0); identity
+  −0.006. Zg2 − S1 is positive on every order (+0.036 to +0.050).
+* **Capacity use:** sharing raises cue writes (k = 16: Zg 134 → 235 → 351)
+  and lowers overwrites of consolidated edges (306 → 241 → 193), but live
+  cue edges at the end peak at share 2 (51 → 62 → 53) and no cue edge
+  reaches weight 15 in any arm.
+* **The k = 16 gap to the 0.05 bound did not move.** On fresh seeds Zg1 − S1
+  is +0.046 at k = 16 (cycle 20: +0.042) and +0.023 at k = 24. Within the
+  k = 24 runs the Zg1 − S1 lead shrinks by −0.009 from the k = 8 prefix and
+  E − S1 by −0.011, so part of the decline is again the error gate's own
+  k-trend (#131).
+
+**Reading:** with the reserved lines, pattern pool, tasks and write budget
+held fixed, giving each task more cue lines by sharing lines between tasks
+does **not** restore the lead over the supervised control at k = 16 (H1) or
+k = 24 (H7). Sharing raises cue reach as designed (G2) and cuts forgetting
+(H3), but it costs the same amount of learning, so net accuracy is flat at
+k = 16/24 and lower at k = 8 (H2, H4–H8, H10 fail). The cost depends on how
+much the sharing tasks disagree (helps at flip 25, hurts at flip 100). So
+"cue capacity per task" in cycle 20 is not just a count of lines or reached
+targets. What helps is **private** capacity: cue edges that only one task
+writes. Under a fixed line budget, the remaining options are to make
+capacity private without the cost of sharing (e.g. assign shared lines by
+task similarity, or reserve lines out of a larger graph at equal pattern
+pool), or to accept that the cue + guard advantage at equal writes is about
++0.045 at k = 16 and +0.023 at k = 24 on this benchmark.
