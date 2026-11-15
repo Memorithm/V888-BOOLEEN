@@ -110,8 +110,7 @@ pub fn cold_cache_break_even_batch(
     let full = (baseline_gates as u128).checked_mul(u128::from(calibration.full_ns_per_gate))?;
     let incremental = (cone_gates_per_proposal as u128)
         .checked_mul(u128::from(calibration.incremental_ns_per_gate))?;
-    let retained = 1_000_000_u128
-        .checked_sub(u128::from(minimum_saving_ppm.min(1_000_000)))?;
+    let retained = 1_000_000_u128.checked_sub(u128::from(minimum_saving_ppm.min(1_000_000)))?;
     let allowed_full = full.checked_mul(retained)?;
     let incremental_scaled = incremental.checked_mul(1_000_000)?;
     if allowed_full <= incremental_scaled {
@@ -157,8 +156,7 @@ pub fn evaluate_frozen_batch_with_margin(
     calibration: EngineCalibration,
     minimum_saving_ppm: u32,
 ) -> Result<BatchEvaluation, HierarchyError> {
-    let retained_ppm = 1_000_000_u128
-        .saturating_sub(u128::from(minimum_saving_ppm.min(1_000_000)));
+    let retained_ppm = 1_000_000_u128.saturating_sub(u128::from(minimum_saving_ppm.min(1_000_000)));
     if planes.len() != baseline.input_bits() {
         return Err(HierarchyError::InvalidInput);
     }
@@ -243,8 +241,7 @@ pub fn evaluate_frozen_batch_with_margin(
             let delta = cache.evaluate(proposal)?;
             cone_gates = cone_gates.saturating_add(delta.gate_evaluations);
             let cost = build_cost.saturating_add(
-                (cone_gates as u128)
-                    .saturating_mul(calibration.incremental_ns_per_gate as u128),
+                (cone_gates as u128).saturating_mul(calibration.incremental_ns_per_gate as u128),
             );
             if cost >= allowed_cost {
                 exhausted = true;
@@ -302,7 +299,10 @@ mod tests {
             cold_cache_break_even_batch(
                 10,
                 1,
-                EngineCalibration { full_ns_per_gate: 0, ..c },
+                EngineCalibration {
+                    full_ns_per_gate: 0,
+                    ..c
+                },
                 0
             ),
             None
@@ -396,7 +396,11 @@ mod tests {
                     };
                     let mut routing = model.routing().to_vec();
                     routing.swap(first, second);
-                    model.rerouted(routing).unwrap().infer_bitplanes(&input).unwrap()
+                    model
+                        .rerouted(routing)
+                        .unwrap()
+                        .infer_bitplanes(&input)
+                        .unwrap()
                 })
                 .collect();
             let result = evaluate_frozen_batch(
@@ -437,10 +441,9 @@ mod tests {
             cache_build_ns: 0,
         };
         let normal = evaluate_frozen_batch(&model, &input, &proposals, calibration).unwrap();
-        let conservative = evaluate_frozen_batch_with_margin(
-            &model, &input, &proposals, calibration, 1_000_000,
-        )
-        .unwrap();
+        let conservative =
+            evaluate_frozen_batch_with_margin(&model, &input, &proposals, calibration, 1_000_000)
+                .unwrap();
         assert_eq!(normal.engine, Engine::Incremental);
         assert_eq!(conservative.engine, Engine::Full);
         assert_eq!(normal.outputs, conservative.outputs);
@@ -469,7 +472,11 @@ mod tests {
                 };
                 let mut routing = model.routing().to_vec();
                 routing.swap(first, second);
-                model.rerouted(routing).unwrap().infer_bitplanes(&input).unwrap()
+                model
+                    .rerouted(routing)
+                    .unwrap()
+                    .infer_bitplanes(&input)
+                    .unwrap()
             })
             .collect();
         let result = evaluate_frozen_batch(
