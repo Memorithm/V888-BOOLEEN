@@ -12,6 +12,7 @@ pub mod cue_displacement;
 pub mod cue_gating;
 pub mod cue_init;
 pub mod cue_reach;
+pub mod cue_robustness;
 pub mod eligibility_trace;
 pub mod engine;
 pub mod error_gated;
