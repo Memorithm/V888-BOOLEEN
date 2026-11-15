@@ -162,8 +162,36 @@ before the main run from the label-free census only.
 
 ## Design-stage pilot
 
-Pending (seeds 1..5, identity order, writes, guard counters and cue reach
-only; no accuracy computed).
+`results/cue-capacity-census-v1.txt` (seeds 1..5, flip 50, identity order;
+writes, guard counters and cue reach only; **no accuracy computed**). Ranges
+over the 5 seeds:
+
+| k | share (lines per task) | mean cue reach per task (of 32 targets) | effective writes (every arm) | Z cue writes | Zg cue writes | Zg overwrites | Zg deferred |
+|---|---|---|---|---|---|---|---|
+| 8 | 1 (8) | 22.6–23.5 | 208–258 | 48–81 | 89–131 | 63–85 | 626–1156 |
+| 8 | 2 (16) | 28.4–29.4 | 208–258 | 83–129 | 130–177 | 37–52 | 1014–1597 |
+| 8 | 4 (32) | 31.5–32.0 | 208–258 | 115–171 | 151–200 | 33–52 | 831–2192 |
+| 16 | 1 (4) | 11.8–12.4 | 423–515 | 62–79 | 105–138 | 255–318 | 658–1183 |
+| 16 | 2 (8) | 18.9–19.5 | 426–515 | 134–170 | 179–227 | 215–260 | 1081–1766 |
+| 16 | 4 (16) | 25.9–27.5 | 426–515 | 200–277 | 273–355 | 160–192 | 2478–3567 |
+| 24 | 1 (2) | 6.5–7.2 | 1036–1174 | 72–109 | 150–204 | 757–855 | 778–1397 |
+| 24 | 2 (4) | 11.3–12.5 | 1041–1174 | 187–210 | 306–363 | 662–738 | 1658–2472 |
+| 24 | 4 (8) | 19.0–20.5 | 1045–1174 | 323–418 | 496–600 | 568–616 | 2930–4657 |
+
+Readings stated before the main run:
+
+* The share-1 rows reproduce the cycle 20 pilot exactly at k = 8 and 16
+  (same writes, cue writes, overwrites and deferred ranges), as expected
+  from the bit-identity test.
+* **The manipulation works as intended:** at equal lines and edges, sharing
+  raises the cue reach per task (k = 16: ≈ 12 → 19 → 27 targets of 32) and
+  the cue writes, and lowers Zg's overwrites of consolidated edges
+  (k = 16: 255–318 → 215–260 → 160–192).
+* Writes stay equal across arms within a (k, seed) (paced100), so any
+  accuracy difference between shares is not a budget difference.
+* Sharing also means a cue write for task j moves an edge that r − 1 other
+  tasks' cues use; whether that interference outweighs the reach gain is
+  exactly what H2–H5, H8 and H10 test. Nothing was tuned on the pilot.
 
 ## Command
 

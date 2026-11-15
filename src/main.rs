@@ -13,6 +13,7 @@ use v888_booleen::consolidation::{
 use v888_booleen::consolidation_guard as cgd;
 use v888_booleen::consolidation_scale as scale;
 use v888_booleen::context_cue as cc;
+use v888_booleen::cue_capacity as ccap;
 use v888_booleen::cue_displacement as cdp;
 use v888_booleen::cue_gating as cgate;
 use v888_booleen::cue_init as ci;
@@ -151,6 +152,7 @@ fn help() {
     println!("  bench-context-cue [--graph brain.v888b] [--seeds 1,..,20] [--flips 25,50,100] [--init 1] [--csv out.csv]  (task-context cue on reserved existing input lines vs no cue, supervised and error-gated; conflict-pair floor; structural ceiling; bootstrap CIs; equal budget; GENERATED synthetic graph by default)");
     println!("  bench-task-sequence [--graph brain.v888b] [--seeds 41,..,80] [--flips 25,50,100] [--init 1] [--csv out.csv]  (A->B->C->D task sequences with one context cue per task; #121 gates and a margin-gate sweep; novel-configuration TEST slice; equal budget; bootstrap CIs; GENERATED synthetic graph by default)");
     println!("  bench-novel-split [--graph brain.v888b] [--seeds 81,..,120] [--flips 25,50,100] [--census] [--csv out.csv]  (B888-4 cycle 12: wider pattern pool, cue cap 4, TEST pairs split into seen / compositional-novel / unseen-edge per task; design-validity gate on novel-pair count; E/E-cue vs error-gated vs supervised at equal budget; GENERATED synthetic graph by default)");
+    println!("  bench-cue-capacity [--graph brain.v888b] [--seeds 441,..,480] [--flips 25,50,100] [--ks 8,16,24] [--random-orders 3] [--threads N] [--csv out.csv] [--census]  (B888-4 cycle 21: CUE CAPACITY BY LINE SHARING — the silent cue (E/E-cue0) and silent cue + last-resort guard with share-r codes (each task's cue = union of r cyclic cycle 20 blocks over the same reserved lines, r = 1, 2, 4) vs supervised/reward/error-gated at equal paced100 writes, k = 8, 16 and 24 tasks, identity + reversed + seeded held-out orders; --census = identity order, writes, guard counters and cue reach only, no accuracy; GENERATED synthetic graph by default)");
     println!("  bench-cue-robustness [--graph brain.v888b] [--seeds 401,..,440] [--flips 25,50,100] [--ks 8,12,16] [--random-orders 3] [--threads N] [--csv out.csv] [--census]  (B888-4 cycle 20: CUE ROBUSTNESS — the cycle 19 silent cue + last-resort guard (E/E-cue0+last-resort) vs supervised/reward/error-gated/E/E-cue0 at equal paced100 writes on fresh seeds, k = 8, 12 and 16 tasks (64 cue lines split over k cues), identity + reversed + seeded held-out orders; per-order and worst-order statistics; cue-capacity use; --census = identity order, writes and guard counters only, no accuracy; GENERATED synthetic graph by default)");
     println!("  bench-consolidation-guard [--graph brain.v888b] [--seeds 361,..,400] [--flips 25,50,100] [--ks 4,8] [--heldout-orders 2] [--threads N] [--csv out.csv] [--census]  (B888-4 cycle 19: CONSOLIDATION GUARD AGAINST FORGETTING — error-gated with per-edge consolidated signs; overwrites of earlier-consolidated original edges blocked / charged 4 writes / deferred to last resort, and the silent cue + last-resort; vs supervised/reward/error-gated/E/E-cue0 at equal paced100 writes on k = 4 and 8 tasks, identity + held-out orders; --census = identity order, writes and guard counters only, no accuracy; GENERATED synthetic graph by default)");
     println!("  bench-seq-generalisation [--graph brain.v888b] [--seeds 321,..,360] [--flips 25,50,100] [--k 8] [--heldout-orders 2] [--threads N] [--csv out.csv] [--census]  (B888-4 cycle 18: GENERALISATION TO LONGER SEQUENCES AND HELD-OUT TASK ORDERS — supervised/reward/error-gated/E/E-cue0 at paced100 and error-gated@Z-pattern on k tasks (64 reserved cue lines split over the k cues), identity order + seeded held-out orders; --census = identity order, writes/refusals and pair counts only, no accuracy; GENERATED synthetic graph by default)");
@@ -1743,6 +1745,122 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!(
                 "topology_unchanged_all={}",
                 rows.iter().all(|r| r.topology_unchanged)
+            );
+            println!("evaluation_scope=synthetic_or_unverified_graph_artificial_labels_not_BANC_not_biological");
+        }
+        Some("bench-cue-capacity") => {
+            let allowed = [
+                "--graph",
+                "--seeds",
+                "--flips",
+                "--ks",
+                "--random-orders",
+                "--threads",
+                "--csv",
+                "--census",
+            ];
+            for flag in args.iter().skip(1).filter(|arg| arg.starts_with("--")) {
+                if !allowed.contains(&flag.as_str()) {
+                    return Err(format!("unknown bench-cue-capacity option: {flag}").into());
+                }
+            }
+            let census = args.iter().any(|a| a == "--census");
+            let seeds: Vec<u64> = match optional(&args, "--seeds") {
+                Some(s) => s
+                    .split(',')
+                    .map(str::parse::<u64>)
+                    .collect::<Result<Vec<_>, _>>()?,
+                None if census => ccap::PILOT_SEEDS.collect(),
+                None => ccap::SEEDS.collect(),
+            };
+            let flips = optional(&args, "--flips")
+                .unwrap_or(if census { "50" } else { "25,50,100" })
+                .split(',')
+                .map(str::parse::<u32>)
+                .collect::<Result<Vec<_>, _>>()?;
+            let ks: Vec<usize> = optional(&args, "--ks")
+                .unwrap_or("8,16,24")
+                .split(',')
+                .map(str::parse::<usize>)
+                .collect::<Result<Vec<_>, _>>()?;
+            let random: usize =
+                optional(&args, "--random-orders").map_or(Ok(ccap::RANDOM_ORDERS), str::parse)?;
+            let threads: usize =
+                optional(&args, "--threads").map_or(Ok(sgen::default_threads()), str::parse)?;
+            let owned = match optional(&args, "--graph") {
+                Some(path) => Some(Connectome::load(Path::new(path))?),
+                None => None,
+            };
+            let graph_label = if owned.is_some() {
+                "PROVIDED_GRAPH"
+            } else {
+                "GENERATED_SYNTHETIC"
+            };
+            let d = ccap::DESIGN;
+            println!("v888_cue_capacity_schema=b888-4-cue-capacity-v1");
+            if owned.is_some() {
+                println!("graph=PROVIDED_GRAPH (task labels artificial)");
+            } else {
+                println!(
+                    "graph=GENERATED_SYNTHETIC sources={} targets={} fan_in={} (not BANC; real BANC V888 graph DOI 10.7910/DVN/7WTH1N not available here)",
+                    d.shape.sources, d.shape.targets, d.shape.fan_in
+                );
+            }
+            if census {
+                println!(
+                    "census(identity order only; writes, guard counters and cue reach; no accuracy computed)"
+                );
+                println!(
+                    "writes: k,flip,seed,arm,cue_lines_per_task,cue_reach_mean,charged_writes,effective_writes,cue_writes,refused,overwrites,deferred"
+                );
+                for &k in &ks {
+                    for &flip in &flips {
+                        for (k, a, seed, lines, reach, v) in
+                            ccap::census(owned.as_ref(), &d, k, flip, &seeds)?
+                        {
+                            let v: Vec<String> = v
+                                .iter()
+                                .map(|x| x.map_or_else(|| "-".to_string(), |x| x.to_string()))
+                                .collect();
+                            println!(
+                                "{k},{flip},{seed},{},{lines},{reach:.2},{}",
+                                a.short(),
+                                v.join(",")
+                            );
+                        }
+                    }
+                }
+                return Ok(());
+            }
+            println!(
+                "seeds={} flips={flips:?} ks={ks:?} shares={:?} orders=identity+reversed+{random}_random order_salt={:#x} arms=S1,R1,E,Z1,Zg1,Z2,Zg2,Z4,Zg4 budget=paced100 (per-episode cumulative curve of uncapped error-gated in the same order) active={} train_patterns_per_task={} test_patterns={} rounds_per_task={} init={} cue_init(Z*,Zg*)=0 threshold={} min_novel_pairs={} metric=balanced_accuracy boot_resamples={} boot_seed={:#x}",
+                seeds.len(),
+                ccap::SHARES,
+                ccap::ORDER_SALT,
+                d.spec.active,
+                d.spec.train_patterns,
+                d.spec.test_patterns,
+                d.spec.rounds_a,
+                d.spec.init_weight,
+                eg::THRESHOLD,
+                ns::MIN_NOVEL_PAIRS,
+                eg::BOOT_RESAMPLES,
+                eg::BOOT_SEED,
+            );
+            let rows =
+                ccap::run_grid_threads(owned.as_ref(), &d, &ks, &flips, &seeds, random, threads)?;
+            if let Some(path) = optional(&args, "--csv") {
+                use std::io::Write;
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)?
+                    .write_all(ccap::to_csv(&rows, graph_label).as_bytes())?;
+            }
+            print!("{}", ccap::report(&rows));
+            println!(
+                "topology_unchanged_all={}",
+                rows.iter().all(|r| r.inner.topology_unchanged)
             );
             println!("evaluation_scope=synthetic_or_unverified_graph_artificial_labels_not_BANC_not_biological");
         }
