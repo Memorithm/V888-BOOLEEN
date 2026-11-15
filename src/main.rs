@@ -28,6 +28,7 @@ use v888_booleen::learning_strategies::compare_strategies;
 use v888_booleen::novel_split as ns;
 use v888_booleen::plasticity::PlasticCircuit;
 use v888_booleen::reward_limits as rl;
+use v888_booleen::seq_generalisation as sgen;
 use v888_booleen::source_holdout::benchmark_disjoint_sources;
 use v888_booleen::synapse_pairs::{pack, propagate_one_step, SynapsePairsReader};
 use v888_booleen::task_sequence as ts;
@@ -148,6 +149,7 @@ fn help() {
     println!("  bench-context-cue [--graph brain.v888b] [--seeds 1,..,20] [--flips 25,50,100] [--init 1] [--csv out.csv]  (task-context cue on reserved existing input lines vs no cue, supervised and error-gated; conflict-pair floor; structural ceiling; bootstrap CIs; equal budget; GENERATED synthetic graph by default)");
     println!("  bench-task-sequence [--graph brain.v888b] [--seeds 41,..,80] [--flips 25,50,100] [--init 1] [--csv out.csv]  (A->B->C->D task sequences with one context cue per task; #121 gates and a margin-gate sweep; novel-configuration TEST slice; equal budget; bootstrap CIs; GENERATED synthetic graph by default)");
     println!("  bench-novel-split [--graph brain.v888b] [--seeds 81,..,120] [--flips 25,50,100] [--census] [--csv out.csv]  (B888-4 cycle 12: wider pattern pool, cue cap 4, TEST pairs split into seen / compositional-novel / unseen-edge per task; design-validity gate on novel-pair count; E/E-cue vs error-gated vs supervised at equal budget; GENERATED synthetic graph by default)");
+    println!("  bench-seq-generalisation [--graph brain.v888b] [--seeds 321,..,360] [--flips 25,50,100] [--k 8] [--heldout-orders 2] [--threads N] [--csv out.csv] [--census]  (B888-4 cycle 18: GENERALISATION TO LONGER SEQUENCES AND HELD-OUT TASK ORDERS — supervised/reward/error-gated/E/E-cue0 at paced100 and error-gated@Z-pattern on k tasks (64 reserved cue lines split over the k cues), identity order + seeded held-out orders; --census = identity order, writes/refusals and pair counts only, no accuracy; GENERATED synthetic graph by default)");
     println!("  bench-cue-displacement [--graph brain.v888b] [--seeds 281,..,320] [--flips 25,50,100] [--csv out.csv] [--census]  (B888-4 cycle 17: CUE WRITE DISPLACEMENT — E/E-cue0 at paced100 vs the same arm with cue writes not charged (E/E-cue0-exempt) and vs error-gated capped at the pattern-write curve E/E-cue0 left (error-gated@Z-pattern); supervised/reward/error-gated references; CN generalisation and forgetting; --census = writes/refusals only, no accuracy; GENERATED synthetic graph by default)");
     println!("  bench-cue-init [--graph brain.v888b] [--seeds 241,..,280] [--flips 25,50,100] [--budgets free,paced100] [--csv out.csv] [--census]  (B888-4 cycle 16: CUE EDGES START SILENT — E/E-cue@16 with cue-line edges at initial weight 0 (source-major, + pattern-first secondary) vs #127 E/E-cue (init 1), error-gated, supervised and per-target reward under an equal weight-write budget paced to uncapped error-gated; CN generalisation and forgetting; --census = writes/cue writes/refusals only, no accuracy; GENERATED synthetic graph by default)");
     println!("  bench-write-allocation [--graph brain.v888b] [--seeds 201,..,240] [--flips 25,50,100] [--budgets free,paced100] [--csv out.csv] [--census]  (B888-4 cycle 15: WRITE ALLOCATION of E/E-cue@16 under an equal weight-write budget paced to uncapped error-gated — source-major (#126) / pattern-first / cue-first funding of the offered steps, vs error-gated / supervised / per-target reward, plus secondary E-tag (task-local negative tags); CN generalisation and forgetting; --census = writes/cue writes/refusals only, no accuracy; GENERATED synthetic graph by default)");
@@ -1734,6 +1736,116 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .write_all(cr::to_csv(&rows, graph_label).as_bytes())?;
             }
             print!("{}", cr::report(&rows, &flips, &levels));
+            println!(
+                "topology_unchanged_all={}",
+                rows.iter().all(|r| r.topology_unchanged)
+            );
+            println!("evaluation_scope=synthetic_or_unverified_graph_artificial_labels_not_BANC_not_biological");
+        }
+        Some("bench-seq-generalisation") => {
+            let allowed = [
+                "--graph",
+                "--seeds",
+                "--flips",
+                "--k",
+                "--heldout-orders",
+                "--threads",
+                "--csv",
+                "--census",
+            ];
+            for flag in args.iter().skip(1).filter(|arg| arg.starts_with("--")) {
+                if !allowed.contains(&flag.as_str()) {
+                    return Err(format!("unknown bench-seq-generalisation option: {flag}").into());
+                }
+            }
+            let census = args.iter().any(|a| a == "--census");
+            let seeds: Vec<u64> = match optional(&args, "--seeds") {
+                Some(s) => s
+                    .split(',')
+                    .map(str::parse::<u64>)
+                    .collect::<Result<Vec<_>, _>>()?,
+                None if census => sgen::PILOT_SEEDS.collect(),
+                None => sgen::SEEDS.collect(),
+            };
+            let flips = optional(&args, "--flips")
+                .unwrap_or(if census { "50" } else { "25,50,100" })
+                .split(',')
+                .map(str::parse::<u32>)
+                .collect::<Result<Vec<_>, _>>()?;
+            let k: usize = optional(&args, "--k").map_or(Ok(sgen::K_RUN), str::parse)?;
+            let heldout: usize =
+                optional(&args, "--heldout-orders").map_or(Ok(sgen::HELDOUT_ORDERS), str::parse)?;
+            let threads: usize =
+                optional(&args, "--threads").map_or(Ok(sgen::default_threads()), str::parse)?;
+            let owned = match optional(&args, "--graph") {
+                Some(path) => Some(Connectome::load(Path::new(path))?),
+                None => None,
+            };
+            let graph_label = if owned.is_some() {
+                "PROVIDED_GRAPH"
+            } else {
+                "GENERATED_SYNTHETIC"
+            };
+            let d = sgen::DESIGN;
+            println!("v888_seq_generalisation_schema=b888-4-seq-generalisation-v1");
+            if owned.is_some() {
+                println!("graph=PROVIDED_GRAPH (task labels artificial)");
+            } else {
+                println!(
+                    "graph=GENERATED_SYNTHETIC sources={} targets={} fan_in={} (not BANC; real BANC V888 graph DOI 10.7910/DVN/7WTH1N not available here)",
+                    d.shape.sources, d.shape.targets, d.shape.fan_in
+                );
+            }
+            if census {
+                println!("census(identity order only; writes, refusals and pair counts; no accuracy computed)");
+                println!(
+                    "fixture: flip,seed,pool,cue_lines_per_cue,cue_reach_per_cue,cn_pairs_per_task"
+                );
+                let mut lines = Vec::new();
+                for &flip in &flips {
+                    let (facts, l) = sgen::census(owned.as_ref(), &d, k, flip, &seeds)?;
+                    for (seed, pool, lines_, reach, cn) in facts {
+                        println!("{flip},{seed},{pool},{lines_:?},{reach:?},{cn:?}");
+                    }
+                    lines.push((flip, l));
+                }
+                println!(
+                    "writes: flip,seed,setting,pattern_writes,cue_writes,total_writes,refused"
+                );
+                for (flip, l) in lines {
+                    for (seed, s, pw, cw, tw, r) in l {
+                        println!("{flip},{seed},{},{pw},{cw},{tw},{r}", s.name());
+                    }
+                }
+                return Ok(());
+            }
+            println!(
+                "seeds={} flips={flips:?} k={k} k_ref={} heldout_orders={heldout} order_salt={:#x} budget=paced100 (per-episode cumulative curve of uncapped error-gated in the same order; Z-pattern = Z@paced100's own pattern-write curve) cue_lines_per_cue={} tasks={k} active={} train_patterns_per_task={} test_patterns={} rounds_per_task={} init={} cue_init(E/E-cue0*)=0 threshold={} min_novel_pairs={} metric=balanced_accuracy boot_resamples={} boot_seed={:#x}",
+                seeds.len(),
+                sgen::K_REF,
+                sgen::ORDER_SALT,
+                sgen::cue_cap(&d, k)?,
+                d.spec.active,
+                d.spec.train_patterns,
+                d.spec.test_patterns,
+                d.spec.rounds_a,
+                d.spec.init_weight,
+                eg::THRESHOLD,
+                ns::MIN_NOVEL_PAIRS,
+                eg::BOOT_RESAMPLES,
+                eg::BOOT_SEED,
+            );
+            let rows =
+                sgen::run_grid_threads(owned.as_ref(), &d, k, &flips, &seeds, heldout, threads)?;
+            if let Some(path) = optional(&args, "--csv") {
+                use std::io::Write;
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)?
+                    .write_all(sgen::to_csv(&rows, graph_label).as_bytes())?;
+            }
+            print!("{}", sgen::report(&rows, &flips));
             println!(
                 "topology_unchanged_all={}",
                 rows.iter().all(|r| r.topology_unchanged)
