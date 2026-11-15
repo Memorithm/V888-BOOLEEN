@@ -188,7 +188,38 @@ guard counters, reach; **no accuracy**).
 
 ## Design-stage pilot
 
-Pending (label-free census, filled in before the main run).
+`results/cue-partner-census-v1.txt` (seeds 1..5, identity order, flips 25 /
+50 / 100, k = 8 / 16 / 24; partner agreement, writes, guard counters and cue
+reach only; **no accuracy computed**). Ranges over the 5 seeds:
+
+| k | flip | partner agreement Zg2c / Zg2m / Zg2a / Zg2r | conflicting links Zg2c / Zg2m / Zg2a / Zg2r | effective writes (every arm) | overwrites Zg2c / Zg2m / Zg2a / Zg2r |
+|---|---|---|---|---|---|
+| 8 | 25 | 0.70–0.73 / 0.70–0.73 / 0.45–0.53 / 0.54–0.67 | 1 / 0–1 / 4–6 / 0–4 | 120–156 | 14–23 / 14–21 / 9–18 / 11–20 |
+| 8 | 50 | 0.49–0.54 / 0.55–0.58 / 0.42–0.47 / 0.49–0.54 | 3–4 / 0–3 / 6–8 / 3–5 | 208–258 | 37–52 / 33–53 / 26–37 / 34–51 |
+| 8 | 100 | 0.00 / 0.75 / 0.00 / 0.25–0.75 | 8 / 2 / 8 / 2–6 | 412–498 | 86–111 / 64–84 / 86–111 / 72–90 |
+| 16 | 25 | 0.73–0.76 / 0.73–0.76 / 0.44–0.47 / 0.54–0.58 | 0–1 / 0–1 / 10–14 / 1–7 | 227–288 | 93–127 / 93–122 / 85–119 / 94–129 |
+| 16 | 50 | 0.48–0.53 / 0.58–0.60 / 0.40–0.43 / 0.47–0.52 | 3–11 / 0–1 / 14–16 / 6–10 | 423–515 | 215–260 / 221–250 / 196–239 / 198–241 |
+| 16 | 100 | 0.00 / 0.88 / 0.00 / 0.25–0.75 | 16 / 2 / 16 / 4–12 | 787–1008 | 382–485 / 338–470 / 382–485 / 379–436 |
+| 24 | 25 | 0.73–0.75 / 0.73–0.75 / 0.43–0.45 / 0.51–0.54 | 0–1 / 0–1 / 20–24 / 8–11 | 558–629 | 317–386 / 317–386 / 323–378 / 324–377 |
+| 24 | 50 | 0.48–0.51 / 0.57–0.59 / 0.41–0.42 / 0.49–0.51 | 8–16 / 0–2 / 23–24 / 10–12 | 1036–1174 | 662–738 / 668–731 / 658–774 / 651–744 |
+| 24 | 100 | 0.00 / 0.92 / 0.00 / 0.33–0.50 | 24 / 2 / 24 / 12–16 | 1826–2248 | 1190–1424 / 1142–1343 / 1190–1424 / 1163–1402 |
+
+Readings stated before the main run (they do not change any hypothesis):
+
+* **The ordering holds in every pilot seed:** matched ≥ cyclic ≥ anti at
+  every (k, flip) (by construction). At flip 25 the matched tour is the
+  cyclic tour in 4 of 5 pilot seeds at every k (so flip 25 stays secondary);
+  at flips 50 and 100 it differs from the cyclic tour in every pilot seed.
+* **Flip 100:** cyclic and anti coincide again (agreement 0, all k links
+  conflicting), so Zg2a = Zg2c there; matched reaches 0.75 / 0.875 / 0.917
+  (k = 8 / 16 / 24) as in #135. The random cycle sits in between
+  (0.25–0.75 at k = 16): it pairs tasks of equal and opposite parity at
+  random.
+* **Flip 50:** matched ≈ 0.58–0.60, cyclic ≈ 0.48–0.53, random ≈ 0.47–0.52,
+  anti ≈ 0.40–0.43 at k = 16; the pre-registered G2 gaps (m − a ≥ 0.05,
+  m − r ≥ 0.02) are met in the pilot range, the flip 100 gaps (≥ 0.20) too.
+* Writes stay equal across arms within a (k, flip, seed) (`paced100`); Zg2m
+  defers in every pilot run. Nothing was tuned on the pilot.
 
 ## Command
 
