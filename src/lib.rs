@@ -14,6 +14,7 @@ pub mod cue_gating;
 pub mod cue_init;
 pub mod cue_reach;
 pub mod cue_robustness;
+pub mod cue_similarity;
 pub mod eligibility_trace;
 pub mod engine;
 pub mod error_gated;
