@@ -208,7 +208,39 @@ cue writes, frozen skips, guard counters, reach; **no accuracy**).
 
 ## Design-stage pilot
 
-Pending (census on seeds 1..5, filled in before the main run).
+`results/cue-ownership-census-v1.txt` (seeds 1..5, identity order, flips
+25 / 50 / 100, k = 8 / 16 / 24; partner agreement, writes, guard counters,
+frozen skips and cue reach only; **no accuracy computed**). Ranges over the 5
+seeds:
+
+| k | flip | partner agreement Zgo2c / Zgo2m / Zgo2r | effective writes (every capped arm) | cue writes Zg1 / Zg2m / Zgo2m | cue writes Zgo2m / Zg2m | cue-write share Zg1 / Zg2m / Zgo2m | frozen skips Zgo2m | frozen moves (owned arms) |
+|---|---|---|---|---|---|---|---|---|
+| 8 | 25 | 0.70–0.73 / 0.70–0.73 / 0.49–0.61 | 120–156 | 42–69 / 62–92 / 42–69 | 0.63–0.75 | 0.30–0.44 / 0.48–0.59 / 0.30–0.44 | 478–993 | 0 |
+| 8 | 50 | 0.49–0.54 / 0.55–0.58 / 0.49–0.52 | 208–258 | 89–131 / 136–172 / 87–128 | 0.63–0.74 | 0.41–0.51 / 0.62–0.67 / 0.41–0.50 | 832–1151 | 0 |
+| 8 | 100 | 0.00 / 0.75 / 0.00–0.50 | 412–498 | 214–289 / 320–386 / 215–289 | 0.67–0.78 | 0.52–0.58 / 0.75–0.78 / 0.52–0.59 | 834–1506 | 0 |
+| 16 | 25 | 0.73–0.76 / 0.73–0.76 / 0.52–0.61 | 228–288 | 31–72 / 81–124 / 27–72 | 0.33–0.58 | 0.12–0.25 / 0.32–0.43 / 0.11–0.25 | 298–858 | 0 |
+| 16 | 50 | 0.48–0.53 / 0.59–0.60 / 0.48–0.53 | 426–515 | 105–138 / 166–256 / 106–145 | 0.57–0.64 | 0.22–0.27 / 0.38–0.50 / 0.23–0.28 | 894–1507 | 0 |
+| 16 | 100 | 0.00 / 0.875 / 0.25–0.50 | 803–1008 | 258–340 / 425–558 / 259–348 | 0.61–0.65 | 0.32–0.36 / 0.51–0.59 / 0.32–0.37 | 660–1222 | 0 |
+| 24 | 25 | 0.73–0.75 / 0.73–0.75 / 0.52–0.56 | 560–629 | 74–104 / 144–165 / 74–104 | 0.49–0.64 | 0.13–0.17 / 0.25–0.27 / 0.13–0.17 | 205–447 | 0 |
+| 24 | 50 | 0.48–0.51 / 0.57–0.59 / 0.48–0.51 | 1045–1174 | 150–204 / 292–354 / 166–209 | 0.49–0.61 | 0.14–0.18 / 0.27–0.31 / 0.15–0.18 | 558–1297 | 0 |
+| 24 | 100 | 0.00 / 0.917 / 0.42–0.58 | 1883–2248 | 361–475 / 667–830 / 366–480 | 0.55–0.59 | 0.19–0.23 / 0.35–0.39 / 0.19–0.23 | 374–689 | 0 |
+
+Readings stated before the main run (they do not change any hypothesis):
+
+* **The mask moves the budget as intended:** in every pilot seed the owned
+  matched code spends about the private-cue amount on cue edges (Zgo2m ≈ Zg1,
+  0.49–0.65 × Zg2m at k = 16 / 24, flips 50 / 100), so G2 (a) is met in the
+  pilot range; the mask binds in every pilot run (frozen skips > 0) and no
+  frozen edge ever moved.
+* **Identity order caveat:** on the identity order the cyclic partner j + 1 is
+  trained after task j, so the owned cyclic code equals private cues on every
+  stage but the last (Zgo2c census counts = Zg1's, as tested); held-out orders
+  (reversed / random) are where the owned cyclic code reads trained partner
+  blocks. Hypotheses use held-out orders only.
+* Partner agreement is the #136 matched / cyclic map (matched ≥ cyclic in every
+  pilot seed); the random cycle (new salt) sits in between at flip 100.
+  Writes stay equal across capped arms within a (k, flip, seed) (`paced100`).
+  Nothing was tuned on the pilot.
 
 ## Command
 
