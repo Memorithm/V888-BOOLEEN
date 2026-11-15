@@ -599,3 +599,110 @@ mod circuit_isolation_tests {
             Err(SplitError::DuplicateOrLeakedWorkload));
     }
 }
+
+
+/// Runtime cache-coherence gate for consecutive accepted interventions.
+/// A cache is usable only when it describes the current committed circuit
+/// revision. Rejected interventions do not advance that revision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CacheRevision {
+    pub circuit_revision: u64,
+    pub cached_revision: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RevisionError {
+    Overflow,
+    FutureCache,
+}
+
+impl CacheRevision {
+    /// Do not use a cache from a future revision, even if a policy is calibrated.
+    pub fn choose(
+        &self,
+        gates: usize,
+        cone_gates: usize,
+        frozen: &[BucketPolicy],
+    ) -> Result<EngineChoice, RevisionError> {
+        if self.cached_revision.is_some_and(|revision| revision > self.circuit_revision) {
+            return Err(RevisionError::FutureCache);
+        }
+        if self.cached_revision != Some(self.circuit_revision) {
+            return Ok(EngineChoice::Full);
+        }
+        Ok(select_before_decision(gates, cone_gates, frozen))
+    }
+
+    /// Call only after a proposed intervention has been committed.
+    /// The old cache is invalidated even if the revision counter overflows.
+    pub fn committed(&mut self) -> Result<(), RevisionError> {
+        self.cached_revision = None;
+        self.circuit_revision = self.circuit_revision
+            .checked_add(1)
+            .ok_or(RevisionError::Overflow)?;
+        Ok(())
+    }
+
+    /// A rejected intervention leaves the committed circuit unchanged.
+    pub fn rejected(&mut self) {}
+
+    /// Mark a cache rebuilt from the exact committed circuit revision.
+    /// Callers must finish rebuilding before invoking this method.
+    pub fn rebuilt(&mut self, revision: u64) -> Result<(), RevisionError> {
+        if revision != self.circuit_revision {
+            return Err(RevisionError::FutureCache);
+        }
+        self.cached_revision = Some(revision);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod sequential_cache_revision_tests {
+    use super::*;
+
+    #[test]
+    fn accepted_update_invalidates_cache_until_exact_rebuild() {
+        let yes = ConeBucket { gates: 80, cone_gates: 5, accepted: true };
+        let no = ConeBucket { accepted: false, ..yes };
+        let policy = |bucket| BucketPolicy {
+            bucket,
+            choice: EngineChoice::Incremental,
+            pairs: 3,
+            full_total_ns: 300,
+            incremental_total_ns: 60,
+        };
+        let frozen = [policy(yes), policy(no)];
+        let mut state = CacheRevision {
+            circuit_revision: 7,
+            cached_revision: Some(7),
+        };
+        assert_eq!(state.choose(80, 5, &frozen), Ok(EngineChoice::Incremental));
+        state.rejected();
+        assert_eq!(state.choose(80, 5, &frozen), Ok(EngineChoice::Incremental));
+        state.committed().unwrap();
+        assert_eq!(state.circuit_revision, 8);
+        assert_eq!(state.choose(80, 5, &frozen), Ok(EngineChoice::Full));
+        assert_eq!(state.rebuilt(7), Err(RevisionError::FutureCache));
+        assert_eq!(state.choose(80, 5, &frozen), Ok(EngineChoice::Full));
+        state.rebuilt(8).unwrap();
+        assert_eq!(state.choose(80, 5, &frozen), Ok(EngineChoice::Incremental));
+        assert_eq!(state.choose(80, 6, &frozen), Ok(EngineChoice::Full));
+    }
+
+    #[test]
+    fn stale_and_future_cache_fail_closed_and_overflow_invalidates() {
+        let mut state = CacheRevision {
+            circuit_revision: 10,
+            cached_revision: Some(11),
+        };
+        assert_eq!(state.choose(1, 1, &[]), Err(RevisionError::FutureCache));
+        state.cached_revision = Some(9);
+        assert_eq!(state.choose(1, 1, &[]), Ok(EngineChoice::Full));
+        state.circuit_revision = u64::MAX;
+        state.cached_revision = Some(u64::MAX);
+        assert_eq!(state.committed(), Err(RevisionError::Overflow));
+        assert_eq!(state.cached_revision, None);
+        assert_eq!(state.choose(1, 1, &[]), Ok(EngineChoice::Full));
+    }
+}
