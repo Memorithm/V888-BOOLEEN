@@ -328,3 +328,53 @@ mod frozen_table_tests {
         assert_eq!(select_frozen(b, &frozen), EngineChoice::Incremental);
     }
 }
+
+
+/// Choose before an intervention's acceptance is known. Acceptance is an
+/// outcome of execution, so dispatch must not use its future value.
+/// Incremental is permitted only when BOTH validated outcome buckets agree.
+/// This is conservative for heterogeneous sequential workloads.
+pub fn select_before_decision(
+    gates: usize,
+    cone_gates: usize,
+    frozen: &[BucketPolicy],
+) -> EngineChoice {
+    if gates == 0 || cone_gates > gates {
+        return EngineChoice::Full;
+    }
+    let accepted = ConeBucket { gates, cone_gates, accepted: true };
+    let rejected = ConeBucket { gates, cone_gates, accepted: false };
+    if select_frozen(accepted, frozen) == EngineChoice::Incremental
+        && select_frozen(rejected, frozen) == EngineChoice::Incremental
+    {
+        EngineChoice::Incremental
+    } else {
+        EngineChoice::Full
+    }
+}
+
+#[cfg(test)]
+mod predecision_dispatch_tests {
+    use super::*;
+
+    #[test]
+    fn unknown_acceptance_cannot_leak_into_dispatch() {
+        let yes = ConeBucket { gates: 100, cone_gates: 3, accepted: true };
+        let no = ConeBucket { accepted: false, ..yes };
+        let policy = |bucket, choice| BucketPolicy {
+            bucket, choice, pairs: 3, full_total_ns: 300,
+            incremental_total_ns: 60,
+        };
+        let both = [policy(yes, EngineChoice::Incremental),
+                    policy(no, EngineChoice::Incremental)];
+        assert_eq!(select_before_decision(100, 3, &both), EngineChoice::Incremental);
+        assert_eq!(select_before_decision(100, 3, &both[..1]), EngineChoice::Full);
+        let mixed = [both[0], policy(no, EngineChoice::Full)];
+        assert_eq!(select_before_decision(100, 3, &mixed), EngineChoice::Full);
+        assert_eq!(select_before_decision(100, 4, &both), EngineChoice::Full);
+        assert_eq!(select_before_decision(0, 0, &both), EngineChoice::Full);
+        assert_eq!(select_before_decision(100, 101, &both), EngineChoice::Full);
+        assert_eq!(select_before_decision(100, 3, &[both[0], both[0], both[1]]),
+                   EngineChoice::Full);
+    }
+}
