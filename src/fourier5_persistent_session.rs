@@ -87,6 +87,65 @@ pub struct VerifiedPairedSequenceAudit {
     pub candidate_vmhwm_kib: Option<u64>,
 }
 
+/// Per-class paired timing, preventing an aggregate speedup from hiding
+/// a regression on accepted cache updates or rejected proposals.
+/// All durations include Full-oracle verification; no inference-only claim.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifiedStratifiedPairedAudit {
+    pub paired: VerifiedPairedSequenceAudit,
+    pub accepted_steps: usize,
+    pub rejected_steps: usize,
+    pub accepted_baseline_ns: u128,
+    pub accepted_candidate_ns: u128,
+    pub rejected_baseline_ns: u128,
+    pub rejected_candidate_ns: u128,
+    /// None when a class is absent, candidate duration is zero, or ratio overflows.
+    pub accepted_speedup_milli: Option<u128>,
+    pub rejected_speedup_milli: Option<u128>,
+    /// True only if neither class regresses in total elapsed time.
+    pub no_class_regression: bool,
+}
+
+impl VerifiedPairedSequenceAudit {
+    /// Partition paired sequential work by acceptance, with checked counters.
+    /// The caller remains responsible for proving identical workloads using
+    /// compare_matched_workloads when schedules come from different engines.
+    pub fn compare_stratified(
+        baseline: &[VerifiedStepTelemetry],
+        candidate: &[VerifiedStepTelemetry],
+    ) -> Option<VerifiedStratifiedPairedAudit> {
+        let paired = Self::compare(baseline, candidate)?;
+        let mut count = [0usize; 2];
+        let mut old_ns = [0u128; 2];
+        let mut new_ns = [0u128; 2];
+        for (old, new) in baseline.iter().zip(candidate) {
+            let index = usize::from(old.accepted);
+            count[index] = count[index].checked_add(1)?;
+            old_ns[index] = old_ns[index].checked_add(old.elapsed_ns)?;
+            new_ns[index] = new_ns[index].checked_add(new.elapsed_ns)?;
+        }
+        let ratio = |index: usize| {
+            if count[index] == 0 || new_ns[index] == 0 {
+                None
+            } else {
+                old_ns[index].checked_mul(1000).map(|n| n / new_ns[index])
+            }
+        };
+        Some(VerifiedStratifiedPairedAudit {
+            paired,
+            accepted_steps: count[1],
+            rejected_steps: count[0],
+            accepted_baseline_ns: old_ns[1],
+            accepted_candidate_ns: new_ns[1],
+            rejected_baseline_ns: old_ns[0],
+            rejected_candidate_ns: new_ns[0],
+            accepted_speedup_milli: ratio(1),
+            rejected_speedup_milli: ratio(0),
+            no_class_regression: new_ns[0] <= old_ns[0] && new_ns[1] <= old_ns[1],
+        })
+    }
+}
+
 impl VerifiedPairedSequenceAudit {
     /// Fail-closed comparison with structural proof of identical intervention
     /// schedules. This checks the complete synthetic proposal (including every
@@ -1410,6 +1469,31 @@ mod paired_sequence_audit_tests {
             &left[..1], &left[..1], &old, &new
         )
         .is_none());
+    }
+
+    #[test]
+    fn stratified_audit_detects_hidden_accepted_regression() {
+        let baseline = [
+            step(1, true, 3, 100, None),
+            step(2, false, 0, 900, None),
+        ];
+        let candidate = [
+            step(1, true, 3, 150, None),
+            step(2, false, 0, 100, None),
+        ];
+        let audit = VerifiedPairedSequenceAudit::compare_stratified(&baseline, &candidate).unwrap();
+        assert_eq!(audit.paired.speedup_milli, Some(4000));
+        assert_eq!(audit.accepted_speedup_milli, Some(666));
+        assert_eq!(audit.rejected_speedup_milli, Some(9000));
+        assert_eq!((audit.accepted_steps, audit.rejected_steps), (1, 1));
+        assert!(!audit.no_class_regression);
+        let accepted_only = VerifiedPairedSequenceAudit::compare_stratified(
+            &baseline[..1], &candidate[..1]
+        ).unwrap();
+        assert_eq!(accepted_only.rejected_speedup_milli, None);
+        assert!(VerifiedPairedSequenceAudit::compare_stratified(
+            &baseline, &candidate[..1]
+        ).is_none());
     }
 
     #[test]
