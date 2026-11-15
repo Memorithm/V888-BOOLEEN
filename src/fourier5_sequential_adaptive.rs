@@ -164,6 +164,26 @@ pub fn evaluate_frozen_batch(
             cache_build_gates: 0,
         });
     }
+    // The cold cache must evaluate every baseline gate. If even this
+    // lower bound cannot beat the complete batch, avoid allocating the
+    // cache and evaluating all counterfactual cones.
+    let full_cost_bound = (full_gates as u128)
+        .saturating_mul(u128::from(calibration.full_ns_per_gate));
+    let cache_build_bound = (baseline.neuron_count() as u128)
+        .saturating_mul(u128::from(calibration.full_ns_per_gate))
+        .saturating_add(u128::from(calibration.cache_build_ns));
+    if cache_build_bound >= full_cost_bound {
+        return Ok(BatchEvaluation {
+            outputs: candidates
+                .iter()
+                .map(|candidate| candidate.infer_bitplanes(planes))
+                .collect::<Result<Vec<_>, _>>()?,
+            engine: Engine::Full,
+            full_gates,
+            incremental_gates: 0,
+            cache_build_gates: 0,
+        });
+    }
     let cache = FiveCircleIncrementalCache::new(baseline, planes)?;
     let deltas = proposals
         .iter()
@@ -273,6 +293,40 @@ mod tests {
                 model.infer_bitplanes(&input).unwrap(),
                 model.infer_bitplanes(&input).unwrap()
             );
+        }
+    }
+
+    #[test]
+    fn cold_cache_preflight_skips_non_amortizable_batch_and_matches_oracle() {
+        let model = FiveCircleHierarchy::from_modes(
+            &[GateKind::Majority, GateKind::Parity, GateKind::Or],
+            LeafRouting::SeededShuffle(19),
+        )
+        .unwrap();
+        let input = planes(model.input_bits());
+        let proposal = PackedIntervention::LeafSwap {
+            first: 0,
+            second: 1,
+        };
+        let mut routing = model.routing().to_vec();
+        routing.swap(0, 1);
+        let oracle = model.rerouted(routing).unwrap().infer_bitplanes(&input).unwrap();
+        for overhead in [0, 1, 100_000] {
+            let outcome = evaluate_frozen_batch(
+                &model,
+                &input,
+                &[proposal],
+                EngineCalibration {
+                    full_ns_per_gate: 10,
+                    incremental_ns_per_gate: 1,
+                    cache_build_ns: overhead,
+                },
+            )
+            .unwrap();
+            assert_eq!(outcome.outputs, vec![oracle]);
+            assert_eq!(outcome.engine, Engine::Full);
+            assert_eq!(outcome.cache_build_gates, 0);
+            assert_eq!(outcome.incremental_gates, 0);
         }
     }
 
