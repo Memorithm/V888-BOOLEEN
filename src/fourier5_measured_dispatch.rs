@@ -378,3 +378,108 @@ mod predecision_dispatch_tests {
                    EngineChoice::Full);
     }
 }
+
+
+/// Provenance identifiers for independently generated circuit/workload cases.
+/// IDs must be stable across engines and all four splits. Reject repeated IDs
+/// even within one split: repeated interventions are not independent samples.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct WorkloadId {
+    pub circuit_seed: u64,
+    pub workload_seed: u64,
+}
+
+/// A measured observation paired with its immutable experimental identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IdentifiedCost {
+    pub id: WorkloadId,
+    pub cost: PairedCost,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SplitError {
+    DuplicateOrLeakedWorkload,
+    InvalidObservation,
+    Policy(PolicyError),
+}
+
+/// Calibrate only on TRAIN, gate only on VALID, and audit TEST/OOD without
+/// changing the frozen table. No split can silently reuse a workload ID.
+/// This is a provenance guard, not a substitute for independent data generation.
+pub fn evaluate_disjoint_splits(
+    train: &[IdentifiedCost],
+    valid: &[IdentifiedCost],
+    test: &[IdentifiedCost],
+    ood: &[IdentifiedCost],
+    buckets: &[ConeBucket],
+    config: PolicyConfig,
+    min_valid_pairs: usize,
+) -> Result<(Vec<BucketPolicy>, HoldoutAudit, HoldoutAudit), SplitError> {
+    let mut ids = std::collections::HashSet::new();
+    for split in [train, valid, test, ood] {
+        for observation in split {
+            if !ids.insert(observation.id) {
+                return Err(SplitError::DuplicateOrLeakedWorkload);
+            }
+            let cost = observation.cost;
+            if cost.bucket.gates == 0
+                || cost.bucket.cone_gates > cost.bucket.gates
+                || cost.full_ns == 0 || cost.incremental_ns == 0
+            {
+                return Err(SplitError::InvalidObservation);
+            }
+        }
+    }
+    if buckets.iter().enumerate().any(|(i, bucket)| {
+        buckets[..i].contains(bucket)
+    }) {
+        return Err(SplitError::Policy(PolicyError::InvalidConfiguration));
+    }
+    let train_costs: Vec<_> = train.iter().map(|item| item.cost).collect();
+    let valid_costs: Vec<_> = valid.iter().map(|item| item.cost).collect();
+    let trained: Vec<_> = buckets.iter().map(|&bucket| {
+        calibrate(bucket, &train_costs, config).map_err(SplitError::Policy)
+    }).collect::<Result<_, _>>()?;
+    let frozen = freeze_validated_table(&trained, &valid_costs, min_valid_pairs)
+        .map_err(SplitError::Policy)?;
+    let test_costs: Vec<_> = test.iter().map(|item| item.cost).collect();
+    let ood_costs: Vec<_> = ood.iter().map(|item| item.cost).collect();
+    let test_audit = audit_holdout(&test_costs, &frozen).map_err(SplitError::Policy)?;
+    let ood_audit = audit_holdout(&ood_costs, &frozen).map_err(SplitError::Policy)?;
+    Ok((frozen, test_audit, ood_audit))
+}
+
+#[cfg(test)]
+mod disjoint_split_tests {
+    use super::*;
+
+    #[test]
+    fn split_guard_rejects_cross_split_and_internal_reuse() {
+        let bucket = ConeBucket { gates: 40, cone_gates: 2, accepted: true };
+        let make = |seed, full_ns, incremental_ns| IdentifiedCost {
+            id: WorkloadId { circuit_seed: seed, workload_seed: 7 },
+            cost: PairedCost { bucket, full_ns, incremental_ns,
+                same_output: true, same_decision: true },
+        };
+        let train = [make(1, 100, 20), make(2, 100, 20)];
+        let valid = [make(3, 100, 30)];
+        let test = [make(4, 100, 110)];
+        let ood = [make(5, 100, 40)];
+        let config = PolicyConfig { min_pairs: 2, required_saving_bps: 1000 };
+        let (frozen, test_audit, ood_audit) = evaluate_disjoint_splits(
+            &train, &valid, &test, &ood, &[bucket], config, 1
+        ).unwrap();
+        assert_eq!(select_frozen(bucket, &frozen), EngineChoice::Incremental);
+        assert_eq!(test_audit.regressions, 1);
+        assert_eq!(ood_audit.regressions, 0);
+        assert_eq!(evaluate_disjoint_splits(
+            &train, &valid, &train[..1], &ood, &[bucket], config, 1
+        ), Err(SplitError::DuplicateOrLeakedWorkload));
+        assert_eq!(evaluate_disjoint_splits(
+            &train, &[valid[0], valid[0]], &test, &ood, &[bucket], config, 1
+        ), Err(SplitError::DuplicateOrLeakedWorkload));
+        assert_eq!(evaluate_disjoint_splits(
+            &train, &valid, &test, &ood, &[bucket, bucket], config, 1
+        ), Err(SplitError::Policy(PolicyError::InvalidConfiguration)));
+    }
+}
