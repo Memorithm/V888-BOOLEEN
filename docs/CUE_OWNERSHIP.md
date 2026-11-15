@@ -251,4 +251,131 @@ cargo +1.89 run --release -- bench-cue-ownership --csv results/cue-ownership-v1.
 
 ## Results
 
-Pending (main run after the pre-registration, harness and pilot commits).
+Run after the pre-registration commit d443897, the harness + tests commit
+0498c00 and the pilot commit 93395f9 had been pushed (the branch was then
+brought up to date with main by merge 9d90d4e, which changes only
+`fourier5_*` files, `src/lib.rs` module lines and `Cargo.toml`; no cycle-24
+code path). The grid has 18000 rows: 3 k × 3 flips × 40 seeds × 5 orders ×
+10 arms. CSV sha256
+`bc632cb45f47fe836a5fc13ccb135f9bdb5c82430de64d455e019ec30e27d237`, report
+sha256 `e66cd32a3ada7e14d6c5d66071682f0e2945393bce311cb006ea3cd7e244022e`.
+The run was repeated: two more independent runs on the exact branch head
+9d90d4e with 7 and 5 worker threads (run concurrently on a shared 8-core box,
+so wall times are not comparable) gave a byte-identical CSV (same sha256) and a
+byte-identical report; an earlier independent run of the pilot-commit build
+gave the same CSV sha256 as well.
+Every row keeps the original topology (`topology_unchanged_all=true`).
+Files: `results/cue-ownership-v1.csv`, `results/cue-ownership-report-v1.txt`,
+pilot `results/cue-ownership-census-v1.txt`. All numbers are on the
+**GENERATED_SYNTHETIC** graph with artificial labels, not on BANC (the real
+BANC V888 graph, DOI 10.7910/DVN/7WTH1N, is not built here).
+
+### 1. Design gates (reported first)
+
+* **G1 passes:** topology, initial weights, allowances, `paced100` identity of
+  E, guard/ledger consistency, orders and codes (Zgo2m / Zo2m cue lists
+  identical to Zg2m's; owned masks = `B_σ(j) \ B_j`) hold in every row;
+  frozen moves = 0 in every owned row, frozen skips = 0 in every non-owned row.
+* **G2 passes.** Cue writes Zgo2m / Zg2m (held-out rows): 0.574 / 0.686 at
+  k = 16, flips 50 / 100 and 0.577 / 0.646 at k = 24 (≤ 0.80); Zgo2m has
+  frozen skips > 0 in 100 % of held-out rows at every (k, flip); matched ≥
+  cyclic agreement in 40/40 seeds at every (k, flip); matched − random 0.431 /
+  0.433 at flip 100 (k = 16 / 24, ≥ 0.20) and 0.080 / 0.081 at flip 50
+  (≥ 0.02).
+* **G3 passes:** median CN pairs per (seed, task) at k = 24, flip 50 is 105
+  (59 at k = 8, 62 at k = 16).
+
+All gates pass, so H1–H13 are evaluated.
+
+### 2. Arms, held-out orders (ACC_all, mean over 40 seeds × 4 orders)
+
+| k | flip | S1 | R1 | E | Z1 | Zg1 | Zg2m | **Zgo2m** | Zgo2c | Zgo2r | Zo2m |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 8 | 25 | 0.603 | 0.638 | 0.656 | 0.681 | 0.701 | 0.690 | 0.691 | 0.691 | 0.673 | 0.680 |
+| 8 | 50 | 0.548 | 0.574 | 0.572 | 0.613 | 0.646 | 0.630 | 0.627 | 0.617 | 0.618 | 0.608 |
+| 8 | 100 | 0.508 | 0.510 | 0.520 | 0.575 | 0.611 | 0.643 | 0.619 | 0.506 | 0.571 | 0.593 |
+| 16 | 25 | 0.568 | 0.596 | 0.591 | 0.606 | 0.615 | 0.624 | 0.617 | 0.618 | 0.607 | 0.609 |
+| 16 | 50 | 0.530 | 0.546 | 0.543 | 0.566 | 0.578 | 0.588 | 0.577 | 0.570 | 0.570 | 0.566 |
+| 16 | 100 | 0.507 | 0.511 | 0.521 | 0.545 | 0.558 | 0.598 | 0.576 | 0.513 | 0.547 | 0.565 |
+| 24 | 25 | 0.548 | 0.580 | 0.567 | 0.573 | 0.576 | 0.581 | 0.579 | 0.579 | 0.573 | 0.576 |
+| 24 | 50 | 0.522 | 0.539 | 0.531 | 0.540 | 0.544 | 0.549 | 0.544 | 0.542 | 0.542 | 0.541 |
+| 24 | 100 | 0.507 | 0.512 | 0.522 | 0.532 | 0.534 | 0.555 | 0.544 | 0.516 | 0.534 | 0.541 |
+
+Equal budget holds: within a (k, flip) the capped guarded arms make the same
+effective writes up to 0.6 % (k = 16, flip 100: S1 / E 619.2, Zg1 617.2,
+Zg2m 618.4, Zgo2m 615.5, Zgo2c 616.0, Zgo2r 616.4); the unguarded Z1 / Zo2m
+stay within the same allowance and use slightly fewer (611.0 / 605.3).
+
+### 3. Pre-registered hypotheses (held-out orders, k = 16 unless stated)
+
+Δ = mean [95 % CI] better/ties/worse over 40 seeds.
+
+| H | comparison | Δ | verdict |
+|---|---|---|---|
+| H1 | flip 100, FGT_all Zg1 − Zgo2m **and** LEARN_all Zgo2m − Zg1 CI lower bound > −0.02 | FGT +0.024 [+0.022, +0.027] 40/0/0; LEARN −0.005 [−0.007, −0.004] 7/0/33 | **pass** |
+| H2 | flip 100, LEARN_all Zgo2m − Zg2m | +0.052 [+0.049, +0.055] 40/0/0 | **pass** |
+| H3 | flip 100, ACC_all Zgo2m − Zg2m | −0.022 [−0.025, −0.019] 0/0/40 | **fail** |
+| H4 | flip 100, Zgo2m vs S1 sequence rule | ACC +0.069 [+0.065, +0.073] 40/0/0; LEARN +0.232; LAST +0.248 | **pass** |
+| H5 | flip 50, ACC_all Zgo2m − Zg2m | −0.012 [−0.014, −0.009] 4/0/36 | **fail** |
+| H6 | flip 50, Zgo2m vs S1 sequence rule | ACC +0.047 [+0.043, +0.050] 40/0/0 (< 0.05); LEARN +0.283; LAST +0.284 | **fail** (ACC strength) |
+| H7 | flip 100, ACC_all Zgo2m − Zg1 | +0.018 [+0.015, +0.020] 39/0/1 | **pass** |
+| H8 | flip 50, ACC_all Zgo2m − Zg1 | −0.001 [−0.003, +0.000] 17/0/23 | **fail** |
+| H9 | flip 100, ACC_all Zgo2m − Zgo2c | +0.064 [+0.059, +0.068] 40/0/0 | **pass** |
+| H10 | flip 100, ACC_all Zgo2m − Zgo2r | +0.029 [+0.025, +0.034] 39/0/1 | **pass** |
+| H11 | k = 24, flip 100, ACC_all Zgo2m − Zg2m | −0.011 [−0.012, −0.009] 1/0/39 | **fail** |
+| H12 | flip 100, ACC_all Zo2m − Z1 | +0.019 [+0.017, +0.021] 40/0/0 | **pass** |
+| H13 | flip 50, FGT_all Zg1 − Zgo2m **and** LEARN_all Zgo2m − Zg1 CI lower bound > −0.02 | FGT +0.013 [+0.011, +0.015] 38/0/2; LEARN −0.014 [−0.015, −0.012] 0/0/40 | **pass** |
+
+8 of 13 pass (H1, H2, H4, H7, H9, H10, H12, H13); 5 fail (H3, H5, H6, H8,
+H11). No multiplicity correction (as pre-registered). H13 passes only on the
+pre-registered −0.02 margin: the LEARN loss at flip 50 (−0.014) is smaller than
+with shared writes (−0.060) but still worse than private cues in 40/40 seeds.
+
+### 4. Secondary (descriptive, no pass/fail)
+
+* **Ownership removes the learning cost, and most of the forgetting cut with
+  it.** At k = 16, flip 100, against private cues Zg1: shared writes (Zg2m)
+  LEARN −0.057, FGT +0.103, net ACC +0.040; owned writes (Zgo2m) LEARN −0.005,
+  FGT +0.024, net ACC +0.018. Against Zg2m, Zgo2m learns +0.052 but forgets
+  0.079 more (FGT −0.079 [−0.083, −0.075], 0/0/40). Same pattern at k = 24
+  (LEARN +0.041, FGT −0.054, ACC −0.011) and at flip 50. On this benchmark the
+  learning cost of sharing and its forgetting benefit come from the same
+  writes (the task writing its partner's block): freezing them removes both.
+* **Per-stage LEARN (k = 16, flip 100):** first stage Zgo2m − Zg1 = 0.000 in
+  40/40 seeds (as constructed); later stages −0.007 when the partner was
+  trained before and −0.002 when it was not (Zg2m − Zg1: −0.052 / −0.075). The
+  small residual cost of Zgo2m appears only once the frozen partner block
+  carries weights.
+* **Budget:** cue writes per run (k = 16, flip 100) Zg1 204.6, Zg2m 330.4,
+  Zgo2m 226.5 (cue-write share 0.329 / 0.530 / 0.357): the mask moves the
+  budget back to the private-cue level, as in the pilot.
+* **Read-only partner still matters at flip 100:** Zgo2m beats the owned
+  cyclic (+0.064) and random (+0.029) codes; at flip 50 these gaps are small
+  (+0.006 / +0.007).
+* **Worst held-out order (k = 16):** Zgo2m − Zg2m −0.039 at flip 100 and
+  −0.026 at flip 50 (0/0/40 both); Zgo2m − Zg1 +0.005 [+0.002, +0.008] 28/0/12
+  at flip 100 and −0.013 at flip 50.
+* **Flip 25:** differences are small (Zgo2m − Zg1 −0.010 / +0.002 / +0.003 and
+  Zgo2m − Zg2m +0.001 / −0.007 / −0.003 at k = 8 / 16 / 24).
+* **k = 8:** Zgo2m is below private cues at flip 50 (Zgo2m − Zg1 −0.020) and
+  below shared writes at flip 100 (Zgo2m − Zg2m −0.024).
+* **Identity order and CN pairs (k = 16, flip 100):** identity follows the
+  held-out direction (Zgo2m − Zg2m −0.023, Zgo2m − Zg1 +0.033); on CN pairs
+  the differences are near 0 (Zgo2m − Zg2m −0.001, Zgo2m − Zg1 +0.004, CIs
+  include 0).
+* **Limitation:** partner agreement is an oracle read from the task rules
+  before training, not something the learner measures; every number is on the
+  synthetic graph and the artificial OR-rule task.
+
+**Reading:** the frozen-partner mask does what it was built to do (all gates
+pass; the learning cost of sharing reported by #136 H7 disappears within the
+pre-registered −0.02 margin at flips 100 and 50, H1 / H13), and the owned code
+still beats private cues and the supervised control at flip 100 (H4, H7). But
+it **loses to the shared-write code** it was meant to improve (H3, H5, H11
+fail): the forgetting cut of sharing is paid by the same partner-block writes
+that cost learning, so removing them gives back more forgetting (+0.079) than
+learning (+0.052). At flip 50 the owned code is not better than private cues
+(H8) and its lead over S1 is below the 0.05 threshold (H6). The shared-write
+matched code of #136 remains the best cue arm on this benchmark; the
+learning / forgetting trade-off of sharing is not removed by write ownership.
+Nothing here is a claim about biology or about the BANC graph.
