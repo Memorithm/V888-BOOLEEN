@@ -96,6 +96,35 @@ pub fn evaluate_and_apply(
     })
 }
 
+/// Estimate the minimum independent batch size that amortizes a cold cache.
+/// Costs must be measured externally; this does not claim a speedup.
+pub fn cold_cache_break_even_batch(
+    baseline_gates: usize,
+    cone_gates_per_proposal: usize,
+    calibration: EngineCalibration,
+    minimum_saving_ppm: u32,
+) -> Option<u64> {
+    if calibration.full_ns_per_gate == 0 || calibration.incremental_ns_per_gate == 0 {
+        return None;
+    }
+    let full = (baseline_gates as u128).checked_mul(u128::from(calibration.full_ns_per_gate))?;
+    let incremental = (cone_gates_per_proposal as u128)
+        .checked_mul(u128::from(calibration.incremental_ns_per_gate))?;
+    let retained = 1_000_000_u128
+        .checked_sub(u128::from(minimum_saving_ppm.min(1_000_000)))?;
+    let allowed_full = full.checked_mul(retained)?;
+    let incremental_scaled = incremental.checked_mul(1_000_000)?;
+    if allowed_full <= incremental_scaled {
+        return None;
+    }
+    let build = full
+        .checked_add(u128::from(calibration.cache_build_ns))?
+        .checked_mul(1_000_000)?;
+    let saving = allowed_full.checked_sub(incremental_scaled)?;
+    // Strict saving criterion: n * saving > build.
+    u64::try_from(build / saving + 1).ok()
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BatchEvaluation {
     pub outputs: Vec<u64>,
@@ -245,6 +274,28 @@ mod tests {
         (0..count)
             .map(|i| (i as u64 + 17).wrapping_mul(0x9e3779b97f4a7c15))
             .collect()
+    }
+
+    #[test]
+    fn cold_cache_break_even_is_strict_and_conservative() {
+        let c = EngineCalibration {
+            full_ns_per_gate: 10,
+            incremental_ns_per_gate: 1,
+            cache_build_ns: 0,
+        };
+        assert_eq!(cold_cache_break_even_batch(10, 10, c, 0), Some(2));
+        assert_eq!(cold_cache_break_even_batch(10, 10, c, 500_000), Some(3));
+        assert_eq!(cold_cache_break_even_batch(10, 10, c, 1_000_000), None);
+        assert_eq!(cold_cache_break_even_batch(10, 100, c, 0), None);
+        assert_eq!(
+            cold_cache_break_even_batch(
+                10,
+                1,
+                EngineCalibration { full_ns_per_gate: 0, ..c },
+                0
+            ),
+            None
+        );
     }
 
     #[test]
