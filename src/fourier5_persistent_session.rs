@@ -398,7 +398,7 @@ impl PersistentSession {
             return Err(HierarchyError::InvalidInput);
         }
         // Validate the intervention and construct the independent full oracle.
-        let candidate = match proposal {
+        let _candidate = match proposal {
             PackedIntervention::LeafSwap { first, second } => {
                 if first >= self.model.input_bits()
                     || second >= self.model.input_bits()
@@ -427,10 +427,6 @@ impl PersistentSession {
                 self.model.with_neuron_parameters(layer, neuron, model)?
             }
         };
-        let mut planes = vec![0u64; self.model.input_bits()];
-        for (position, &source) in self.model.routing().iter().enumerate() {
-            planes[usize::from(source)] = self.stages[0][position];
-        }
         let mut full_ns = 0u128;
         let mut incremental_ns = 0u128;
         let mut full_output = 0;
@@ -439,8 +435,25 @@ impl PersistentSession {
         for round in 0..repetitions {
             if round % 2 == 0 {
                 let start = Instant::now();
-                full_output =
-                    std::hint::black_box(candidate.infer_bitplanes(std::hint::black_box(&planes))?);
+                let measured_candidate = match proposal {
+                    PackedIntervention::LeafSwap { first, second } => {
+                        let mut routing = self.model.routing().to_vec();
+                        routing.swap(first, second);
+                        self.model.rerouted(routing)?
+                    }
+                    PackedIntervention::Parameter {
+                        layer,
+                        neuron,
+                        model,
+                    } => self.model.with_neuron_parameters(layer, neuron, model)?,
+                };
+                let mut measured_planes = vec![0u64; self.model.input_bits()];
+                for (position, &source) in self.model.routing().iter().enumerate() {
+                    measured_planes[usize::from(source)] = self.stages[0][position];
+                }
+                full_output = std::hint::black_box(
+                    measured_candidate.infer_bitplanes(std::hint::black_box(&measured_planes))?,
+                );
                 full_ns = full_ns.saturating_add(start.elapsed().as_nanos());
                 let start = Instant::now();
                 incremental_output =
@@ -452,8 +465,25 @@ impl PersistentSession {
                     std::hint::black_box(self.propose(std::hint::black_box(proposal))?);
                 incremental_ns = incremental_ns.saturating_add(start.elapsed().as_nanos());
                 let start = Instant::now();
-                full_output =
-                    std::hint::black_box(candidate.infer_bitplanes(std::hint::black_box(&planes))?);
+                let measured_candidate = match proposal {
+                    PackedIntervention::LeafSwap { first, second } => {
+                        let mut routing = self.model.routing().to_vec();
+                        routing.swap(first, second);
+                        self.model.rerouted(routing)?
+                    }
+                    PackedIntervention::Parameter {
+                        layer,
+                        neuron,
+                        model,
+                    } => self.model.with_neuron_parameters(layer, neuron, model)?,
+                };
+                let mut measured_planes = vec![0u64; self.model.input_bits()];
+                for (position, &source) in self.model.routing().iter().enumerate() {
+                    measured_planes[usize::from(source)] = self.stages[0][position];
+                }
+                full_output = std::hint::black_box(
+                    measured_candidate.infer_bitplanes(std::hint::black_box(&measured_planes))?,
+                );
                 full_ns = full_ns.saturating_add(start.elapsed().as_nanos());
             }
             if full_output != incremental_output {
