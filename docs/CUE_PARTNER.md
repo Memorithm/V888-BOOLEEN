@@ -235,7 +235,8 @@ commit 3bd4f75 and the pilot commit 939f9f6 had been pushed. The grid has
 18000 rows: 3 k × 3 flips × 40 seeds × 5 orders × 10 arms, on 7 worker
 threads (2757 s wall).
 CSV sha256 `9bfa800b520aadaa44e57442972e4956118e5c050bddbbf79496144377a1cbba`.
-A second, independent run with 5 worker threads is in progress (thread-count reproducibility check).
+A second, independent run with 5 worker threads (2662 s wall) gave a
+byte-identical CSV (same sha256) and a byte-identical report.
 Every row keeps the original topology (`topology_unchanged_all=true`).
 Files: `results/cue-partner-v1.csv`, `results/cue-partner-report-v1.txt`,
 pilot `results/cue-partner-census-v1.txt`. All numbers are on the
