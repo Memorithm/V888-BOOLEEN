@@ -69,7 +69,6 @@ impl VerifiedSequenceSummary {
     }
 }
 
-
 /// Paired, decision-preserving comparison of two verified sequential traces.
 /// The caller must supply traces from identical intervention sequences and
 /// independently verify that their input workloads are identical.
@@ -232,7 +231,9 @@ impl VerifiedPairedSequenceAudit {
         let speedup_milli = if new.elapsed_ns == 0 {
             None
         } else {
-            old.elapsed_ns.checked_mul(1000).map(|ns| ns / new.elapsed_ns)
+            old.elapsed_ns
+                .checked_mul(1000)
+                .map(|ns| ns / new.elapsed_ns)
         };
         Some(Self {
             steps: baseline.len(),
@@ -1424,30 +1425,75 @@ mod tests {
     }
 }
 
-
 #[cfg(test)]
 mod paired_sequence_audit_tests {
     use super::{VerifiedPairedSequenceAudit, VerifiedStepTelemetry};
-    fn step(output: u64, accepted: bool, gates: usize, ns: u128, mem: Option<u64>) -> VerifiedStepTelemetry {
-        VerifiedStepTelemetry { output, accepted, updated_gates: gates, elapsed_ns: ns, vmhwm_kib: mem }
+    fn step(
+        output: u64,
+        accepted: bool,
+        gates: usize,
+        ns: u128,
+        mem: Option<u64>,
+    ) -> VerifiedStepTelemetry {
+        VerifiedStepTelemetry {
+            output,
+            accepted,
+            updated_gates: gates,
+            elapsed_ns: ns,
+            vmhwm_kib: mem,
+        }
     }
-
-
 
     #[test]
     fn matched_workloads_reject_hidden_proposal_and_schedule_drift() {
         use crate::fourier5_incremental::PackedIntervention;
         let left = [
-            (PackedIntervention::LeafSwap { first: 1, second: 3 }, true),
-            (PackedIntervention::LeafSwap { first: 2, second: 4 }, false),
+            (
+                PackedIntervention::LeafSwap {
+                    first: 1,
+                    second: 3,
+                },
+                true,
+            ),
+            (
+                PackedIntervention::LeafSwap {
+                    first: 2,
+                    second: 4,
+                },
+                false,
+            ),
         ];
         let changed = [
-            (PackedIntervention::LeafSwap { first: 1, second: 3 }, true),
-            (PackedIntervention::LeafSwap { first: 2, second: 5 }, false),
+            (
+                PackedIntervention::LeafSwap {
+                    first: 1,
+                    second: 3,
+                },
+                true,
+            ),
+            (
+                PackedIntervention::LeafSwap {
+                    first: 2,
+                    second: 5,
+                },
+                false,
+            ),
         ];
         let wrong_accept = [
-            (PackedIntervention::LeafSwap { first: 1, second: 3 }, false),
-            (PackedIntervention::LeafSwap { first: 2, second: 4 }, false),
+            (
+                PackedIntervention::LeafSwap {
+                    first: 1,
+                    second: 3,
+                },
+                false,
+            ),
+            (
+                PackedIntervention::LeafSwap {
+                    first: 2,
+                    second: 4,
+                },
+                false,
+            ),
         ];
         let old = [step(7, true, 3, 400, None), step(9, false, 0, 200, None)];
         let new = [step(7, true, 3, 200, None), step(9, false, 0, 100, None)];
@@ -1462,44 +1508,50 @@ mod paired_sequence_audit_tests {
         )
         .is_none());
         assert!(VerifiedPairedSequenceAudit::compare_matched_workloads(
-            &left, &wrong_accept, &old, &new
+            &left,
+            &wrong_accept,
+            &old,
+            &new
         )
         .is_none());
         assert!(VerifiedPairedSequenceAudit::compare_matched_workloads(
-            &left[..1], &left[..1], &old, &new
+            &left[..1],
+            &left[..1],
+            &old,
+            &new
         )
         .is_none());
     }
 
     #[test]
     fn stratified_audit_detects_hidden_accepted_regression() {
-        let baseline = [
-            step(1, true, 3, 100, None),
-            step(2, false, 0, 900, None),
-        ];
-        let candidate = [
-            step(1, true, 3, 150, None),
-            step(2, false, 0, 100, None),
-        ];
+        let baseline = [step(1, true, 3, 100, None), step(2, false, 0, 900, None)];
+        let candidate = [step(1, true, 3, 150, None), step(2, false, 0, 100, None)];
         let audit = VerifiedPairedSequenceAudit::compare_stratified(&baseline, &candidate).unwrap();
         assert_eq!(audit.paired.speedup_milli, Some(4000));
         assert_eq!(audit.accepted_speedup_milli, Some(666));
         assert_eq!(audit.rejected_speedup_milli, Some(9000));
         assert_eq!((audit.accepted_steps, audit.rejected_steps), (1, 1));
         assert!(!audit.no_class_regression);
-        let accepted_only = VerifiedPairedSequenceAudit::compare_stratified(
-            &baseline[..1], &candidate[..1]
-        ).unwrap();
+        let accepted_only =
+            VerifiedPairedSequenceAudit::compare_stratified(&baseline[..1], &candidate[..1])
+                .unwrap();
         assert_eq!(accepted_only.rejected_speedup_milli, None);
-        assert!(VerifiedPairedSequenceAudit::compare_stratified(
-            &baseline, &candidate[..1]
-        ).is_none());
+        assert!(
+            VerifiedPairedSequenceAudit::compare_stratified(&baseline, &candidate[..1]).is_none()
+        );
     }
 
     #[test]
     fn paired_audit_preserves_decisions_and_reports_integer_speedup() {
-        let baseline = vec![step(0x55, true, 4, 300, Some(120)), step(0xaa, false, 0, 100, None)];
-        let candidate = vec![step(0x55, true, 4, 120, Some(90)), step(0xaa, false, 0, 80, None)];
+        let baseline = vec![
+            step(0x55, true, 4, 300, Some(120)),
+            step(0xaa, false, 0, 100, None),
+        ];
+        let candidate = vec![
+            step(0x55, true, 4, 120, Some(90)),
+            step(0xaa, false, 0, 80, None),
+        ];
         let audit = VerifiedPairedSequenceAudit::compare(&baseline, &candidate).unwrap();
         assert_eq!(audit.steps, 2);
         assert_eq!(audit.baseline_ns, 400);
@@ -1516,8 +1568,21 @@ mod paired_sequence_audit_tests {
             assert!(VerifiedPairedSequenceAudit::compare(&baseline, &mismatch).is_none());
         }
         let zero = vec![step(0x55, true, 4, 0, None), step(0xaa, false, 0, 0, None)];
-        assert_eq!(VerifiedPairedSequenceAudit::compare(&baseline, &zero).unwrap().speedup_milli, None);
-        let huge = vec![step(0x55, true, 4, u128::MAX, None), step(0xaa, false, 0, 0, None)];
-        assert_eq!(VerifiedPairedSequenceAudit::compare(&huge, &candidate).unwrap().speedup_milli, None);
+        assert_eq!(
+            VerifiedPairedSequenceAudit::compare(&baseline, &zero)
+                .unwrap()
+                .speedup_milli,
+            None
+        );
+        let huge = vec![
+            step(0x55, true, 4, u128::MAX, None),
+            step(0xaa, false, 0, 0, None),
+        ];
+        assert_eq!(
+            VerifiedPairedSequenceAudit::compare(&huge, &candidate)
+                .unwrap()
+                .speedup_milli,
+            None
+        );
     }
 }
