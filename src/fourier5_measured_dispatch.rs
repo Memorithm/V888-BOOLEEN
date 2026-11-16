@@ -1008,3 +1008,97 @@ mod heterogeneous_sequential_oracle_tests {
         ]), Err(PolicyError::InvalidSample));
     }
 }
+
+
+/// A conservative sequential-cost eligibility decision made *before* the
+/// intervention outcome is known. Both accepted and rejected histories must
+/// independently qualify. These are measured observations, not predictions.
+pub fn sequential_predecision_eligible(
+    groups: &[(ConeBucket, SequentialPairedSummary)],
+    gates: usize,
+    cone_gates: usize,
+    min_samples_per_outcome: usize,
+    required_saving_ns: u128,
+    max_incremental_vmhwm_kib: u64,
+) -> bool {
+    if gates == 0 || cone_gates > gates || min_samples_per_outcome == 0 {
+        return false;
+    }
+    [false, true].into_iter().all(|accepted| {
+        let mut matches = groups.iter().filter(|(bucket, _)| {
+            bucket.gates == gates && bucket.cone_gates == cone_gates
+                && bucket.accepted == accepted
+        });
+        let Some((_, summary)) = matches.next() else { return false };
+        // Ambiguous duplicate buckets cannot authorize an incremental run.
+        if matches.next().is_some() { return false; }
+        if summary.interventions < min_samples_per_outcome
+            || summary.mismatches != 0 || summary.regressions != 0
+            || summary.incremental_peak_vmhwm_kib > max_incremental_vmhwm_kib
+            || summary.accepted != if accepted { summary.interventions } else { 0 }
+            || summary.rejected != if accepted { 0 } else { summary.interventions }
+        {
+            return false;
+        }
+        // Strict improvement even when the configured margin is zero.
+        let Some(required) = summary.incremental_total_ns
+            .checked_add(required_saving_ns.max(1)) else { return false };
+        required <= summary.full_total_ns
+    })
+}
+
+#[cfg(test)]
+mod sequential_predecision_oracle_tests {
+    use super::*;
+
+    fn summary(accepted: bool) -> SequentialPairedSummary {
+        SequentialPairedSummary {
+            interventions: 2,
+            accepted: if accepted { 2 } else { 0 },
+            rejected: if accepted { 0 } else { 2 },
+            full_total_ns: 200,
+            incremental_total_ns: 100,
+            incremental_peak_vmhwm_kib: 1024,
+            ..SequentialPairedSummary::default()
+        }
+    }
+
+    #[test]
+    fn requires_both_outcomes_and_checks_memory_and_margin() {
+        let yes = ConeBucket { gates: 100, cone_gates: 5, accepted: true };
+        let no = ConeBucket { accepted: false, ..yes };
+        let mut groups = vec![(yes, summary(true)), (no, summary(false))];
+        let eligible = |g: &[(ConeBucket, SequentialPairedSummary)], margin, memory| {
+            sequential_predecision_eligible(g, 100, 5, 2, margin, memory)
+        };
+        assert!(eligible(&groups, 50, 1024));
+        assert!(!eligible(&groups[..1], 50, 1024));
+        assert!(!eligible(&groups, 101, 1024));
+        assert!(!eligible(&groups, 50, 1023));
+        assert!(!sequential_predecision_eligible(&groups, 100, 6, 2, 50, 1024));
+        groups[1].1.regressions = 1;
+        assert!(!eligible(&groups, 50, 1024));
+        groups[1].1.regressions = 0;
+        groups.push((no, summary(false)));
+        assert!(!eligible(&groups, 50, 1024));
+    }
+
+    #[test]
+    fn rejects_invalid_histories_and_overflow() {
+        let yes = ConeBucket { gates: 20, cone_gates: 2, accepted: true };
+        let no = ConeBucket { accepted: false, ..yes };
+        let mut groups = vec![(yes, summary(true)), (no, summary(false))];
+        let check = |g: &[(ConeBucket, SequentialPairedSummary)]| {
+            sequential_predecision_eligible(g, 20, 2, 2, 1, 2048)
+        };
+        groups[0].1.accepted = 1;
+        assert!(!check(&groups));
+        groups[0].1.accepted = 2;
+        groups[0].1.incremental_total_ns = u128::MAX;
+        assert!(!check(&groups));
+        groups[0].1.incremental_total_ns = 100;
+        groups[1].1.mismatches = 1;
+        assert!(!check(&groups));
+        assert!(!sequential_predecision_eligible(&groups, 20, 2, 0, 1, 2048));
+    }
+}
