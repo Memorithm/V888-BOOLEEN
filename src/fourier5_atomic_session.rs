@@ -512,3 +512,110 @@ mod revision_guard_tests {
         assert_eq!(session.circuit, [false]);
     }
 }
+
+
+/// An independent full-recomputation oracle must agree with the proposed
+/// incremental cache before either object is committed. A mismatch is a
+/// fail-closed error, not an accepted (and possibly incorrect) intervention.
+/// The oracle and equality predicate must be side-effect-free.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VerifiedAtomicError<E> {
+    Mutation(E),
+    Incremental(E),
+    Oracle(E),
+    RevisionOverflow,
+    OracleMismatch,
+}
+
+pub fn apply_atomic_verified<C: Clone, K, O, E>(
+    session: &mut AtomicSession<C, K>,
+    mutate: impl FnOnce(&mut C) -> Result<bool, E>,
+    incremental: impl FnOnce(&C, &K) -> Result<K, E>,
+    full_oracle: impl FnOnce(&C) -> Result<O, E>,
+    agrees: impl FnOnce(&K, &O) -> bool,
+) -> Result<bool, VerifiedAtomicError<E>> {
+    let next = session.revision.checked_add(1)
+        .ok_or(VerifiedAtomicError::RevisionOverflow)?;
+    let mut candidate = session.circuit.clone();
+    if !mutate(&mut candidate).map_err(VerifiedAtomicError::Mutation)? {
+        return Ok(false);
+    }
+    let candidate_cache = incremental(&candidate, &session.cache)
+        .map_err(VerifiedAtomicError::Incremental)?;
+    let expected = full_oracle(&candidate).map_err(VerifiedAtomicError::Oracle)?;
+    if !agrees(&candidate_cache, &expected) {
+        return Err(VerifiedAtomicError::OracleMismatch);
+    }
+    session.circuit = candidate;
+    session.cache = candidate_cache;
+    session.revision = next;
+    Ok(true)
+}
+
+#[cfg(test)]
+mod verified_atomic_tests {
+    use super::*;
+
+    fn full(bits: &[bool]) -> usize {
+        bits.iter().filter(|&&bit| bit).count()
+    }
+
+    #[test]
+    fn verified_sequential_updates_match_independent_full_recompute() {
+        let mut session = AtomicSession { circuit: vec![false; 16], cache: 0usize, revision: 0 };
+        for (step, index) in [1, 8, 1, 15, 0].into_iter().enumerate() {
+            assert!(apply_atomic_verified(
+                &mut session,
+                |bits| { bits[index] = !bits[index]; Ok::<_, ()>(true) },
+                |bits, _old| Ok::<_, ()>(full(bits)),
+                |bits| Ok::<_, ()>(bits.iter().map(|v| usize::from(*v)).sum::<usize>()),
+                |incremental, oracle| incremental == oracle,
+            ).unwrap());
+            assert_eq!(session.cache, full(&session.circuit));
+            assert_eq!(session.revision as usize, step + 1);
+        }
+    }
+
+    #[test]
+    fn oracle_mismatch_and_oracle_error_leave_state_unchanged() {
+        let original = AtomicSession { circuit: vec![true, false], cache: 1usize, revision: 4 };
+        let mut session = original.clone();
+        assert_eq!(apply_atomic_verified(
+            &mut session,
+            |bits| { bits[1] = true; Ok::<_, &str>(true) },
+            |_, _| Ok(0usize),
+            |bits| Ok(full(bits)),
+            |a, b| a == b,
+        ), Err(VerifiedAtomicError::OracleMismatch));
+        assert_eq!(session, original);
+        assert_eq!(apply_atomic_verified(
+            &mut session,
+            |bits| { bits[1] = true; Ok::<_, &str>(true) },
+            |_, _| Ok(2usize),
+            |_| Err::<usize, _>("oracle unavailable"),
+            |a, b| a == b,
+        ), Err(VerifiedAtomicError::Oracle("oracle unavailable")));
+        assert_eq!(session, original);
+    }
+
+    #[test]
+    fn rejected_and_overflow_interventions_do_not_run_oracle() {
+        let mut session = AtomicSession { circuit: vec![false], cache: 0usize, revision: 1 };
+        assert!(!apply_atomic_verified(
+            &mut session,
+            |bits| { bits[0] = true; Ok::<_, ()>(false) },
+            |_, _| -> Result<usize, ()> { panic!("rejected incremental") },
+            |_| -> Result<usize, ()> { panic!("rejected oracle") },
+            |_, _| panic!("rejected comparison"),
+        ).unwrap());
+        assert_eq!(session.circuit, [false]);
+        session.revision = u64::MAX;
+        assert_eq!(apply_atomic_verified(
+            &mut session,
+            |_| -> Result<bool, ()> { panic!("overflow mutation") },
+            |_, _| -> Result<usize, ()> { panic!("overflow incremental") },
+            |_| -> Result<usize, ()> { panic!("overflow oracle") },
+            |_, _| panic!("overflow comparison"),
+        ), Err(VerifiedAtomicError::RevisionOverflow));
+    }
+}
