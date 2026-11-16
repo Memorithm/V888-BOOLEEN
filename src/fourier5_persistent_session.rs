@@ -6,6 +6,247 @@ use crate::fourier5_hierarchy::{shannon_64, FiveCircleHierarchy, HierarchyError}
 use crate::fourier5_incremental::PackedIntervention;
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Per-intervention telemetry for a sequential, independently verified run.
+/// elapsed_ns includes the Full oracle and accepted-cache refresh, not just
+/// incremental prediction. VmHWM is Linux process-wide high-water RSS in KiB;
+/// it is not an allocation delta or a per-step peak.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifiedStepTelemetry {
+    pub output: u64,
+    pub accepted: bool,
+    pub updated_gates: usize,
+    pub elapsed_ns: u128,
+    pub vmhwm_kib: Option<u64>,
+}
+
+fn linux_vmhwm_kib() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let line = status.lines().find(|line| line.starts_with("VmHWM:"))?;
+    line.split_whitespace().nth(1)?.parse().ok()
+}
+
+/// Aggregate measured cost of an evolving, verified synthetic circuit.
+/// The duration includes oracle verification and accepted-cache maintenance.
+/// Throughput is a whole-number lower bound in interventions/second.
+/// VmHWM is the process-wide high-water mark, not attributable per intervention.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifiedSequenceSummary {
+    pub interventions: usize,
+    pub accepted: usize,
+    pub updated_gates: usize,
+    pub elapsed_ns: u128,
+    pub interventions_per_second: u128,
+    pub max_vmhwm_kib: Option<u64>,
+}
+
+impl VerifiedSequenceSummary {
+    pub fn from_trace(trace: &[VerifiedStepTelemetry]) -> Option<Self> {
+        let mut elapsed_ns = 0u128;
+        let mut updated_gates = 0usize;
+        let mut accepted = 0usize;
+        let mut max_vmhwm_kib: Option<u64> = None;
+        for step in trace {
+            elapsed_ns = elapsed_ns.checked_add(step.elapsed_ns)?;
+            updated_gates = updated_gates.checked_add(step.updated_gates)?;
+            accepted = accepted.checked_add(usize::from(step.accepted))?;
+            if let Some(kib) = step.vmhwm_kib {
+                max_vmhwm_kib = Some(max_vmhwm_kib.map_or(kib, |prev| prev.max(kib)));
+            }
+        }
+        let interventions_per_second = if elapsed_ns == 0 {
+            0 // Insufficient timer resolution: never claim infinite throughput.
+        } else {
+            (trace.len() as u128).checked_mul(1_000_000_000)? / elapsed_ns
+        };
+        Some(Self {
+            interventions: trace.len(),
+            accepted,
+            updated_gates,
+            elapsed_ns,
+            interventions_per_second,
+            max_vmhwm_kib,
+        })
+    }
+}
+
+/// Paired, decision-preserving comparison of two verified sequential traces.
+/// The caller must supply traces from identical intervention sequences and
+/// independently verify that their input workloads are identical.
+/// A mismatch fails closed; no speedup is reported for divergent decisions.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifiedPairedSequenceAudit {
+    pub steps: usize,
+    pub baseline_ns: u128,
+    pub candidate_ns: u128,
+    /// Baseline duration divided by candidate duration, in thousandths.
+    /// None means the candidate timer reported zero or multiplication overflowed.
+    pub speedup_milli: Option<u128>,
+    /// Process-wide high-water marks; not per-step allocation measurements.
+    pub baseline_vmhwm_kib: Option<u64>,
+    pub candidate_vmhwm_kib: Option<u64>,
+}
+
+/// Per-class paired timing, preventing an aggregate speedup from hiding
+/// a regression on accepted cache updates or rejected proposals.
+/// All durations include Full-oracle verification; no inference-only claim.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifiedStratifiedPairedAudit {
+    pub paired: VerifiedPairedSequenceAudit,
+    pub accepted_steps: usize,
+    pub rejected_steps: usize,
+    pub accepted_baseline_ns: u128,
+    pub accepted_candidate_ns: u128,
+    pub rejected_baseline_ns: u128,
+    pub rejected_candidate_ns: u128,
+    /// None when a class is absent, candidate duration is zero, or ratio overflows.
+    pub accepted_speedup_milli: Option<u128>,
+    pub rejected_speedup_milli: Option<u128>,
+    /// True only if neither class regresses in total elapsed time.
+    pub no_class_regression: bool,
+}
+
+impl VerifiedPairedSequenceAudit {
+    /// Partition paired sequential work by acceptance, with checked counters.
+    /// The caller remains responsible for proving identical workloads using
+    /// compare_matched_workloads when schedules come from different engines.
+    pub fn compare_stratified(
+        baseline: &[VerifiedStepTelemetry],
+        candidate: &[VerifiedStepTelemetry],
+    ) -> Option<VerifiedStratifiedPairedAudit> {
+        let paired = Self::compare(baseline, candidate)?;
+        let mut count = [0usize; 2];
+        let mut old_ns = [0u128; 2];
+        let mut new_ns = [0u128; 2];
+        for (old, new) in baseline.iter().zip(candidate) {
+            let index = usize::from(old.accepted);
+            count[index] = count[index].checked_add(1)?;
+            old_ns[index] = old_ns[index].checked_add(old.elapsed_ns)?;
+            new_ns[index] = new_ns[index].checked_add(new.elapsed_ns)?;
+        }
+        let ratio = |index: usize| {
+            if count[index] == 0 || new_ns[index] == 0 {
+                None
+            } else {
+                old_ns[index].checked_mul(1000).map(|n| n / new_ns[index])
+            }
+        };
+        Some(VerifiedStratifiedPairedAudit {
+            paired,
+            accepted_steps: count[1],
+            rejected_steps: count[0],
+            accepted_baseline_ns: old_ns[1],
+            accepted_candidate_ns: new_ns[1],
+            rejected_baseline_ns: old_ns[0],
+            rejected_candidate_ns: new_ns[0],
+            accepted_speedup_milli: ratio(1),
+            rejected_speedup_milli: ratio(0),
+            no_class_regression: new_ns[0] <= old_ns[0] && new_ns[1] <= old_ns[1],
+        })
+    }
+}
+
+impl VerifiedPairedSequenceAudit {
+    /// Fail-closed comparison with structural proof of identical intervention
+    /// schedules. This checks the complete synthetic proposal (including every
+    /// circle parameter), not just outputs or an externally supplied fingerprint.
+    /// Both traces must correspond to the supplied schedules; callers must
+    /// generate each trace from its respective schedule.
+    pub fn compare_matched_workloads(
+        baseline_workload: &[(PackedIntervention, bool)],
+        candidate_workload: &[(PackedIntervention, bool)],
+        baseline: &[VerifiedStepTelemetry],
+        candidate: &[VerifiedStepTelemetry],
+    ) -> Option<Self> {
+        if baseline_workload.len() != baseline.len()
+            || candidate_workload.len() != candidate.len()
+            || baseline_workload.len() != candidate_workload.len()
+        {
+            return None;
+        }
+        for (&(left, left_accept), &(right, right_accept)) in
+            baseline_workload.iter().zip(candidate_workload)
+        {
+            if left_accept != right_accept {
+                return None;
+            }
+            let same_proposal = match (left, right) {
+                (
+                    PackedIntervention::LeafSwap {
+                        first: a,
+                        second: b,
+                    },
+                    PackedIntervention::LeafSwap {
+                        first: c,
+                        second: d,
+                    },
+                ) => a == c && b == d,
+                (
+                    PackedIntervention::Parameter {
+                        layer: a,
+                        neuron: b,
+                        model: c,
+                    },
+                    PackedIntervention::Parameter {
+                        layer: d,
+                        neuron: e,
+                        model: f,
+                    },
+                ) => a == d && b == e && c == f,
+                _ => false,
+            };
+            if !same_proposal {
+                return None;
+            }
+        }
+        if baseline
+            .iter()
+            .zip(baseline_workload)
+            .any(|(step, (_, accepted))| step.accepted != *accepted)
+            || candidate
+                .iter()
+                .zip(candidate_workload)
+                .any(|(step, (_, accepted))| step.accepted != *accepted)
+        {
+            return None;
+        }
+        Self::compare(baseline, candidate)
+    }
+    pub fn compare(
+        baseline: &[VerifiedStepTelemetry],
+        candidate: &[VerifiedStepTelemetry],
+    ) -> Option<Self> {
+        if baseline.len() != candidate.len() {
+            return None;
+        }
+        for (old, new) in baseline.iter().zip(candidate) {
+            if old.output != new.output
+                || old.accepted != new.accepted
+                || old.updated_gates != new.updated_gates
+            {
+                return None;
+            }
+        }
+        let old = VerifiedSequenceSummary::from_trace(baseline)?;
+        let new = VerifiedSequenceSummary::from_trace(candidate)?;
+        let speedup_milli = if new.elapsed_ns == 0 {
+            None
+        } else {
+            old.elapsed_ns
+                .checked_mul(1000)
+                .map(|ns| ns / new.elapsed_ns)
+        };
+        Some(Self {
+            steps: baseline.len(),
+            baseline_ns: old.elapsed_ns,
+            candidate_ns: new.elapsed_ns,
+            speedup_milli,
+            baseline_vmhwm_kib: old.max_vmhwm_kib,
+            candidate_vmhwm_kib: new.max_vmhwm_kib,
+        })
+    }
+}
+
+#[derive(Clone)]
 pub struct PersistentSession {
     model: FiveCircleHierarchy,
     stages: Vec<Vec<u64>>,
@@ -14,6 +255,72 @@ pub struct PersistentSession {
 }
 
 impl PersistentSession {
+    /// Execute an all-or-nothing verified sequence. A late invalid proposal or
+    /// oracle mismatch leaves the original model, cache and counters untouched.
+    /// This deliberately clones the cache: it is a correctness-first transactional
+    /// path, not a low-memory or faster alternative to prefix execution.
+    pub fn execute_atomic_verified_sequence(
+        &mut self,
+        interventions: &[(PackedIntervention, bool)],
+        max_steps: usize,
+    ) -> Result<Vec<(u64, usize)>, HierarchyError> {
+        if interventions.len() > max_steps {
+            return Err(HierarchyError::InvalidInput);
+        }
+        let mut staged = self.clone();
+        let trace = staged.execute_verified_sequence(interventions, max_steps)?;
+        *self = staged;
+        Ok(trace)
+    }
+
+    /// Transactional profiling of an evolving synthetic circuit. All accepted
+    /// interventions and cache refreshes commit only after every Full oracle
+    /// agrees. A late invalid intervention leaves the original session intact.
+    /// Timing includes the Full oracle, cache updates, and process-wide VmHWM.
+    /// Cloning the cache is intentionally outside the per-step timing; callers
+    /// must account for that additional cost in end-to-end benchmarks.
+    pub fn execute_atomic_profiled_verified_sequence(
+        &mut self,
+        interventions: &[(PackedIntervention, bool)],
+        max_steps: usize,
+    ) -> Result<Vec<VerifiedStepTelemetry>, HierarchyError> {
+        if interventions.len() > max_steps {
+            return Err(HierarchyError::InvalidInput);
+        }
+        let mut staged = self.clone();
+        let trace = staged.execute_profiled_verified_sequence(interventions, max_steps)?;
+        *self = staged;
+        Ok(trace)
+    }
+
+    /// Profile a heterogeneous sequential workload without freezing the model.
+    /// Each accepted intervention updates the exact persistent cache before the
+    /// next proposal. Prefix semantics apply on a later invalid intervention.
+    /// A caller-provided bound prevents unbounded trace allocation.
+    pub fn execute_profiled_verified_sequence(
+        &mut self,
+        interventions: &[(PackedIntervention, bool)],
+        max_steps: usize,
+    ) -> Result<Vec<VerifiedStepTelemetry>, HierarchyError> {
+        if interventions.len() > max_steps {
+            return Err(HierarchyError::InvalidInput);
+        }
+        let mut trace = Vec::with_capacity(interventions.len());
+        for &(proposal, accepted) in interventions {
+            let start = std::time::Instant::now();
+            let result = self.execute_verified_sequence(&[(proposal, accepted)], 1)?;
+            let (output, updated_gates) = result[0];
+            trace.push(VerifiedStepTelemetry {
+                output,
+                accepted,
+                updated_gates,
+                elapsed_ns: start.elapsed().as_nanos(),
+                vmhwm_kib: linux_vmhwm_kib(),
+            });
+        }
+        Ok(trace)
+    }
+
     pub fn new(model: FiveCircleHierarchy, planes: Vec<u64>) -> Result<Self, HierarchyError> {
         if planes.len() != model.input_bits() {
             return Err(HierarchyError::InvalidInput);
@@ -118,6 +425,62 @@ impl PersistentSession {
         Ok(changes[&0])
     }
 
+    /// Execute a bounded heterogeneous sequence against the evolving accepted circuit.
+    /// Every proposed output is compared with an independently reconstructed Full
+    /// inference. Accepted interventions update the persistent cache; rejected ones
+    /// leave it unchanged. A mismatch stops execution with an error.
+    ///
+    /// The caller owns TRAIN/VALID/TEST/OOD separation. This method does not
+    /// calibrate on, or infer labels from, any evaluation partition.
+    /// If an invalid intervention occurs after earlier acceptances, those earlier
+    /// acceptances remain committed (prefix semantics).
+    pub fn execute_verified_sequence(
+        &mut self,
+        interventions: &[(PackedIntervention, bool)],
+        max_steps: usize,
+    ) -> Result<Vec<(u64, usize)>, HierarchyError> {
+        if interventions.len() > max_steps {
+            return Err(HierarchyError::InvalidInput);
+        }
+        // Reconstruct the original input planes from the bijective routing.
+        // The input planes remain constant across accepted interventions.
+        let mut planes = vec![0_u64; self.model.input_bits()];
+        for (position, &source) in self.model.routing().iter().enumerate() {
+            planes[usize::from(source)] = self.stages[0][position];
+        }
+        let mut trace = Vec::with_capacity(interventions.len());
+        for &(intervention, accepted) in interventions {
+            let predicted = self.propose(intervention)?;
+            let candidate = match intervention {
+                PackedIntervention::LeafSwap { first, second } => {
+                    let mut routing = self.model.routing().to_vec();
+                    routing.swap(first, second);
+                    self.model.rerouted(routing)?
+                }
+                PackedIntervention::Parameter {
+                    layer,
+                    neuron,
+                    model,
+                } => self.model.with_neuron_parameters(layer, neuron, model)?,
+            };
+            let oracle = candidate.infer_bitplanes(&planes)?;
+            if predicted != oracle {
+                return Err(HierarchyError::InvalidInput);
+            }
+            let updated = if accepted {
+                let count = self.accept(intervention)?;
+                if self.output() != oracle {
+                    return Err(HierarchyError::InvalidInput);
+                }
+                count
+            } else {
+                0
+            };
+            trace.push((predicted, updated));
+        }
+        Ok(trace)
+    }
+
     /// Exact per-lane Boolean influence of a proposed intervention on the
     /// current output. A set bit means that lane's final prediction flips.
     /// The session remains unchanged, including on invalid proposals.
@@ -142,6 +505,30 @@ impl PersistentSession {
             .copied()
             .map(|p| self.output_flip_mask(p))
             .collect()
+    }
+
+    /// Select the proposal with the greatest number of flipped output lanes.
+    /// This is label-free Boolean sensitivity, NOT credit assignment or a
+    /// learning objective. Equal scores retain the earliest proposal.
+    /// The accepted model and persistent cache are never modified.
+    pub fn most_sensitive_proposal(
+        &self,
+        proposals: &[PackedIntervention],
+        max_proposals: usize,
+    ) -> Result<Option<(usize, u32, u64)>, HierarchyError> {
+        if proposals.len() > max_proposals {
+            return Err(HierarchyError::InvalidInput);
+        }
+        let baseline = self.output();
+        let mut best: Option<(usize, u32, u64)> = None;
+        for (index, &proposal) in proposals.iter().enumerate() {
+            let mask = baseline ^ self.propose(proposal)?;
+            let flips = mask.count_ones();
+            if best.is_none_or(|(_, previous, _)| flips > previous) {
+                best = Some((index, flips, mask));
+            }
+        }
+        Ok(best)
     }
 
     /// Rank independent interventions by output sensitivity per affected gate.
@@ -310,7 +697,7 @@ impl PersistentSession {
             return Err(HierarchyError::InvalidInput);
         }
         // Validate the intervention and construct the independent full oracle.
-        let candidate = match proposal {
+        let _candidate = match proposal {
             PackedIntervention::LeafSwap { first, second } => {
                 if first >= self.model.input_bits()
                     || second >= self.model.input_bits()
@@ -339,10 +726,6 @@ impl PersistentSession {
                 self.model.with_neuron_parameters(layer, neuron, model)?
             }
         };
-        let mut planes = vec![0u64; self.model.input_bits()];
-        for (position, &source) in self.model.routing().iter().enumerate() {
-            planes[usize::from(source)] = self.stages[0][position];
-        }
         let mut full_ns = 0u128;
         let mut incremental_ns = 0u128;
         let mut full_output = 0;
@@ -351,8 +734,25 @@ impl PersistentSession {
         for round in 0..repetitions {
             if round % 2 == 0 {
                 let start = Instant::now();
-                full_output =
-                    std::hint::black_box(candidate.infer_bitplanes(std::hint::black_box(&planes))?);
+                let measured_candidate = match proposal {
+                    PackedIntervention::LeafSwap { first, second } => {
+                        let mut routing = self.model.routing().to_vec();
+                        routing.swap(first, second);
+                        self.model.rerouted(routing)?
+                    }
+                    PackedIntervention::Parameter {
+                        layer,
+                        neuron,
+                        model,
+                    } => self.model.with_neuron_parameters(layer, neuron, model)?,
+                };
+                let mut measured_planes = vec![0u64; self.model.input_bits()];
+                for (position, &source) in self.model.routing().iter().enumerate() {
+                    measured_planes[usize::from(source)] = self.stages[0][position];
+                }
+                full_output = std::hint::black_box(
+                    measured_candidate.infer_bitplanes(std::hint::black_box(&measured_planes))?,
+                );
                 full_ns = full_ns.saturating_add(start.elapsed().as_nanos());
                 let start = Instant::now();
                 incremental_output =
@@ -364,8 +764,25 @@ impl PersistentSession {
                     std::hint::black_box(self.propose(std::hint::black_box(proposal))?);
                 incremental_ns = incremental_ns.saturating_add(start.elapsed().as_nanos());
                 let start = Instant::now();
-                full_output =
-                    std::hint::black_box(candidate.infer_bitplanes(std::hint::black_box(&planes))?);
+                let measured_candidate = match proposal {
+                    PackedIntervention::LeafSwap { first, second } => {
+                        let mut routing = self.model.routing().to_vec();
+                        routing.swap(first, second);
+                        self.model.rerouted(routing)?
+                    }
+                    PackedIntervention::Parameter {
+                        layer,
+                        neuron,
+                        model,
+                    } => self.model.with_neuron_parameters(layer, neuron, model)?,
+                };
+                let mut measured_planes = vec![0u64; self.model.input_bits()];
+                for (position, &source) in self.model.routing().iter().enumerate() {
+                    measured_planes[usize::from(source)] = self.stages[0][position];
+                }
+                full_output = std::hint::black_box(
+                    measured_candidate.infer_bitplanes(std::hint::black_box(&measured_planes))?,
+                );
                 full_ns = full_ns.saturating_add(start.elapsed().as_nanos());
             }
             if full_output != incremental_output {
@@ -477,9 +894,283 @@ impl PersistentSession {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn sequence_summary_aggregates_heterogeneous_workload_without_inventing_memory() {
+        let trace = [
+            VerifiedStepTelemetry {
+                output: 1,
+                accepted: true,
+                updated_gates: 7,
+                elapsed_ns: 250_000_000,
+                vmhwm_kib: None,
+            },
+            VerifiedStepTelemetry {
+                output: 0,
+                accepted: false,
+                updated_gates: 0,
+                elapsed_ns: 500_000_000,
+                vmhwm_kib: Some(1024),
+            },
+            VerifiedStepTelemetry {
+                output: 1,
+                accepted: true,
+                updated_gates: 3,
+                elapsed_ns: 250_000_000,
+                vmhwm_kib: Some(900),
+            },
+        ];
+        let s = VerifiedSequenceSummary::from_trace(&trace).unwrap();
+        assert_eq!(s.interventions, 3);
+        assert_eq!(s.accepted, 2);
+        assert_eq!(s.updated_gates, 10);
+        assert_eq!(s.elapsed_ns, 1_000_000_000);
+        assert_eq!(s.interventions_per_second, 3);
+        assert_eq!(s.max_vmhwm_kib, Some(1024));
+        assert_eq!(
+            VerifiedSequenceSummary::from_trace(&[])
+                .unwrap()
+                .interventions_per_second,
+            0
+        );
+        let overflow = [
+            VerifiedStepTelemetry {
+                elapsed_ns: u128::MAX,
+                ..trace[0].clone()
+            },
+            trace[1].clone(),
+        ];
+        assert!(VerifiedSequenceSummary::from_trace(&overflow).is_none());
+        let no_memory = VerifiedSequenceSummary::from_trace(&trace[..1]).unwrap();
+        assert_eq!(no_memory.max_vmhwm_kib, None);
+    }
     use super::*;
     use crate::fourier5::FiveCircle;
     use crate::fourier5_hierarchy::{GateKind, LeafRouting};
+
+    #[test]
+    fn sensitivity_selection_matches_full_oracle_without_mutation() {
+        let model = FiveCircleHierarchy::from_modes(
+            &[GateKind::Majority, GateKind::Parity, GateKind::Or],
+            LeafRouting::SeededShuffle(307),
+        )
+        .unwrap();
+        let planes: Vec<u64> = (0..model.input_bits())
+            .map(|i| (i as u64 + 91).wrapping_mul(0x9e3779b97f4a7c15))
+            .collect();
+        let session = PersistentSession::new(model.clone(), planes.clone()).unwrap();
+        let proposals: Vec<_> = (0..12)
+            .map(|i| PackedIntervention::LeafSwap {
+                first: i,
+                second: i + 31,
+            })
+            .collect();
+        let baseline = model.infer_bitplanes(&planes).unwrap();
+        let oracle: Vec<_> = proposals
+            .iter()
+            .map(|proposal| {
+                let PackedIntervention::LeafSwap { first, second } = *proposal else {
+                    unreachable!()
+                };
+                let mut routing = model.routing().to_vec();
+                routing.swap(first, second);
+                baseline
+                    ^ model
+                        .rerouted(routing)
+                        .unwrap()
+                        .infer_bitplanes(&planes)
+                        .unwrap()
+            })
+            .collect();
+        let expected_index = (0..oracle.len())
+            .max_by_key(|&i| (oracle[i].count_ones(), std::cmp::Reverse(i)))
+            .unwrap();
+        assert_eq!(
+            session.most_sensitive_proposal(&proposals, 12).unwrap(),
+            Some((
+                expected_index,
+                oracle[expected_index].count_ones(),
+                oracle[expected_index]
+            ))
+        );
+        assert!(matches!(
+            session.most_sensitive_proposal(&proposals, 11),
+            Err(HierarchyError::InvalidInput)
+        ));
+        assert_eq!(session.most_sensitive_proposal(&[], 0).unwrap(), None);
+        assert_eq!(session.output(), baseline);
+        assert_eq!(session.updated_gates, 0);
+    }
+
+    #[test]
+    fn profiled_mixed_sequence_refreshes_cache_and_matches_full_oracle() {
+        let model = FiveCircleHierarchy::from_modes(
+            &[GateKind::Majority, GateKind::Parity, GateKind::Or],
+            LeafRouting::SeededShuffle(113),
+        )
+        .unwrap();
+        let planes: Vec<u64> = (0..model.input_bits())
+            .map(|i| (i as u64 + 23).wrapping_mul(0x9e3779b97f4a7c15))
+            .collect();
+        let mut session = PersistentSession::new(model.clone(), planes.clone()).unwrap();
+        let mut reference = model;
+        let interventions: Vec<_> = (0..16)
+            .map(|step| {
+                (
+                    PackedIntervention::LeafSwap {
+                        first: step,
+                        second: step + 25,
+                    },
+                    step % 3 != 1,
+                )
+            })
+            .collect();
+        assert!(matches!(
+            session.execute_profiled_verified_sequence(&interventions, 15),
+            Err(HierarchyError::InvalidInput)
+        ));
+        assert_eq!(session.updated_gates, 0);
+        let trace = session
+            .execute_profiled_verified_sequence(&interventions, 16)
+            .unwrap();
+        assert_eq!(trace.len(), interventions.len());
+        for ((proposal, accepted), step) in interventions.iter().zip(&trace) {
+            let PackedIntervention::LeafSwap { first, second } = *proposal else {
+                unreachable!()
+            };
+            let mut routing = reference.routing().to_vec();
+            routing.swap(first, second);
+            let candidate = reference.rerouted(routing).unwrap();
+            assert_eq!(step.output, candidate.infer_bitplanes(&planes).unwrap());
+            assert_eq!(step.accepted, *accepted);
+            if *accepted {
+                assert!(step.updated_gates > 0);
+                reference = candidate;
+            } else {
+                assert_eq!(step.updated_gates, 0);
+            }
+        }
+        assert_eq!(
+            session.output(),
+            reference.infer_bitplanes(&planes).unwrap()
+        );
+        assert_eq!(
+            session.updated_gates,
+            trace.iter().map(|step| step.updated_gates).sum::<usize>()
+        );
+    }
+
+    #[test]
+    fn sequential_trace_matches_independent_full_with_mixed_acceptance() {
+        let model = FiveCircleHierarchy::from_modes(
+            &[GateKind::Majority, GateKind::Parity, GateKind::Or],
+            LeafRouting::SeededShuffle(53),
+        )
+        .unwrap();
+        let planes: Vec<u64> = (0..model.input_bits())
+            .map(|i| (i as u64 + 17).wrapping_mul(0x9e3779b97f4a7c15))
+            .collect();
+        let mut session = PersistentSession::new(model.clone(), planes.clone()).unwrap();
+        let steps: Vec<_> = (0..18)
+            .map(|i| {
+                (
+                    PackedIntervention::LeafSwap {
+                        first: i,
+                        second: i + 19,
+                    },
+                    i % 3 != 1,
+                )
+            })
+            .collect();
+        assert!(matches!(
+            session.execute_verified_sequence(&steps, 17),
+            Err(HierarchyError::InvalidInput)
+        ));
+        assert_eq!(session.output(), model.infer_bitplanes(&planes).unwrap());
+        let trace = session.execute_verified_sequence(&steps, 18).unwrap();
+        let mut independent = model;
+        for ((proposal, accepted), (output, updated)) in steps.iter().zip(trace) {
+            let PackedIntervention::LeafSwap { first, second } = *proposal else {
+                unreachable!()
+            };
+            let mut routing = independent.routing().to_vec();
+            routing.swap(first, second);
+            let candidate = independent.rerouted(routing).unwrap();
+            assert_eq!(output, candidate.infer_bitplanes(&planes).unwrap());
+            if *accepted {
+                assert!(updated > 0);
+                independent = candidate;
+            } else {
+                assert_eq!(updated, 0);
+            }
+        }
+        assert_eq!(
+            session.output(),
+            independent.infer_bitplanes(&planes).unwrap()
+        );
+    }
+
+    #[test]
+    fn atomic_sequence_rolls_back_late_error_and_matches_independent_full() {
+        let base = FiveCircleHierarchy::from_modes(
+            &[GateKind::Majority, GateKind::Parity],
+            LeafRouting::SeededShuffle(83),
+        )
+        .unwrap();
+        let planes: Vec<u64> = (0..base.input_bits())
+            .map(|i| (i as u64 + 31).wrapping_mul(0x9e3779b97f4a7c15))
+            .collect();
+        let mut session = PersistentSession::new(base.clone(), planes.clone()).unwrap();
+        let initial = session.output();
+        let accepted = PackedIntervention::LeafSwap {
+            first: 0,
+            second: 7,
+        };
+        let invalid = PackedIntervention::LeafSwap {
+            first: 0,
+            second: base.input_bits(),
+        };
+        assert!(session
+            .execute_atomic_verified_sequence(&[(accepted, true), (invalid, true)], 2)
+            .is_err());
+        assert_eq!(session.output(), initial);
+        assert_eq!(session.model().routing(), base.routing());
+        assert_eq!(session.updated_gates, 0);
+        assert_eq!(session.rebuilt_gates, base.neuron_count());
+
+        let steps = [
+            (accepted, true),
+            (
+                PackedIntervention::LeafSwap {
+                    first: 3,
+                    second: 9,
+                },
+                false,
+            ),
+        ];
+        let trace = session.execute_atomic_verified_sequence(&steps, 2).unwrap();
+        let mut routing = base.routing().to_vec();
+        routing.swap(0, 7);
+        let committed = base.rerouted(routing).unwrap();
+        assert_eq!(trace[0].0, committed.infer_bitplanes(&planes).unwrap());
+        let mut rejected_routing = committed.routing().to_vec();
+        rejected_routing.swap(3, 9);
+        assert_eq!(
+            trace[1].0,
+            committed
+                .rerouted(rejected_routing)
+                .unwrap()
+                .infer_bitplanes(&planes)
+                .unwrap()
+        );
+        assert_eq!(trace[1].1, 0);
+        assert_eq!(
+            session.output(),
+            committed.infer_bitplanes(&planes).unwrap()
+        );
+        assert_eq!(session.model().routing(), committed.routing());
+        assert!(session.updated_gates > 0);
+    }
 
     #[test]
     fn flip_per_cone_ranking_matches_full_oracle_and_preserves_cache() {
@@ -812,5 +1503,212 @@ mod tests {
             }
             assert_eq!(session.rebuilt_gates, reference.neuron_count());
         }
+    }
+    #[test]
+    fn atomic_profiled_sequence_rolls_back_and_commits_exact_cache() {
+        let base = FiveCircleHierarchy::from_modes(
+            &[GateKind::Majority, GateKind::Majority, GateKind::Majority],
+            LeafRouting::SeededShuffle(47),
+        )
+        .unwrap();
+        let planes: Vec<u64> = (0..base.input_bits())
+            .map(|i| (i as u64 + 11).wrapping_mul(0x9e3779b97f4a7c15))
+            .collect();
+        let mut session = PersistentSession::new(base.clone(), planes.clone()).unwrap();
+        let initial = session.output();
+        let valid = PackedIntervention::LeafSwap {
+            first: 0,
+            second: 17,
+        };
+        let invalid = PackedIntervention::LeafSwap {
+            first: 0,
+            second: base.input_bits(),
+        };
+        assert!(matches!(
+            session.execute_atomic_profiled_verified_sequence(&[(valid, true), (invalid, true)], 2),
+            Err(HierarchyError::InvalidRouting)
+        ));
+        assert_eq!(session.output(), initial);
+        assert_eq!(session.model().routing(), base.routing());
+        assert_eq!(session.updated_gates, 0);
+        assert!(matches!(
+            session.execute_atomic_profiled_verified_sequence(&[(valid, true)], 0),
+            Err(HierarchyError::InvalidInput)
+        ));
+        let trace = session
+            .execute_atomic_profiled_verified_sequence(&[(valid, true), (valid, false)], 2)
+            .unwrap();
+        assert_eq!(trace.len(), 2);
+        assert!(trace[0].accepted);
+        assert!(!trace[1].accepted);
+        assert_eq!(trace[1].updated_gates, 0);
+        let mut routing = base.routing().to_vec();
+        routing.swap(0, 17);
+        let accepted = base.rerouted(routing).unwrap();
+        assert_eq!(session.output(), accepted.infer_bitplanes(&planes).unwrap());
+        assert_eq!(trace[0].output, session.output());
+        assert_eq!(trace[1].output, initial);
+    }
+}
+
+#[cfg(test)]
+mod paired_sequence_audit_tests {
+    use super::{VerifiedPairedSequenceAudit, VerifiedStepTelemetry};
+    fn step(
+        output: u64,
+        accepted: bool,
+        gates: usize,
+        ns: u128,
+        mem: Option<u64>,
+    ) -> VerifiedStepTelemetry {
+        VerifiedStepTelemetry {
+            output,
+            accepted,
+            updated_gates: gates,
+            elapsed_ns: ns,
+            vmhwm_kib: mem,
+        }
+    }
+
+    #[test]
+    fn matched_workloads_reject_hidden_proposal_and_schedule_drift() {
+        use crate::fourier5_incremental::PackedIntervention;
+        let left = [
+            (
+                PackedIntervention::LeafSwap {
+                    first: 1,
+                    second: 3,
+                },
+                true,
+            ),
+            (
+                PackedIntervention::LeafSwap {
+                    first: 2,
+                    second: 4,
+                },
+                false,
+            ),
+        ];
+        let changed = [
+            (
+                PackedIntervention::LeafSwap {
+                    first: 1,
+                    second: 3,
+                },
+                true,
+            ),
+            (
+                PackedIntervention::LeafSwap {
+                    first: 2,
+                    second: 5,
+                },
+                false,
+            ),
+        ];
+        let wrong_accept = [
+            (
+                PackedIntervention::LeafSwap {
+                    first: 1,
+                    second: 3,
+                },
+                false,
+            ),
+            (
+                PackedIntervention::LeafSwap {
+                    first: 2,
+                    second: 4,
+                },
+                false,
+            ),
+        ];
+        let old = [step(7, true, 3, 400, None), step(9, false, 0, 200, None)];
+        let new = [step(7, true, 3, 200, None), step(9, false, 0, 100, None)];
+        assert_eq!(
+            VerifiedPairedSequenceAudit::compare_matched_workloads(&left, &left, &old, &new)
+                .unwrap()
+                .speedup_milli,
+            Some(2000)
+        );
+        assert!(VerifiedPairedSequenceAudit::compare_matched_workloads(
+            &left, &changed, &old, &new
+        )
+        .is_none());
+        assert!(VerifiedPairedSequenceAudit::compare_matched_workloads(
+            &left,
+            &wrong_accept,
+            &old,
+            &new
+        )
+        .is_none());
+        assert!(VerifiedPairedSequenceAudit::compare_matched_workloads(
+            &left[..1],
+            &left[..1],
+            &old,
+            &new
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn stratified_audit_detects_hidden_accepted_regression() {
+        let baseline = [step(1, true, 3, 100, None), step(2, false, 0, 900, None)];
+        let candidate = [step(1, true, 3, 150, None), step(2, false, 0, 100, None)];
+        let audit = VerifiedPairedSequenceAudit::compare_stratified(&baseline, &candidate).unwrap();
+        assert_eq!(audit.paired.speedup_milli, Some(4000));
+        assert_eq!(audit.accepted_speedup_milli, Some(666));
+        assert_eq!(audit.rejected_speedup_milli, Some(9000));
+        assert_eq!((audit.accepted_steps, audit.rejected_steps), (1, 1));
+        assert!(!audit.no_class_regression);
+        let accepted_only =
+            VerifiedPairedSequenceAudit::compare_stratified(&baseline[..1], &candidate[..1])
+                .unwrap();
+        assert_eq!(accepted_only.rejected_speedup_milli, None);
+        assert!(
+            VerifiedPairedSequenceAudit::compare_stratified(&baseline, &candidate[..1]).is_none()
+        );
+    }
+
+    #[test]
+    fn paired_audit_preserves_decisions_and_reports_integer_speedup() {
+        let baseline = vec![
+            step(0x55, true, 4, 300, Some(120)),
+            step(0xaa, false, 0, 100, None),
+        ];
+        let candidate = vec![
+            step(0x55, true, 4, 120, Some(90)),
+            step(0xaa, false, 0, 80, None),
+        ];
+        let audit = VerifiedPairedSequenceAudit::compare(&baseline, &candidate).unwrap();
+        assert_eq!(audit.steps, 2);
+        assert_eq!(audit.baseline_ns, 400);
+        assert_eq!(audit.candidate_ns, 200);
+        assert_eq!(audit.speedup_milli, Some(2000));
+        assert_eq!(audit.baseline_vmhwm_kib, Some(120));
+        assert_eq!(audit.candidate_vmhwm_kib, Some(90));
+        for mismatch in [
+            vec![step(0x54, true, 4, 120, None), candidate[1].clone()],
+            vec![step(0x55, false, 4, 120, None), candidate[1].clone()],
+            vec![step(0x55, true, 5, 120, None), candidate[1].clone()],
+            vec![candidate[0].clone()],
+        ] {
+            assert!(VerifiedPairedSequenceAudit::compare(&baseline, &mismatch).is_none());
+        }
+        let zero = vec![step(0x55, true, 4, 0, None), step(0xaa, false, 0, 0, None)];
+        assert_eq!(
+            VerifiedPairedSequenceAudit::compare(&baseline, &zero)
+                .unwrap()
+                .speedup_milli,
+            None
+        );
+        let huge = vec![
+            step(0x55, true, 4, u128::MAX, None),
+            step(0xaa, false, 0, 0, None),
+        ];
+        assert_eq!(
+            VerifiedPairedSequenceAudit::compare(&huge, &candidate)
+                .unwrap()
+                .speedup_milli,
+            None
+        );
     }
 }
