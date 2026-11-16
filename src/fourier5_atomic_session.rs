@@ -84,7 +84,7 @@ mod tests {
         let mut s = AtomicSession { circuit: vec![false], cache: 0usize, revision: u64::MAX };
         let before = s.clone();
         assert_eq!(apply_atomic(&mut s,
-            |_| panic!("must not mutate on overflow") as Result<bool, ()>,
+            |_| panic!("must not mutate on overflow"),
             |_, _| Ok(())), Err(AtomicError::RevisionOverflow));
         assert_eq!(s, before);
     }
