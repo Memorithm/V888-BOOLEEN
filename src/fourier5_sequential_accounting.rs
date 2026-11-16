@@ -36,7 +36,11 @@ impl SequenceTotals {
     pub fn verify(trace: &[PairedIntervention]) -> Result<Self, SequenceError> {
         if trace.is_empty() { return Err(SequenceError::Empty); }
         let mut result = Self::default();
+        let mut previous_revision: Option<u64> = None;
         for item in trace {
+            if previous_revision.is_some_and(|revision| revision != item.revision_before) {
+                return Err(SequenceError::RevisionMismatch);
+            }
             if item.full_ns == 0 || item.incremental_ns == 0 {
                 return Err(SequenceError::ZeroDuration);
             }
@@ -52,6 +56,7 @@ impl SequenceTotals {
             if item.revision_after != expected {
                 return Err(SequenceError::RevisionMismatch);
             }
+            previous_revision = Some(item.revision_after);
             result.steps = result.steps.checked_add(1).ok_or(SequenceError::Overflow)?;
             if item.accepted {
                 result.accepted = result.accepted.checked_add(1).ok_or(SequenceError::Overflow)?;
@@ -120,6 +125,13 @@ mod tests {
         bad = base;
         bad.revision_after = 5;
         assert_eq!(SequenceTotals::verify(&[bad]), Err(SequenceError::RevisionMismatch));
+    }
+
+    #[test]
+    fn trace_revision_discontinuity_is_rejected() {
+        let first = record(true, 0, 10, 5);
+        let skipped = record(false, 9, 10, 5);
+        assert_eq!(SequenceTotals::verify(&[first, skipped]), Err(SequenceError::RevisionMismatch));
     }
 
     #[test]
