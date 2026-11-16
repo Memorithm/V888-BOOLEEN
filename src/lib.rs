@@ -289,3 +289,6 @@ pub mod fourier5_conservative_policy;
 
 /// Held-out sequential performance and decision-regression audit.
 pub mod fourier5_sequential_holdout;
+
+/// Split-disjoint provenance and sequential revision validation for synthetic traces.
+pub mod fourier5_trace_provenance;
