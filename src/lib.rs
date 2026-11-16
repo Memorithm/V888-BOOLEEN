@@ -286,3 +286,6 @@ pub mod fourier5_verified_replay;
 
 /// Conservative VALID-frozen engine selection for synthetic wide circuits.
 pub mod fourier5_conservative_policy;
+
+/// Held-out sequential performance and decision-regression audit.
+pub mod fourier5_sequential_holdout;
