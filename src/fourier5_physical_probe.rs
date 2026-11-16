@@ -115,8 +115,8 @@ impl InterventionSample {
 
 /// Measure a complete intervention, including any cache reconstruction inside
 /// the callback. Failure to sample memory before the operation prevents mutation;
-/// failure after the operation is reported alongside the callback result so the
-/// caller cannot mistake a committed mutation for a rollback.
+/// failure after the operation returns an I/O error even if mutation committed.
+/// Callers must NOT interpret that error as a rollback; reconcile session state.
 pub fn sample_intervention<T, E>(
     operation: impl FnOnce() -> Result<T, E>,
 ) -> io::Result<(InterventionSample, Result<T, E>)> {
