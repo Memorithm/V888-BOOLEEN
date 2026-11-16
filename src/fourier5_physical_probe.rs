@@ -95,3 +95,66 @@ mod tests {
         assert_eq!(err, Err(9));
     }
 }
+
+/// One real process-level sample around an entire sequential intervention.
+/// The high-water mark is cumulative and cannot attribute memory to this step.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InterventionSample {
+    pub elapsed: Duration,
+    pub before: PeakRss,
+    pub after: PeakRss,
+}
+
+impl InterventionSample {
+    /// Conservative non-attributable increase in process-wide peak RSS.
+    #[must_use]
+    pub fn peak_increase_kib(self) -> u64 {
+        self.after.kib.saturating_sub(self.before.kib)
+    }
+}
+
+/// Measure a complete intervention, including any cache reconstruction inside
+/// the callback. Failure to sample memory before the operation prevents mutation;
+/// failure after the operation is reported alongside the callback result so the
+/// caller cannot mistake a committed mutation for a rollback.
+pub fn sample_intervention<T, E>(
+    operation: impl FnOnce() -> Result<T, E>,
+) -> io::Result<(InterventionSample, Result<T, E>)> {
+    let before = process_peak_rss()?;
+    let (elapsed, outcome) = time_intervention(operation);
+    let after = process_peak_rss()?;
+    Ok((InterventionSample { elapsed, before, after }, outcome))
+}
+
+#[cfg(test)]
+mod sequential_sample_tests {
+    use super::*;
+
+    #[test]
+    fn peak_delta_is_saturating_not_an_allocation_claim() {
+        let sample = InterventionSample {
+            elapsed: Duration::from_nanos(17),
+            before: PeakRss { kib: 900 },
+            after: PeakRss { kib: 950 },
+        };
+        assert_eq!(sample.peak_increase_kib(), 50);
+        assert_eq!(
+            InterventionSample {
+                after: PeakRss { kib: 800 },
+                ..sample
+            }
+            .peak_increase_kib(),
+            0
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn physical_sample_preserves_success_and_error() {
+        let (ok_sample, ok) = sample_intervention(|| Ok::<_, u8>(42)).unwrap();
+        assert_eq!(ok, Ok(42));
+        assert!(ok_sample.after.kib >= ok_sample.before.kib);
+        let (_, error) = sample_intervention(|| Err::<u8, _>(7)).unwrap();
+        assert_eq!(error, Err(7));
+    }
+}
