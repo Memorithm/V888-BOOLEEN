@@ -706,3 +706,66 @@ mod sequential_cache_revision_tests {
         assert_eq!(state.choose(1, 1, &[]), Ok(EngineChoice::Full));
     }
 }
+
+
+/// Rebuild a cache for the committed revision as a fail-closed transaction.
+///
+/// The callback must actually rebuild the caller-owned cache from the current
+/// circuit. A failed callback never certifies the cache, even if it was valid
+/// before the attempted rebuild. No synthetic timing is inferred here.
+impl CacheRevision {
+    pub fn rebuild_transaction<E>(
+        &mut self,
+        rebuild: impl FnOnce(u64) -> Result<(), E>,
+    ) -> Result<(), E> {
+        // Invalidate before executing arbitrary caller code. In particular,
+        // a failed rebuild must not retain a previously valid certificate.
+        self.cached_revision = None;
+        let revision = self.circuit_revision;
+        rebuild(revision)?;
+        self.cached_revision = Some(revision);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod transactional_cache_tests {
+    use super::*;
+
+    #[test]
+    fn successful_rebuild_certifies_only_current_revision() {
+        let mut state = CacheRevision {
+            circuit_revision: 4,
+            cached_revision: Some(4),
+        };
+        let mut observed = None;
+        state.rebuild_transaction(|revision| {
+            observed = Some(revision);
+            Ok::<(), ()>(())
+        }).unwrap();
+        assert_eq!(observed, Some(4));
+        assert_eq!(state.cached_revision, Some(4));
+        state.committed().unwrap();
+        assert_eq!(state.cached_revision, None);
+        state.rebuild_transaction(|revision| {
+            assert_eq!(revision, 5);
+            Ok::<(), ()>(())
+        }).unwrap();
+        assert_eq!(state.cached_revision, Some(5));
+    }
+
+    #[test]
+    fn failed_rebuild_revokes_even_previously_valid_cache() {
+        let mut state = CacheRevision {
+            circuit_revision: 9,
+            cached_revision: Some(9),
+        };
+        let result = state.rebuild_transaction(|revision| {
+            assert_eq!(revision, 9);
+            Err::<(), _>("incomplete rebuild")
+        });
+        assert_eq!(result, Err("incomplete rebuild"));
+        assert_eq!(state.cached_revision, None);
+        assert_eq!(state.choose(100, 1, &[]), Ok(EngineChoice::Full));
+    }
+}
