@@ -1207,3 +1207,113 @@ mod measured_sequential_runtime_oracle_tests {
         assert_eq!(choose(&groups, 100), Ok(EngineChoice::Full));
     }
 }
+
+
+/// Execute a sequential intervention and maintain the cache certificate.
+///
+/// The caller supplies the actual mutation and full cache reconstruction.
+/// A rejected intervention preserves the cache. An accepted intervention
+/// invalidates it before rebuilding; rebuild failures cannot certify stale data.
+/// The mutation callback must be transactional: an error must leave the circuit
+/// unchanged. This function does not invent or measure reconstruction timings.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SequentialCommitError<E> {
+    Revision(RevisionError),
+    Mutation(E),
+    Rebuild(E),
+}
+
+pub fn execute_sequential_commit<E>(
+    revision: &mut CacheRevision,
+    mutate: impl FnOnce() -> Result<bool, E>,
+    rebuild: impl FnOnce(u64) -> Result<(), E>,
+) -> Result<bool, SequentialCommitError<E>> {
+    // Avoid executing a mutation that cannot be assigned a new revision.
+    if revision.circuit_revision == u64::MAX {
+        return Err(SequentialCommitError::Revision(RevisionError::Overflow));
+    }
+    if revision.cached_revision.is_some_and(|cached| cached > revision.circuit_revision) {
+        return Err(SequentialCommitError::Revision(RevisionError::FutureCache));
+    }
+    let accepted = mutate().map_err(SequentialCommitError::Mutation)?;
+    if !accepted {
+        revision.rejected();
+        return Ok(false);
+    }
+    revision.committed().map_err(SequentialCommitError::Revision)?;
+    revision.rebuild_transaction(rebuild)
+        .map_err(SequentialCommitError::Rebuild)?;
+    Ok(true)
+}
+
+#[cfg(test)]
+mod sequential_commit_oracle_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn independent_state_machine_oracle_for_accepted_and_rejected_sequence() {
+        let mut state = CacheRevision {
+            circuit_revision: 12,
+            cached_revision: Some(12),
+        };
+        let rebuild_count = Cell::new(0);
+        assert_eq!(
+            execute_sequential_commit(&mut state, || Ok::<_, &str>(false), |_| {
+                rebuild_count.set(rebuild_count.get() + 1);
+                Ok(())
+            }),
+            Ok(false)
+        );
+        assert_eq!((state.circuit_revision, state.cached_revision), (12, Some(12)));
+        assert_eq!(rebuild_count.get(), 0);
+        assert_eq!(
+            execute_sequential_commit(&mut state, || Ok::<_, &str>(true), |rev| {
+                assert_eq!(rev, 13);
+                rebuild_count.set(rebuild_count.get() + 1);
+                Ok(())
+            }),
+            Ok(true)
+        );
+        assert_eq!((state.circuit_revision, state.cached_revision), (13, Some(13)));
+        assert_eq!(rebuild_count.get(), 1);
+        assert_eq!(
+            execute_sequential_commit(&mut state, || Ok::<_, &str>(true), |rev| {
+                assert_eq!(rev, 14);
+                Err("rebuild failed")
+            }),
+            Err(SequentialCommitError::Rebuild("rebuild failed"))
+        );
+        assert_eq!((state.circuit_revision, state.cached_revision), (14, None));
+    }
+
+    #[test]
+    fn mutation_error_and_overflow_never_claim_cache_rebuild() {
+        let mut state = CacheRevision {
+            circuit_revision: 2,
+            cached_revision: Some(2),
+        };
+        let rebuilt = Cell::new(false);
+        assert_eq!(
+            execute_sequential_commit(&mut state, || Err::<bool, _>("mutation failed"), |_| {
+                rebuilt.set(true);
+                Ok(())
+            }),
+            Err(SequentialCommitError::Mutation("mutation failed"))
+        );
+        assert_eq!((state.circuit_revision, state.cached_revision), (2, Some(2)));
+        assert!(!rebuilt.get());
+        state.circuit_revision = u64::MAX;
+        state.cached_revision = Some(u64::MAX);
+        let mutated = Cell::new(false);
+        assert_eq!(
+            execute_sequential_commit(&mut state, || {
+                mutated.set(true);
+                Ok::<_, &str>(true)
+            }, |_| Ok(())),
+            Err(SequentialCommitError::Revision(RevisionError::Overflow))
+        );
+        assert!(!mutated.get());
+        assert_eq!(state.cached_revision, Some(u64::MAX));
+    }
+}
