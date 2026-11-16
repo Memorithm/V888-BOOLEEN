@@ -21,6 +21,7 @@ pub mod eligibility_trace;
 pub mod engine;
 pub mod error_gated;
 pub mod fourier5;
+pub mod fourier5_atomic_session;
 pub mod fourier5_context_search;
 pub mod fourier5_counterfactual_credit;
 pub mod fourier5_dynamic;
@@ -32,6 +33,7 @@ pub mod fourier5_incremental;
 pub mod fourier5_joint_search;
 pub mod fourier5_local_learning;
 pub mod fourier5_mask_learning;
+pub mod fourier5_measured_dispatch;
 pub mod fourier5_persistent_session;
 pub mod fourier5_population_eligibility;
 pub mod fourier5_recurrent;
@@ -258,6 +260,8 @@ pub mod fourier5_compact;
 pub mod fourier5_joint_audit;
 pub mod fourier5_online_policy;
 pub mod fourier5_recent_policy;
+pub mod fourier5_runtime_breaker;
+pub mod fourier5_sequential_accounting;
 pub mod fourier5_validation_selection;
 pub mod gate_return_recall;
 pub mod heldout_regional_recall;
@@ -277,3 +281,14 @@ pub mod regional_window_consistency;
 pub mod regional_window_stability;
 pub mod write_allocation;
 pub mod write_budget;
+
+pub mod fourier5_verified_replay;
+
+/// Conservative VALID-frozen engine selection for synthetic wide circuits.
+pub mod fourier5_conservative_policy;
+
+/// Held-out sequential performance and decision-regression audit.
+pub mod fourier5_sequential_holdout;
+
+/// Split-disjoint provenance and sequential revision validation for synthetic traces.
+pub mod fourier5_trace_provenance;
