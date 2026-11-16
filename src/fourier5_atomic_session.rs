@@ -89,3 +89,95 @@ mod tests {
         assert_eq!(s, before);
     }
 }
+
+
+/// Lower-memory atomic commit path: construct a new cache from the accepted
+/// candidate instead of cloning the previous cache. The cache factory is
+/// invoked only after acceptance; failures leave the committed pair intact.
+/// This is useful when the cached cone state is large, but still clones C.
+/// No speed or memory benefit is claimed without physical measurement.
+pub fn apply_atomic_fresh_cache<C: Clone, K, E>(
+    session: &mut AtomicSession<C, K>,
+    mutate: impl FnOnce(&mut C) -> Result<bool, E>,
+    build_cache: impl FnOnce(&C) -> Result<K, E>,
+) -> Result<bool, AtomicError<E>> {
+    let mut candidate = session.circuit.clone();
+    let accepted = mutate(&mut candidate).map_err(AtomicError::Mutation)?;
+    if !accepted {
+        return Ok(false);
+    }
+    let next_revision = session.revision.checked_add(1).ok_or(AtomicError::RevisionOverflow)?;
+    let cache = build_cache(&candidate).map_err(AtomicError::Rebuild)?;
+    session.circuit = candidate;
+    session.cache = cache;
+    session.revision = next_revision;
+    Ok(true)
+}
+
+#[cfg(test)]
+mod fresh_cache_tests {
+    use super::*;
+
+    struct NonCloneCache(usize);
+
+    #[test]
+    fn sequential_nonclone_cache_matches_independent_full_oracle() {
+        let mut s = AtomicSession {
+            circuit: vec![false; 23],
+            cache: NonCloneCache(0),
+            revision: 0,
+        };
+        for index in [0, 22, 11, 0, 5, 22] {
+            let accepted = apply_atomic_fresh_cache(
+                &mut s,
+                |bits| { bits[index] = !bits[index]; Ok::<_, ()>(true) },
+                |bits| Ok::<_, ()>(NonCloneCache(bits.iter().filter(|&&v| v).count())),
+            ).unwrap();
+            assert!(accepted);
+            assert_eq!(s.cache.0, s.circuit.iter().filter(|&&v| v).count());
+        }
+        assert_eq!(s.revision, 6);
+    }
+
+    #[test]
+    fn reject_and_failed_build_preserve_committed_nonclone_cache() {
+        let mut s = AtomicSession {
+            circuit: vec![true, false],
+            cache: NonCloneCache(1),
+            revision: 7,
+        };
+        assert!(!apply_atomic_fresh_cache(
+            &mut s,
+            |bits| { bits[1] = true; Ok::<_, &str>(false) },
+            |_| panic!("rejected candidate must not build cache"),
+        ).unwrap());
+        assert_eq!(s.circuit, [true, false]);
+        assert_eq!(s.cache.0, 1);
+        assert_eq!(s.revision, 7);
+        assert_eq!(apply_atomic_fresh_cache(
+            &mut s,
+            |bits| { bits[1] = true; Ok::<_, &str>(true) },
+            |_| Err::<NonCloneCache, _>("failed"),
+        ), Err(AtomicError::Rebuild("failed")));
+        assert_eq!(s.circuit, [true, false]);
+        assert_eq!(s.cache.0, 1);
+        assert_eq!(s.revision, 7);
+    }
+
+    #[test]
+    fn overflow_preserves_state_and_does_not_build_cache() {
+        let mut s = AtomicSession {
+            circuit: vec![false],
+            cache: NonCloneCache(0),
+            revision: u64::MAX,
+        };
+        assert_eq!(apply_atomic_fresh_cache(
+            &mut s,
+            |bits| { bits[0] = true; Ok::<_, ()>(true) },
+            |_| panic!("overflow must prevent cache build"),
+        ), Err(AtomicError::RevisionOverflow));
+        assert_eq!(s.circuit, [false]);
+        assert_eq!(s.cache.0, 0);
+        assert_eq!(s.revision, u64::MAX);
+    }
+}
