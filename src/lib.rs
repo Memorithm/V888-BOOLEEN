@@ -281,3 +281,5 @@ pub mod regional_window_consistency;
 pub mod regional_window_stability;
 pub mod write_allocation;
 pub mod write_budget;
+
+pub mod fourier5_verified_replay;
