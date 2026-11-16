@@ -158,3 +158,85 @@ mod sequential_sample_tests {
         assert_eq!(error, Err(7));
     }
 }
+
+
+/// A completed operation with its outcome preserved even when post-operation
+/// process-memory sampling fails. A post-sample error is NOT a rollback.
+#[derive(Debug)]
+pub struct PreservedIntervention<T, E> {
+    pub elapsed: Duration,
+    pub before: PeakRss,
+    pub after: io::Result<PeakRss>,
+    pub outcome: Result<T, E>,
+}
+
+/// Run one operation exactly once. A failed pre-sample prevents execution;
+/// a failed post-sample never discards the operation's actual outcome.
+pub fn sample_intervention_preserving_outcome<T, E>(
+    operation: impl FnOnce() -> Result<T, E>,
+) -> io::Result<PreservedIntervention<T, E>> {
+    sample_intervention_with(process_peak_rss, operation)
+}
+
+fn sample_intervention_with<T, E>(
+    mut sample: impl FnMut() -> io::Result<PeakRss>,
+    operation: impl FnOnce() -> Result<T, E>,
+) -> io::Result<PreservedIntervention<T, E>> {
+    let before = sample()?;
+    let (elapsed, outcome) = time_intervention(operation);
+    let after = sample();
+    Ok(PreservedIntervention {
+        elapsed,
+        before,
+        after,
+        outcome,
+    })
+}
+
+#[cfg(test)]
+mod preserving_outcome_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn pre_sample_failure_does_not_run_mutation() {
+        let calls = Cell::new(0);
+        let result = sample_intervention_with(
+            || Err(io::Error::other("before")),
+            || { calls.set(calls.get() + 1); Ok::<_, ()>(()) },
+        );
+        assert!(result.is_err());
+        assert_eq!(calls.get(), 0);
+    }
+
+    #[test]
+    fn post_sample_failure_preserves_committed_result() {
+        let reads = Cell::new(0);
+        let mutations = Cell::new(0);
+        let result = sample_intervention_with(
+            || {
+                reads.set(reads.get() + 1);
+                if reads.get() == 1 {
+                    Ok(PeakRss { kib: 12 })
+                } else {
+                    Err(io::Error::other("after"))
+                }
+            },
+            || { mutations.set(mutations.get() + 1); Ok::<_, u8>(17) },
+        ).unwrap();
+        assert_eq!(mutations.get(), 1);
+        assert_eq!(result.outcome, Ok(17));
+        assert_eq!(result.before.kib, 12);
+        assert!(result.after.is_err());
+    }
+
+    #[test]
+    fn post_sample_success_preserves_rejected_intervention() {
+        let result = sample_intervention_with(
+            || Ok(PeakRss { kib: 20 }),
+            || Err::<(), _>("rejected"),
+        ).unwrap();
+        assert_eq!(result.outcome, Err("rejected"));
+        assert_eq!(result.after.unwrap().kib, 20);
+    }
+}
