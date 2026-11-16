@@ -1578,12 +1578,34 @@ mod measured_sequential_runtime_oracle_tests {
         };
         let choose = |revision: &CacheRevision,
                       groups: &[(ConeBucket, SequentialPairedSummary)]| {
-            choose_measured_sequential(revision, 64, 4, &frozen, groups, SequentialAdmissionLimits { min_samples_per_outcome: 3, required_saving_ns: 50, max_incremental_vmhwm_kib: 2048 })
+            choose_measured_sequential(
+                revision,
+                64,
+                4,
+                &frozen,
+                groups,
+                SequentialAdmissionLimits {
+                    min_samples_per_outcome: 3,
+                    required_saving_ns: 50,
+                    max_incremental_vmhwm_kib: 2048,
+                },
+            )
         };
         assert_eq!(choose(&revision, &groups), Ok(EngineChoice::Incremental));
         assert_eq!(choose(&revision, &groups[..1]), Ok(EngineChoice::Full));
         assert_eq!(
-            choose_measured_sequential(&revision, 64, 4, &frozen[..1], &groups, SequentialAdmissionLimits { min_samples_per_outcome: 3, required_saving_ns: 50, max_incremental_vmhwm_kib: 2048 }),
+            choose_measured_sequential(
+                &revision,
+                64,
+                4,
+                &frozen[..1],
+                &groups,
+                SequentialAdmissionLimits {
+                    min_samples_per_outcome: 3,
+                    required_saving_ns: 50,
+                    max_incremental_vmhwm_kib: 2048
+                }
+            ),
             Ok(EngineChoice::Full)
         );
         revision.committed().unwrap();
@@ -1628,7 +1650,18 @@ mod measured_sequential_runtime_oracle_tests {
             cached_revision: Some(1),
         };
         let choose = |groups: &[(ConeBucket, SequentialPairedSummary)], cap| {
-            choose_measured_sequential(&revision, 8, 2, &frozen, groups, SequentialAdmissionLimits { min_samples_per_outcome: 2, required_saving_ns: 20, max_incremental_vmhwm_kib: cap })
+            choose_measured_sequential(
+                &revision,
+                8,
+                2,
+                &frozen,
+                groups,
+                SequentialAdmissionLimits {
+                    min_samples_per_outcome: 2,
+                    required_saving_ns: 20,
+                    max_incremental_vmhwm_kib: cap,
+                },
+            )
         };
         assert_eq!(choose(&groups, 100), Ok(EngineChoice::Incremental));
         assert_eq!(choose(&groups, 99), Ok(EngineChoice::Full));
