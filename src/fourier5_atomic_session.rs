@@ -138,7 +138,7 @@ mod tests {
             apply_atomic(
                 &mut s,
                 |_| panic!("must not mutate on overflow"),
-                |_, _| Ok(())
+                |_, _| Ok::<(), ()>(())
             ),
             Err(AtomicError::RevisionOverflow)
         );

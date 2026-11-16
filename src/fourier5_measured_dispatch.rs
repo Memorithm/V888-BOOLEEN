@@ -1504,15 +1504,21 @@ mod sequential_predecision_oracle_tests {
 /// This function is invoked before the intervention outcome is known.
 /// The sequential evidence must be frozen from TRAIN/VALID; never feed TEST/OOD
 /// observations back into `groups` during evaluation.
+/// Immutable safety thresholds for a sequential runtime admission decision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SequentialAdmissionLimits {
+    pub min_samples_per_outcome: usize,
+    pub required_saving_ns: u128,
+    pub max_incremental_vmhwm_kib: u64,
+}
+
 pub fn choose_measured_sequential(
     revision: &CacheRevision,
     gates: usize,
     cone_gates: usize,
     frozen: &[BucketPolicy],
     groups: &[(ConeBucket, SequentialPairedSummary)],
-    min_samples_per_outcome: usize,
-    required_saving_ns: u128,
-    max_incremental_vmhwm_kib: u64,
+    limits: SequentialAdmissionLimits,
 ) -> Result<EngineChoice, RevisionError> {
     // Check revision integrity even when measurements are missing.
     let candidate = revision.choose(gates, cone_gates, frozen)?;
@@ -1523,9 +1529,9 @@ pub fn choose_measured_sequential(
         groups,
         gates,
         cone_gates,
-        min_samples_per_outcome,
-        required_saving_ns,
-        max_incremental_vmhwm_kib,
+        limits.min_samples_per_outcome,
+        limits.required_saving_ns,
+        limits.max_incremental_vmhwm_kib,
     ) {
         Ok(EngineChoice::Incremental)
     } else {
@@ -1572,12 +1578,12 @@ mod measured_sequential_runtime_oracle_tests {
         };
         let choose = |revision: &CacheRevision,
                       groups: &[(ConeBucket, SequentialPairedSummary)]| {
-            choose_measured_sequential(revision, 64, 4, &frozen, groups, 3, 50, 2048)
+            choose_measured_sequential(revision, 64, 4, &frozen, groups, SequentialAdmissionLimits { min_samples_per_outcome: 3, required_saving_ns: 50, max_incremental_vmhwm_kib: 2048 })
         };
         assert_eq!(choose(&revision, &groups), Ok(EngineChoice::Incremental));
         assert_eq!(choose(&revision, &groups[..1]), Ok(EngineChoice::Full));
         assert_eq!(
-            choose_measured_sequential(&revision, 64, 4, &frozen[..1], &groups, 3, 50, 2048),
+            choose_measured_sequential(&revision, 64, 4, &frozen[..1], &groups, SequentialAdmissionLimits { min_samples_per_outcome: 3, required_saving_ns: 50, max_incremental_vmhwm_kib: 2048 }),
             Ok(EngineChoice::Full)
         );
         revision.committed().unwrap();
@@ -1622,7 +1628,7 @@ mod measured_sequential_runtime_oracle_tests {
             cached_revision: Some(1),
         };
         let choose = |groups: &[(ConeBucket, SequentialPairedSummary)], cap| {
-            choose_measured_sequential(&revision, 8, 2, &frozen, groups, 2, 20, cap)
+            choose_measured_sequential(&revision, 8, 2, &frozen, groups, SequentialAdmissionLimits { min_samples_per_outcome: 2, required_saving_ns: 20, max_incremental_vmhwm_kib: cap })
         };
         assert_eq!(choose(&groups, 100), Ok(EngineChoice::Incremental));
         assert_eq!(choose(&groups, 99), Ok(EngineChoice::Full));
