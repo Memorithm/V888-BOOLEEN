@@ -101,12 +101,14 @@ pub fn apply_atomic_fresh_cache<C: Clone, K, E>(
     mutate: impl FnOnce(&mut C) -> Result<bool, E>,
     build_cache: impl FnOnce(&C) -> Result<K, E>,
 ) -> Result<bool, AtomicError<E>> {
+    // Fail before invoking a potentially side-effecting callback when no
+    // accepted revision can be represented. This matches apply_atomic.
+    let next_revision = session.revision.checked_add(1).ok_or(AtomicError::RevisionOverflow)?;
     let mut candidate = session.circuit.clone();
     let accepted = mutate(&mut candidate).map_err(AtomicError::Mutation)?;
     if !accepted {
         return Ok(false);
     }
-    let next_revision = session.revision.checked_add(1).ok_or(AtomicError::RevisionOverflow)?;
     let cache = build_cache(&candidate).map_err(AtomicError::Rebuild)?;
     session.circuit = candidate;
     session.cache = cache;
@@ -427,6 +429,86 @@ mod observed_batch_tests {
             |_, _, _| panic!("overflow before observation"),
         ), Err(AtomicError::RevisionOverflow));
         assert_eq!(session.revision, u64::MAX);
+        assert_eq!(session.circuit, [false]);
+    }
+}
+
+
+/// Optimistic-concurrency guard for an exact sequential intervention.
+/// A stale expected revision is rejected before cloning or calling user code.
+/// On a match, the candidate is rebuilt and committed atomically.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GuardedAtomicError<E> {
+    StaleRevision { expected: u64, actual: u64 },
+    Atomic(AtomicError<E>),
+}
+
+pub fn apply_atomic_at_revision<C: Clone, K, E>(
+    session: &mut AtomicSession<C, K>,
+    expected_revision: u64,
+    mutate: impl FnOnce(&mut C) -> Result<bool, E>,
+    build_cache: impl FnOnce(&C) -> Result<K, E>,
+) -> Result<bool, GuardedAtomicError<E>> {
+    if session.revision != expected_revision {
+        return Err(GuardedAtomicError::StaleRevision {
+            expected: expected_revision,
+            actual: session.revision,
+        });
+    }
+    apply_atomic_fresh_cache(session, mutate, build_cache)
+        .map_err(GuardedAtomicError::Atomic)
+}
+
+#[cfg(test)]
+mod revision_guard_tests {
+    use super::*;
+
+    fn full_oracle(bits: &[bool]) -> usize {
+        bits.iter().filter(|&&bit| bit).count()
+    }
+
+    #[test]
+    fn stale_revision_never_executes_mutation_or_rebuild() {
+        let mut session = AtomicSession { circuit: vec![false, true], cache: 1usize, revision: 7 };
+        let result = apply_atomic_at_revision(
+            &mut session, 6,
+            |_| -> Result<bool, ()> { panic!("stale mutation must not execute") },
+            |_| -> Result<usize, ()> { panic!("stale rebuild must not execute") },
+        );
+        assert_eq!(result, Err(GuardedAtomicError::StaleRevision { expected: 6, actual: 7 }));
+        assert_eq!(session.revision, 7);
+        assert_eq!(session.cache, 1);
+        assert_eq!(session.circuit, [false, true]);
+    }
+
+    #[test]
+    fn guarded_sequential_updates_match_full_oracle_and_reject_replay() {
+        let mut session = AtomicSession { circuit: vec![false; 12], cache: 0usize, revision: 0 };
+        for index in [1, 4, 1, 11, 0] {
+            let expected = session.revision;
+            assert!(apply_atomic_at_revision(
+                &mut session, expected,
+                |bits| { bits[index] = !bits[index]; Ok::<_, ()>(true) },
+                |bits| Ok::<_, ()>(full_oracle(bits)),
+            ).unwrap());
+            assert_eq!(session.cache, full_oracle(&session.circuit));
+            assert_eq!(session.revision, expected + 1);
+            assert_eq!(apply_atomic_at_revision(
+                &mut session, expected,
+                |_| -> Result<bool, ()> { panic!("replayed mutation") },
+                |_| -> Result<usize, ()> { panic!("replayed rebuild") },
+            ), Err(GuardedAtomicError::StaleRevision { expected, actual: expected + 1 }));
+        }
+    }
+
+    #[test]
+    fn overflow_prevents_mutation_even_with_matching_revision() {
+        let mut session = AtomicSession { circuit: vec![false], cache: 0usize, revision: u64::MAX };
+        assert_eq!(apply_atomic_at_revision(
+            &mut session, u64::MAX,
+            |_| -> Result<bool, ()> { panic!("overflow mutation") },
+            |_| -> Result<usize, ()> { panic!("overflow rebuild") },
+        ), Err(GuardedAtomicError::Atomic(AtomicError::RevisionOverflow)));
         assert_eq!(session.circuit, [false]);
     }
 }
