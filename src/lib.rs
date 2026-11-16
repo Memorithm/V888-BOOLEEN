@@ -283,3 +283,6 @@ pub mod write_allocation;
 pub mod write_budget;
 
 pub mod fourier5_verified_replay;
+
+/// Conservative VALID-frozen engine selection for synthetic wide circuits.
+pub mod fourier5_conservative_policy;
