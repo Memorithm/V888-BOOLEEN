@@ -261,6 +261,7 @@ pub mod fourier5_joint_audit;
 pub mod fourier5_online_policy;
 pub mod fourier5_recent_policy;
 pub mod fourier5_runtime_breaker;
+pub mod fourier5_sequential_accounting;
 pub mod fourier5_validation_selection;
 pub mod gate_return_recall;
 pub mod heldout_regional_recall;
