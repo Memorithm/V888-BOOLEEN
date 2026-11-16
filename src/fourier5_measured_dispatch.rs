@@ -769,3 +769,126 @@ mod transactional_cache_tests {
         assert_eq!(state.choose(100, 1, &[]), Ok(EngineChoice::Full));
     }
 }
+
+
+/// One real, paired sequential intervention. Timings must include cache
+/// maintenance performed *after* a committed intervention, before the next
+/// intervention is dispatched. VmHWM is read from the executing process,
+/// not inferred from allocations or generated synthetically.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SequentialPairedObservation {
+    pub accepted: bool,
+    pub same_output: bool,
+    pub same_decision: bool,
+    pub full_execution_ns: u128,
+    pub incremental_execution_ns: u128,
+    pub full_refresh_ns: u128,
+    pub incremental_refresh_ns: u128,
+    pub full_vmhwm_kib: u64,
+    pub incremental_vmhwm_kib: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SequentialPairedSummary {
+    pub interventions: usize,
+    pub accepted: usize,
+    pub rejected: usize,
+    pub full_total_ns: u128,
+    pub incremental_total_ns: u128,
+    pub full_peak_vmhwm_kib: u64,
+    pub incremental_peak_vmhwm_kib: u64,
+    pub mismatches: usize,
+    pub regressions: usize,
+}
+
+/// Aggregate actual paired observations with checked arithmetic. Reject zero
+/// execution durations and refresh work after rejected interventions; refresh
+/// is charged to the same accepted intervention that invalidated the cache.
+/// This deliberately does not choose a policy or manufacture a speedup.
+pub fn summarize_sequential_pairs(
+    samples: &[SequentialPairedObservation],
+) -> Result<SequentialPairedSummary, PolicyError> {
+    let mut out = SequentialPairedSummary::default();
+    for sample in samples {
+        if sample.full_execution_ns == 0 || sample.incremental_execution_ns == 0
+            || (!sample.accepted
+                && (sample.full_refresh_ns != 0 || sample.incremental_refresh_ns != 0))
+        {
+            return Err(PolicyError::InvalidSample);
+        }
+        let full = sample.full_execution_ns.checked_add(sample.full_refresh_ns)
+            .ok_or(PolicyError::Overflow)?;
+        let incremental = sample.incremental_execution_ns
+            .checked_add(sample.incremental_refresh_ns)
+            .ok_or(PolicyError::Overflow)?;
+        out.interventions = out.interventions.checked_add(1).ok_or(PolicyError::Overflow)?;
+        if sample.accepted {
+            out.accepted = out.accepted.checked_add(1).ok_or(PolicyError::Overflow)?;
+        } else {
+            out.rejected = out.rejected.checked_add(1).ok_or(PolicyError::Overflow)?;
+        }
+        out.full_total_ns = out.full_total_ns.checked_add(full).ok_or(PolicyError::Overflow)?;
+        out.incremental_total_ns = out.incremental_total_ns
+            .checked_add(incremental).ok_or(PolicyError::Overflow)?;
+        out.full_peak_vmhwm_kib = out.full_peak_vmhwm_kib.max(sample.full_vmhwm_kib);
+        out.incremental_peak_vmhwm_kib =
+            out.incremental_peak_vmhwm_kib.max(sample.incremental_vmhwm_kib);
+        if !sample.same_output || !sample.same_decision {
+            out.mismatches = out.mismatches.checked_add(1).ok_or(PolicyError::Overflow)?;
+        }
+        if incremental > full {
+            out.regressions = out.regressions.checked_add(1).ok_or(PolicyError::Overflow)?;
+        }
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod sequential_accounting_oracle_tests {
+    use super::*;
+
+    #[test]
+    fn accepted_refresh_is_charged_and_negative_results_are_preserved() {
+        let accepted = SequentialPairedObservation {
+            accepted: true, same_output: true, same_decision: true,
+            full_execution_ns: 100, incremental_execution_ns: 40,
+            full_refresh_ns: 0, incremental_refresh_ns: 90,
+            full_vmhwm_kib: 1000, incremental_vmhwm_kib: 1500,
+        };
+        let rejected = SequentialPairedObservation {
+            accepted: false, same_output: true, same_decision: false,
+            full_execution_ns: 80, incremental_execution_ns: 20,
+            full_refresh_ns: 0, incremental_refresh_ns: 0,
+            full_vmhwm_kib: 1100, incremental_vmhwm_kib: 1400,
+        };
+        let report = summarize_sequential_pairs(&[accepted, rejected]).unwrap();
+        // Independent hand calculation: Full 100+80=180; Inc 40+90+20=150.
+        assert_eq!((report.full_total_ns, report.incremental_total_ns), (180, 150));
+        assert_eq!((report.accepted, report.rejected), (1, 1));
+        assert_eq!((report.mismatches, report.regressions), (1, 1));
+        assert_eq!((report.full_peak_vmhwm_kib, report.incremental_peak_vmhwm_kib),
+            (1100, 1500));
+        assert_eq!(summarize_sequential_pairs(&[]).unwrap().interventions, 0);
+    }
+
+    #[test]
+    fn rejects_impossible_refresh_and_checked_overflow() {
+        let base = SequentialPairedObservation {
+            accepted: false, same_output: true, same_decision: true,
+            full_execution_ns: 1, incremental_execution_ns: 1,
+            full_refresh_ns: 0, incremental_refresh_ns: 0,
+            full_vmhwm_kib: 1, incremental_vmhwm_kib: 1,
+        };
+        assert_eq!(summarize_sequential_pairs(&[
+            SequentialPairedObservation { incremental_refresh_ns: 1, ..base }
+        ]), Err(PolicyError::InvalidSample));
+        assert_eq!(summarize_sequential_pairs(&[
+            SequentialPairedObservation { accepted: true, full_execution_ns: u128::MAX,
+                full_refresh_ns: 1, ..base }
+        ]), Err(PolicyError::Overflow));
+        assert_eq!(summarize_sequential_pairs(&[
+            SequentialPairedObservation { full_execution_ns: u128::MAX, ..base },
+            base,
+        ]), Err(PolicyError::Overflow));
+    }
+}
