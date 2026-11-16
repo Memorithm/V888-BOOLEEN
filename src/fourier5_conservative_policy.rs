@@ -2,7 +2,10 @@
 //! Synthetic circuit workload metadata; no BANC biological interpretation.
 //! No TEST/OOD observations can modify a frozen policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Engine { Full, Incremental }
+pub enum Engine {
+    Full,
+    Incremental,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PairedObservation {
@@ -15,7 +18,11 @@ pub struct PairedObservation {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PolicyError { InvalidObservation, EmptyValidation, Overflow }
+pub enum PolicyError {
+    InvalidObservation,
+    EmptyValidation,
+    Overflow,
+}
 
 /// Bucket boundaries are powers of two, avoiding floating-point calibration.
 fn bucket(gates: u64, cone: u64) -> usize {
@@ -33,7 +40,9 @@ pub struct FrozenPolicy {
 
 impl FrozenPolicy {
     pub fn fit_valid(rows: &[PairedObservation], min_samples: u64) -> Result<Self, PolicyError> {
-        if rows.is_empty() || min_samples == 0 { return Err(PolicyError::EmptyValidation); }
+        if rows.is_empty() || min_samples == 0 {
+            return Err(PolicyError::EmptyValidation);
+        }
         let mut count = [0u64; 16];
         let mut full = [0u128; 16];
         let mut inc = [0u128; 16];
@@ -44,38 +53,66 @@ impl FrozenPolicy {
             }
             let b = bucket(r.gates, r.cone_gates);
             count[b] = count[b].checked_add(1).ok_or(PolicyError::Overflow)?;
-            full[b] = full[b].checked_add(u128::from(r.full_ns)).ok_or(PolicyError::Overflow)?;
-            inc[b] = inc[b].checked_add(u128::from(r.incremental_ns)).ok_or(PolicyError::Overflow)?;
+            full[b] = full[b]
+                .checked_add(u128::from(r.full_ns))
+                .ok_or(PolicyError::Overflow)?;
+            inc[b] = inc[b]
+                .checked_add(u128::from(r.incremental_ns))
+                .ok_or(PolicyError::Overflow)?;
             correct[b] &= r.same_output && r.same_decision;
         }
         let mut enabled = [false; 16];
         for b in 0..16 {
             enabled[b] = count[b] >= min_samples && correct[b] && inc[b] < full[b];
         }
-        Ok(Self { enabled, samples: count })
+        Ok(Self {
+            enabled,
+            samples: count,
+        })
     }
 
     #[must_use]
     pub fn select(&self, gates: u64, cone_gates: u64) -> Engine {
-        if gates == 0 || cone_gates > gates { return Engine::Full; }
-        if self.enabled[bucket(gates, cone_gates)] { Engine::Incremental } else { Engine::Full }
+        if gates == 0 || cone_gates > gates {
+            return Engine::Full;
+        }
+        if self.enabled[bucket(gates, cone_gates)] {
+            Engine::Incremental
+        } else {
+            Engine::Full
+        }
     }
 
     #[must_use]
-    pub fn validation_samples(&self) -> &[u64; 16] { &self.samples }
+    pub fn validation_samples(&self) -> &[u64; 16] {
+        &self.samples
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     fn row(cone: u64, full: u64, inc: u64, correct: bool) -> PairedObservation {
-        PairedObservation { gates: 100, cone_gates: cone, full_ns: full,
-            incremental_ns: inc, same_output: correct, same_decision: correct }
+        PairedObservation {
+            gates: 100,
+            cone_gates: cone,
+            full_ns: full,
+            incremental_ns: inc,
+            same_output: correct,
+            same_decision: correct,
+        }
     }
     #[test]
     fn conservative_selection_and_unknown_cones() {
-        let p = FrozenPolicy::fit_valid(&[row(2, 100, 20, true), row(3, 100, 25, true),
-            row(80, 100, 150, true)], 2).unwrap();
+        let p = FrozenPolicy::fit_valid(
+            &[
+                row(2, 100, 20, true),
+                row(3, 100, 25, true),
+                row(80, 100, 150, true),
+            ],
+            2,
+        )
+        .unwrap();
         assert_eq!(p.select(100, 2), Engine::Incremental);
         assert_eq!(p.select(100, 80), Engine::Full);
         assert_eq!(p.select(100, 40), Engine::Full);
@@ -83,8 +120,8 @@ mod tests {
     }
     #[test]
     fn a_single_decision_mismatch_disables_bucket() {
-        let p = FrozenPolicy::fit_valid(&[row(2, 100, 10, true),
-            row(3, 100, 10, false)], 2).unwrap();
+        let p =
+            FrozenPolicy::fit_valid(&[row(2, 100, 10, true), row(3, 100, 10, false)], 2).unwrap();
         assert_eq!(p.select(100, 2), Engine::Full);
     }
     #[test]
@@ -95,11 +132,22 @@ mod tests {
         let _held_out = row(2, 1, 1000, false);
         assert_eq!(p, frozen);
         assert_eq!(p.select(100, 2), Engine::Incremental);
-        assert_eq!(FrozenPolicy::fit_valid(&[row(2, 10, 10, true)], 1).unwrap().select(100, 2), Engine::Full);
+        assert_eq!(
+            FrozenPolicy::fit_valid(&[row(2, 10, 10, true)], 1)
+                .unwrap()
+                .select(100, 2),
+            Engine::Full
+        );
     }
     #[test]
     fn malformed_validation_rejected() {
-        assert_eq!(FrozenPolicy::fit_valid(&[row(101, 1, 1, true)], 1), Err(PolicyError::InvalidObservation));
-        assert_eq!(FrozenPolicy::fit_valid(&[], 1), Err(PolicyError::EmptyValidation));
+        assert_eq!(
+            FrozenPolicy::fit_valid(&[row(101, 1, 1, true)], 1),
+            Err(PolicyError::InvalidObservation)
+        );
+        assert_eq!(
+            FrozenPolicy::fit_valid(&[], 1),
+            Err(PolicyError::EmptyValidation)
+        );
     }
 }

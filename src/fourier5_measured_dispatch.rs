@@ -3,7 +3,10 @@
 //! No biological interpretation or automatic training on held-out samples.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EngineChoice { Full, Incremental }
+pub enum EngineChoice {
+    Full,
+    Incremental,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ConeBucket {
@@ -29,7 +32,11 @@ pub struct PolicyConfig {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PolicyError { InvalidConfiguration, InvalidSample, Overflow }
+pub enum PolicyError {
+    InvalidConfiguration,
+    InvalidSample,
+    Overflow,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BucketPolicy {
@@ -47,8 +54,11 @@ pub fn calibrate(
     train: &[PairedCost],
     config: PolicyConfig,
 ) -> Result<BucketPolicy, PolicyError> {
-    if config.min_pairs == 0 || config.required_saving_bps > 10_000
-        || bucket.gates == 0 || bucket.cone_gates > bucket.gates {
+    if config.min_pairs == 0
+        || config.required_saving_bps > 10_000
+        || bucket.gates == 0
+        || bucket.cone_gates > bucket.gates
+    {
         return Err(PolicyError::InvalidConfiguration);
     }
     let mut pairs = 0usize;
@@ -60,8 +70,11 @@ pub fn calibrate(
         if sample.full_ns == 0 || sample.incremental_ns == 0 {
             return Err(PolicyError::InvalidSample);
         }
-        full_total_ns = full_total_ns.checked_add(sample.full_ns).ok_or(PolicyError::Overflow)?;
-        incremental_total_ns = incremental_total_ns.checked_add(sample.incremental_ns)
+        full_total_ns = full_total_ns
+            .checked_add(sample.full_ns)
+            .ok_or(PolicyError::Overflow)?;
+        incremental_total_ns = incremental_total_ns
+            .checked_add(sample.incremental_ns)
             .ok_or(PolicyError::Overflow)?;
         valid &= sample.same_output && sample.same_decision;
     }
@@ -80,7 +93,13 @@ pub fn calibrate(
     } else {
         EngineChoice::Full
     };
-    Ok(BucketPolicy { bucket, choice, pairs, full_total_ns, incremental_total_ns })
+    Ok(BucketPolicy {
+        bucket,
+        choice,
+        pairs,
+        full_total_ns,
+        incremental_total_ns,
+    })
 }
 
 pub fn select(bucket: ConeBucket, policies: &[BucketPolicy]) -> EngineChoice {
@@ -100,22 +119,33 @@ pub struct HoldoutAudit {
     pub incremental_chosen: usize,
     pub regressions: usize,
 }
-pub fn audit_holdout(samples: &[PairedCost], policies: &[BucketPolicy])
-    -> Result<HoldoutAudit, PolicyError>
-{
+pub fn audit_holdout(
+    samples: &[PairedCost],
+    policies: &[BucketPolicy],
+) -> Result<HoldoutAudit, PolicyError> {
     let mut audit = HoldoutAudit {
-        samples: 0, mismatches: 0, incremental_chosen: 0, regressions: 0,
+        samples: 0,
+        mismatches: 0,
+        incremental_chosen: 0,
+        regressions: 0,
     };
     for sample in samples {
         audit.samples = audit.samples.checked_add(1).ok_or(PolicyError::Overflow)?;
         if !sample.same_output || !sample.same_decision {
-            audit.mismatches = audit.mismatches.checked_add(1).ok_or(PolicyError::Overflow)?;
+            audit.mismatches = audit
+                .mismatches
+                .checked_add(1)
+                .ok_or(PolicyError::Overflow)?;
         }
         if select(sample.bucket, policies) == EngineChoice::Incremental {
-            audit.incremental_chosen = audit.incremental_chosen.checked_add(1)
+            audit.incremental_chosen = audit
+                .incremental_chosen
+                .checked_add(1)
                 .ok_or(PolicyError::Overflow)?;
             if sample.incremental_ns > sample.full_ns {
-                audit.regressions = audit.regressions.checked_add(1)
+                audit.regressions = audit
+                    .regressions
+                    .checked_add(1)
                     .ok_or(PolicyError::Overflow)?;
             }
         }
@@ -126,12 +156,24 @@ pub fn audit_holdout(samples: &[PairedCost], policies: &[BucketPolicy])
 #[cfg(test)]
 mod tests {
     use super::*;
-    const BUCKET: ConeBucket = ConeBucket { gates: 100, cone_gates: 4, accepted: true };
+    const BUCKET: ConeBucket = ConeBucket {
+        gates: 100,
+        cone_gates: 4,
+        accepted: true,
+    };
     fn sample(full: u128, inc: u128, same: bool) -> PairedCost {
-        PairedCost { bucket: BUCKET, full_ns: full, incremental_ns: inc,
-            same_output: same, same_decision: same }
+        PairedCost {
+            bucket: BUCKET,
+            full_ns: full,
+            incremental_ns: inc,
+            same_output: same,
+            same_decision: same,
+        }
     }
-    const CONFIG: PolicyConfig = PolicyConfig { min_pairs: 2, required_saving_bps: 2000 };
+    const CONFIG: PolicyConfig = PolicyConfig {
+        min_pairs: 2,
+        required_saving_bps: 2000,
+    };
     #[test]
     fn measured_dispatch_and_independent_arithmetic_oracle() {
         let train = [sample(100, 30, true), sample(200, 50, true)];
@@ -152,19 +194,46 @@ mod tests {
     }
     #[test]
     fn fail_closed_on_mismatch_small_sample_and_overflow() {
-        assert_eq!(calibrate(BUCKET, &[sample(100, 1, true)], CONFIG).unwrap().choice,
-            EngineChoice::Full);
-        assert_eq!(calibrate(BUCKET, &[sample(100, 1, false), sample(100, 1, true)], CONFIG)
-            .unwrap().choice, EngineChoice::Full);
-        assert_eq!(calibrate(BUCKET, &[sample(u128::MAX, 1, true),
-            sample(1, 1, true)], CONFIG), Err(PolicyError::Overflow));
-        assert_eq!(calibrate(BUCKET, &[sample(0, 1, true)], CONFIG),
-            Err(PolicyError::InvalidSample));
-        assert_eq!(select(ConeBucket { accepted: false, ..BUCKET }, &[]),
-            EngineChoice::Full);
+        assert_eq!(
+            calibrate(BUCKET, &[sample(100, 1, true)], CONFIG)
+                .unwrap()
+                .choice,
+            EngineChoice::Full
+        );
+        assert_eq!(
+            calibrate(
+                BUCKET,
+                &[sample(100, 1, false), sample(100, 1, true)],
+                CONFIG
+            )
+            .unwrap()
+            .choice,
+            EngineChoice::Full
+        );
+        assert_eq!(
+            calibrate(
+                BUCKET,
+                &[sample(u128::MAX, 1, true), sample(1, 1, true)],
+                CONFIG
+            ),
+            Err(PolicyError::Overflow)
+        );
+        assert_eq!(
+            calibrate(BUCKET, &[sample(0, 1, true)], CONFIG),
+            Err(PolicyError::InvalidSample)
+        );
+        assert_eq!(
+            select(
+                ConeBucket {
+                    accepted: false,
+                    ..BUCKET
+                },
+                &[]
+            ),
+            EngineChoice::Full
+        );
     }
 }
-
 
 /// Freeze a TRAIN-calibrated policy against a disjoint VALID slice.
 /// The gate never tunes thresholds or learns from validation timings.
@@ -181,17 +250,21 @@ pub fn gate_on_validation(
     }
     let mut observed = 0usize;
     let mut safe = true;
-    for sample in validation.iter().filter(|sample| sample.bucket == trained.bucket) {
+    for sample in validation
+        .iter()
+        .filter(|sample| sample.bucket == trained.bucket)
+    {
         observed = observed.checked_add(1).ok_or(PolicyError::Overflow)?;
         if sample.full_ns == 0 || sample.incremental_ns == 0 {
             return Err(PolicyError::InvalidSample);
         }
-        safe &= sample.same_output
-            && sample.same_decision
-            && sample.incremental_ns <= sample.full_ns;
+        safe &=
+            sample.same_output && sample.same_decision && sample.incremental_ns <= sample.full_ns;
     }
     let choice = if trained.choice == EngineChoice::Incremental
-        && observed >= min_validation_pairs && safe {
+        && observed >= min_validation_pairs
+        && safe
+    {
         EngineChoice::Incremental
     } else {
         EngineChoice::Full
@@ -203,18 +276,33 @@ pub fn gate_on_validation(
 mod validation_gate_tests {
     use super::*;
 
-    const B: ConeBucket = ConeBucket { gates: 32, cone_gates: 3, accepted: true };
+    const B: ConeBucket = ConeBucket {
+        gates: 32,
+        cone_gates: 3,
+        accepted: true,
+    };
     fn paired(full: u128, inc: u128, same: bool) -> PairedCost {
-        PairedCost { bucket: B, full_ns: full, incremental_ns: inc,
-            same_output: same, same_decision: same }
+        PairedCost {
+            bucket: B,
+            full_ns: full,
+            incremental_ns: inc,
+            same_output: same,
+            same_decision: same,
+        }
     }
 
     #[test]
     fn disjoint_validation_never_recalibrates_and_rejects_single_regression() {
         let train = [paired(100, 20, true), paired(200, 40, true)];
-        let frozen = calibrate(B, &train, PolicyConfig {
-            min_pairs: 2, required_saving_bps: 1000,
-        }).unwrap();
+        let frozen = calibrate(
+            B,
+            &train,
+            PolicyConfig {
+                min_pairs: 2,
+                required_saving_bps: 1000,
+            },
+        )
+        .unwrap();
         assert_eq!(frozen.choice, EngineChoice::Incremental);
         let valid = [paired(100, 10, true), paired(50, 49, true)];
         assert_eq!(gate_on_validation(frozen, &valid, 2).unwrap(), frozen);
@@ -224,15 +312,22 @@ mod validation_gate_tests {
         assert_eq!(guarded.choice, EngineChoice::Full);
         assert_eq!(guarded.full_total_ns, frozen.full_total_ns);
         assert_eq!(guarded.incremental_total_ns, frozen.incremental_total_ns);
-        assert_eq!(gate_on_validation(frozen, &valid[..1], 2).unwrap().choice,
-            EngineChoice::Full);
-        assert_eq!(gate_on_validation(frozen, &[paired(100, 10, false)], 1)
-            .unwrap().choice, EngineChoice::Full);
-        assert_eq!(gate_on_validation(frozen, &[], 0),
-            Err(PolicyError::InvalidConfiguration));
+        assert_eq!(
+            gate_on_validation(frozen, &valid[..1], 2).unwrap().choice,
+            EngineChoice::Full
+        );
+        assert_eq!(
+            gate_on_validation(frozen, &[paired(100, 10, false)], 1)
+                .unwrap()
+                .choice,
+            EngineChoice::Full
+        );
+        assert_eq!(
+            gate_on_validation(frozen, &[], 0),
+            Err(PolicyError::InvalidConfiguration)
+        );
     }
 }
-
 
 /// Freeze a whole dispatch table after VALID, rejecting duplicate buckets.
 /// Every trained bucket is independently gated; a missing VALID bucket
@@ -247,7 +342,10 @@ pub fn freeze_validated_table(
     }
     // Duplicate buckets make dispatch ambiguous, even if choices agree.
     for (index, policy) in trained.iter().enumerate() {
-        if trained[..index].iter().any(|prior| prior.bucket == policy.bucket) {
+        if trained[..index]
+            .iter()
+            .any(|prior| prior.bucket == policy.bucket)
+        {
             return Err(PolicyError::InvalidConfiguration);
         }
         if policy.bucket.gates == 0 || policy.bucket.cone_gates > policy.bucket.gates {
@@ -261,9 +359,11 @@ pub fn freeze_validated_table(
             return Err(PolicyError::InvalidSample);
         }
     }
-    trained.iter().copied().map(|policy| {
-        gate_on_validation(policy, validation, min_validation_pairs)
-    }).collect()
+    trained
+        .iter()
+        .copied()
+        .map(|policy| gate_on_validation(policy, validation, min_validation_pairs))
+        .collect()
 }
 
 /// The frozen table is the only source of dispatch choices. An unseen or
@@ -278,15 +378,32 @@ mod frozen_table_tests {
 
     #[test]
     fn disjoint_bucket_coverage_and_no_holdout_recalibration() {
-        let a = ConeBucket { gates: 128, cone_gates: 2, accepted: true };
-        let b = ConeBucket { gates: 128, cone_gates: 40, accepted: false };
-        let config = PolicyConfig { min_pairs: 2, required_saving_bps: 1000 };
+        let a = ConeBucket {
+            gates: 128,
+            cone_gates: 2,
+            accepted: true,
+        };
+        let b = ConeBucket {
+            gates: 128,
+            cone_gates: 40,
+            accepted: false,
+        };
+        let config = PolicyConfig {
+            min_pairs: 2,
+            required_saving_bps: 1000,
+        };
         let make = |bucket, full_ns, incremental_ns| PairedCost {
-            bucket, full_ns, incremental_ns, same_output: true, same_decision: true,
+            bucket,
+            full_ns,
+            incremental_ns,
+            same_output: true,
+            same_decision: true,
         };
         let train = [
-            make(a, 100, 20), make(a, 100, 20),
-            make(b, 100, 20), make(b, 100, 20),
+            make(a, 100, 20),
+            make(a, 100, 20),
+            make(b, 100, 20),
+            make(b, 100, 20),
         ];
         let trained = [
             calibrate(a, &train, config).unwrap(),
@@ -298,37 +415,60 @@ mod frozen_table_tests {
         let frozen = freeze_validated_table(&trained, &valid, 2).unwrap();
         assert_eq!(select_frozen(a, &frozen), EngineChoice::Incremental);
         assert_eq!(select_frozen(b, &frozen), EngineChoice::Full);
-        assert_eq!(select_frozen(ConeBucket { cone_gates: 3, ..a }, &frozen),
-            EngineChoice::Full);
+        assert_eq!(
+            select_frozen(ConeBucket { cone_gates: 3, ..a }, &frozen),
+            EngineChoice::Full
+        );
         assert_eq!(frozen[0].full_total_ns, trained[0].full_total_ns);
-        assert_eq!(frozen[0].incremental_total_ns, trained[0].incremental_total_ns);
-        assert_eq!(freeze_validated_table(&[trained[0], trained[0]], &valid, 2),
-            Err(PolicyError::InvalidConfiguration));
-        assert_eq!(freeze_validated_table(&trained, &[make(b, 0, 1)], 1),
-            Err(PolicyError::InvalidSample));
-        assert_eq!(freeze_validated_table(&trained, &valid, 0),
-            Err(PolicyError::InvalidConfiguration));
+        assert_eq!(
+            frozen[0].incremental_total_ns,
+            trained[0].incremental_total_ns
+        );
+        assert_eq!(
+            freeze_validated_table(&[trained[0], trained[0]], &valid, 2),
+            Err(PolicyError::InvalidConfiguration)
+        );
+        assert_eq!(
+            freeze_validated_table(&trained, &[make(b, 0, 1)], 1),
+            Err(PolicyError::InvalidSample)
+        );
+        assert_eq!(
+            freeze_validated_table(&trained, &valid, 0),
+            Err(PolicyError::InvalidConfiguration)
+        );
     }
 
     #[test]
     fn single_validation_regression_blocks_only_its_bucket() {
-        let a = ConeBucket { gates: 64, cone_gates: 1, accepted: true };
-        let b = ConeBucket { gates: 64, cone_gates: 2, accepted: false };
+        let a = ConeBucket {
+            gates: 64,
+            cone_gates: 1,
+            accepted: true,
+        };
+        let b = ConeBucket {
+            gates: 64,
+            cone_gates: 2,
+            accepted: false,
+        };
         let trained = [a, b].map(|bucket| BucketPolicy {
-            bucket, choice: EngineChoice::Incremental, pairs: 4,
-            full_total_ns: 400, incremental_total_ns: 100,
+            bucket,
+            choice: EngineChoice::Incremental,
+            pairs: 4,
+            full_total_ns: 400,
+            incremental_total_ns: 100,
         });
         let valid = [a, b].map(|bucket| PairedCost {
-            bucket, full_ns: 100,
+            bucket,
+            full_ns: 100,
             incremental_ns: if bucket == a { 101 } else { 50 },
-            same_output: true, same_decision: true,
+            same_output: true,
+            same_decision: true,
         });
         let frozen = freeze_validated_table(&trained, &valid, 1).unwrap();
         assert_eq!(select_frozen(a, &frozen), EngineChoice::Full);
         assert_eq!(select_frozen(b, &frozen), EngineChoice::Incremental);
     }
 }
-
 
 /// Choose before an intervention's acceptance is known. Acceptance is an
 /// outcome of execution, so dispatch must not use its future value.
@@ -342,8 +482,16 @@ pub fn select_before_decision(
     if gates == 0 || cone_gates > gates {
         return EngineChoice::Full;
     }
-    let accepted = ConeBucket { gates, cone_gates, accepted: true };
-    let rejected = ConeBucket { gates, cone_gates, accepted: false };
+    let accepted = ConeBucket {
+        gates,
+        cone_gates,
+        accepted: true,
+    };
+    let rejected = ConeBucket {
+        gates,
+        cone_gates,
+        accepted: false,
+    };
     if select_frozen(accepted, frozen) == EngineChoice::Incremental
         && select_frozen(rejected, frozen) == EngineChoice::Incremental
     {
@@ -359,26 +507,45 @@ mod predecision_dispatch_tests {
 
     #[test]
     fn unknown_acceptance_cannot_leak_into_dispatch() {
-        let yes = ConeBucket { gates: 100, cone_gates: 3, accepted: true };
-        let no = ConeBucket { accepted: false, ..yes };
+        let yes = ConeBucket {
+            gates: 100,
+            cone_gates: 3,
+            accepted: true,
+        };
+        let no = ConeBucket {
+            accepted: false,
+            ..yes
+        };
         let policy = |bucket, choice| BucketPolicy {
-            bucket, choice, pairs: 3, full_total_ns: 300,
+            bucket,
+            choice,
+            pairs: 3,
+            full_total_ns: 300,
             incremental_total_ns: 60,
         };
-        let both = [policy(yes, EngineChoice::Incremental),
-                    policy(no, EngineChoice::Incremental)];
-        assert_eq!(select_before_decision(100, 3, &both), EngineChoice::Incremental);
-        assert_eq!(select_before_decision(100, 3, &both[..1]), EngineChoice::Full);
+        let both = [
+            policy(yes, EngineChoice::Incremental),
+            policy(no, EngineChoice::Incremental),
+        ];
+        assert_eq!(
+            select_before_decision(100, 3, &both),
+            EngineChoice::Incremental
+        );
+        assert_eq!(
+            select_before_decision(100, 3, &both[..1]),
+            EngineChoice::Full
+        );
         let mixed = [both[0], policy(no, EngineChoice::Full)];
         assert_eq!(select_before_decision(100, 3, &mixed), EngineChoice::Full);
         assert_eq!(select_before_decision(100, 4, &both), EngineChoice::Full);
         assert_eq!(select_before_decision(0, 0, &both), EngineChoice::Full);
         assert_eq!(select_before_decision(100, 101, &both), EngineChoice::Full);
-        assert_eq!(select_before_decision(100, 3, &[both[0], both[0], both[1]]),
-                   EngineChoice::Full);
+        assert_eq!(
+            select_before_decision(100, 3, &[both[0], both[0], both[1]]),
+            EngineChoice::Full
+        );
     }
 }
-
 
 /// Provenance identifiers for independently generated circuit/workload cases.
 /// IDs must be stable across engines and all four splits. Reject repeated IDs
@@ -425,11 +592,14 @@ pub fn evaluate_disjoint_splits(
     for (split_index, split) in [train, valid, test, ood].into_iter().enumerate() {
         for observation in split {
             match circuit_owner.entry(observation.id.circuit_seed) {
-                std::collections::hash_map::Entry::Vacant(entry) => { entry.insert(split_index); }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(split_index);
+                }
                 std::collections::hash_map::Entry::Occupied(entry)
-                    if *entry.get() != split_index => {
-                        return Err(SplitError::LeakedCircuitAcrossSplits);
-                    }
+                    if *entry.get() != split_index =>
+                {
+                    return Err(SplitError::LeakedCircuitAcrossSplits);
+                }
                 _ => {}
             }
             if !ids.insert(observation.id) {
@@ -438,22 +608,26 @@ pub fn evaluate_disjoint_splits(
             let cost = observation.cost;
             if cost.bucket.gates == 0
                 || cost.bucket.cone_gates > cost.bucket.gates
-                || cost.full_ns == 0 || cost.incremental_ns == 0
+                || cost.full_ns == 0
+                || cost.incremental_ns == 0
             {
                 return Err(SplitError::InvalidObservation);
             }
         }
     }
-    if buckets.iter().enumerate().any(|(i, bucket)| {
-        buckets[..i].contains(bucket)
-    }) {
+    if buckets
+        .iter()
+        .enumerate()
+        .any(|(i, bucket)| buckets[..i].contains(bucket))
+    {
         return Err(SplitError::Policy(PolicyError::InvalidConfiguration));
     }
     let train_costs: Vec<_> = train.iter().map(|item| item.cost).collect();
     let valid_costs: Vec<_> = valid.iter().map(|item| item.cost).collect();
-    let trained: Vec<_> = buckets.iter().map(|&bucket| {
-        calibrate(bucket, &train_costs, config).map_err(SplitError::Policy)
-    }).collect::<Result<_, _>>()?;
+    let trained: Vec<_> = buckets
+        .iter()
+        .map(|&bucket| calibrate(bucket, &train_costs, config).map_err(SplitError::Policy))
+        .collect::<Result<_, _>>()?;
     let frozen = freeze_validated_table(&trained, &valid_costs, min_valid_pairs)
         .map_err(SplitError::Policy)?;
     let test_costs: Vec<_> = test.iter().map(|item| item.cost).collect();
@@ -469,36 +643,60 @@ mod disjoint_split_tests {
 
     #[test]
     fn split_guard_rejects_cross_split_and_internal_reuse() {
-        let bucket = ConeBucket { gates: 40, cone_gates: 2, accepted: true };
+        let bucket = ConeBucket {
+            gates: 40,
+            cone_gates: 2,
+            accepted: true,
+        };
         let make = |seed, full_ns, incremental_ns| IdentifiedCost {
-            id: WorkloadId { circuit_seed: seed, workload_seed: 7 },
-            cost: PairedCost { bucket, full_ns, incremental_ns,
-                same_output: true, same_decision: true },
+            id: WorkloadId {
+                circuit_seed: seed,
+                workload_seed: 7,
+            },
+            cost: PairedCost {
+                bucket,
+                full_ns,
+                incremental_ns,
+                same_output: true,
+                same_decision: true,
+            },
         };
         let train = [make(1, 100, 20), make(2, 100, 20)];
         let valid = [make(3, 100, 30)];
         let test = [make(4, 100, 110)];
         let ood = [make(5, 100, 40)];
-        let config = PolicyConfig { min_pairs: 2, required_saving_bps: 1000 };
-        let (frozen, test_audit, ood_audit) = evaluate_disjoint_splits(
-            &train, &valid, &test, &ood, &[bucket], config, 1
-        ).unwrap();
+        let config = PolicyConfig {
+            min_pairs: 2,
+            required_saving_bps: 1000,
+        };
+        let (frozen, test_audit, ood_audit) =
+            evaluate_disjoint_splits(&train, &valid, &test, &ood, &[bucket], config, 1).unwrap();
         assert_eq!(select_frozen(bucket, &frozen), EngineChoice::Incremental);
         assert_eq!(test_audit.regressions, 0);
         assert_eq!(test_audit.incremental_chosen, 0);
         assert_eq!(ood_audit.regressions, 0);
-        assert_eq!(evaluate_disjoint_splits(
-            &train, &valid, &train[..1], &ood, &[bucket], config, 1
-        ), Err(SplitError::LeakedCircuitAcrossSplits));
-        assert_eq!(evaluate_disjoint_splits(
-            &train, &[valid[0], valid[0]], &test, &ood, &[bucket], config, 1
-        ), Err(SplitError::DuplicateOrLeakedWorkload));
-        assert_eq!(evaluate_disjoint_splits(
-            &train, &valid, &test, &ood, &[bucket, bucket], config, 1
-        ), Err(SplitError::Policy(PolicyError::InvalidConfiguration)));
+        assert_eq!(
+            evaluate_disjoint_splits(&train, &valid, &train[..1], &ood, &[bucket], config, 1),
+            Err(SplitError::LeakedCircuitAcrossSplits)
+        );
+        assert_eq!(
+            evaluate_disjoint_splits(
+                &train,
+                &[valid[0], valid[0]],
+                &test,
+                &ood,
+                &[bucket],
+                config,
+                1
+            ),
+            Err(SplitError::DuplicateOrLeakedWorkload)
+        );
+        assert_eq!(
+            evaluate_disjoint_splits(&train, &valid, &test, &ood, &[bucket, bucket], config, 1),
+            Err(SplitError::Policy(PolicyError::InvalidConfiguration))
+        );
     }
 }
-
 
 /// Holdout audit using only pre-intervention information for dispatch.
 /// The accepted flag is an observed outcome, never an input to selection.
@@ -508,27 +706,38 @@ pub fn audit_predecision_holdout(
     frozen: &[BucketPolicy],
 ) -> Result<HoldoutAudit, PolicyError> {
     let mut audit = HoldoutAudit {
-        samples: 0, mismatches: 0, incremental_chosen: 0, regressions: 0,
+        samples: 0,
+        mismatches: 0,
+        incremental_chosen: 0,
+        regressions: 0,
     };
     for sample in samples {
         if sample.bucket.gates == 0
             || sample.bucket.cone_gates > sample.bucket.gates
-            || sample.full_ns == 0 || sample.incremental_ns == 0
+            || sample.full_ns == 0
+            || sample.incremental_ns == 0
         {
             return Err(PolicyError::InvalidSample);
         }
         audit.samples = audit.samples.checked_add(1).ok_or(PolicyError::Overflow)?;
         if !sample.same_output || !sample.same_decision {
-            audit.mismatches = audit.mismatches.checked_add(1).ok_or(PolicyError::Overflow)?;
+            audit.mismatches = audit
+                .mismatches
+                .checked_add(1)
+                .ok_or(PolicyError::Overflow)?;
         }
         if select_before_decision(sample.bucket.gates, sample.bucket.cone_gates, frozen)
             == EngineChoice::Incremental
         {
-            audit.incremental_chosen = audit.incremental_chosen
-                .checked_add(1).ok_or(PolicyError::Overflow)?;
+            audit.incremental_chosen = audit
+                .incremental_chosen
+                .checked_add(1)
+                .ok_or(PolicyError::Overflow)?;
             if sample.incremental_ns > sample.full_ns {
-                audit.regressions = audit.regressions
-                    .checked_add(1).ok_or(PolicyError::Overflow)?;
+                audit.regressions = audit
+                    .regressions
+                    .checked_add(1)
+                    .ok_or(PolicyError::Overflow)?;
             }
         }
     }
@@ -541,33 +750,54 @@ mod predecision_holdout_tests {
 
     #[test]
     fn oracle_rejects_hindsight_selection_and_reports_regressions() {
-        let yes = ConeBucket { gates: 64, cone_gates: 3, accepted: true };
-        let no = ConeBucket { accepted: false, ..yes };
+        let yes = ConeBucket {
+            gates: 64,
+            cone_gates: 3,
+            accepted: true,
+        };
+        let no = ConeBucket {
+            accepted: false,
+            ..yes
+        };
         let policy = |bucket| BucketPolicy {
-            bucket, choice: EngineChoice::Incremental, pairs: 2,
-            full_total_ns: 200, incremental_total_ns: 80,
+            bucket,
+            choice: EngineChoice::Incremental,
+            pairs: 2,
+            full_total_ns: 200,
+            incremental_total_ns: 80,
         };
         let observation = |bucket, full_ns, incremental_ns| PairedCost {
-            bucket, full_ns, incremental_ns,
-            same_output: true, same_decision: true,
+            bucket,
+            full_ns,
+            incremental_ns,
+            same_output: true,
+            same_decision: true,
         };
-        let samples = [
-            observation(yes, 100, 30),
-            observation(no, 100, 120),
-        ];
+        let samples = [observation(yes, 100, 30), observation(no, 100, 120)];
         // Outcome-aware audit would incorrectly count the accepted sample.
         let only_yes = [policy(yes)];
-        assert_eq!(audit_holdout(&samples, &only_yes).unwrap().incremental_chosen, 1);
-        assert_eq!(audit_predecision_holdout(&samples, &only_yes).unwrap().incremental_chosen, 0);
+        assert_eq!(
+            audit_holdout(&samples, &only_yes)
+                .unwrap()
+                .incremental_chosen,
+            1
+        );
+        assert_eq!(
+            audit_predecision_holdout(&samples, &only_yes)
+                .unwrap()
+                .incremental_chosen,
+            0
+        );
         let both = [policy(yes), policy(no)];
         let audited = audit_predecision_holdout(&samples, &both).unwrap();
         assert_eq!(audited.samples, 2);
         assert_eq!(audited.incremental_chosen, 2);
         assert_eq!(audited.regressions, 1);
         assert_eq!(audited.mismatches, 0);
-        assert_eq!(audit_predecision_holdout(
-            &[observation(no, 0, 20)], &both,
-        ), Err(PolicyError::InvalidSample));
+        assert_eq!(
+            audit_predecision_holdout(&[observation(no, 0, 20)], &both,),
+            Err(PolicyError::InvalidSample)
+        );
     }
 }
 
@@ -577,29 +807,55 @@ mod circuit_isolation_tests {
 
     #[test]
     fn same_circuit_different_intervention_cannot_cross_holdout_boundary() {
-        let bucket = ConeBucket { gates: 12, cone_gates: 2, accepted: true };
-        let make = |circuit_seed, workload_seed| IdentifiedCost {
-            id: WorkloadId { circuit_seed, workload_seed },
-            cost: PairedCost { bucket, full_ns: 100, incremental_ns: 20,
-                same_output: true, same_decision: true },
+        let bucket = ConeBucket {
+            gates: 12,
+            cone_gates: 2,
+            accepted: true,
         };
-        let config = PolicyConfig { min_pairs: 1, required_saving_bps: 1000 };
+        let make = |circuit_seed, workload_seed| IdentifiedCost {
+            id: WorkloadId {
+                circuit_seed,
+                workload_seed,
+            },
+            cost: PairedCost {
+                bucket,
+                full_ns: 100,
+                incremental_ns: 20,
+                same_output: true,
+                same_decision: true,
+            },
+        };
+        let config = PolicyConfig {
+            min_pairs: 1,
+            required_saving_bps: 1000,
+        };
         let train = [make(1, 10), make(1, 11)];
         let valid = [make(2, 10)];
         let test = [make(3, 10)];
         let ood = [make(4, 10)];
-        assert!(evaluate_disjoint_splits(&train, &valid, &test, &ood,
-            &[bucket], config, 1).is_ok());
+        assert!(
+            evaluate_disjoint_splits(&train, &valid, &test, &ood, &[bucket], config, 1).is_ok()
+        );
         let leaked = [make(1, 99)];
-        assert_eq!(evaluate_disjoint_splits(&train, &valid, &leaked, &ood,
-            &[bucket], config, 1), Err(SplitError::LeakedCircuitAcrossSplits));
+        assert_eq!(
+            evaluate_disjoint_splits(&train, &valid, &leaked, &ood, &[bucket], config, 1),
+            Err(SplitError::LeakedCircuitAcrossSplits)
+        );
         // Exact duplicate inside TRAIN is still a separate provenance error.
-        assert_eq!(evaluate_disjoint_splits(&[train[0], train[0]], &valid,
-            &test, &ood, &[bucket], config, 1),
-            Err(SplitError::DuplicateOrLeakedWorkload));
+        assert_eq!(
+            evaluate_disjoint_splits(
+                &[train[0], train[0]],
+                &valid,
+                &test,
+                &ood,
+                &[bucket],
+                config,
+                1
+            ),
+            Err(SplitError::DuplicateOrLeakedWorkload)
+        );
     }
 }
-
 
 /// Runtime cache-coherence gate for consecutive accepted interventions.
 /// A cache is usable only when it describes the current committed circuit
@@ -624,7 +880,10 @@ impl CacheRevision {
         cone_gates: usize,
         frozen: &[BucketPolicy],
     ) -> Result<EngineChoice, RevisionError> {
-        if self.cached_revision.is_some_and(|revision| revision > self.circuit_revision) {
+        if self
+            .cached_revision
+            .is_some_and(|revision| revision > self.circuit_revision)
+        {
             return Err(RevisionError::FutureCache);
         }
         if self.cached_revision != Some(self.circuit_revision) {
@@ -637,7 +896,8 @@ impl CacheRevision {
     /// The old cache is invalidated even if the revision counter overflows.
     pub fn committed(&mut self) -> Result<(), RevisionError> {
         self.cached_revision = None;
-        self.circuit_revision = self.circuit_revision
+        self.circuit_revision = self
+            .circuit_revision
             .checked_add(1)
             .ok_or(RevisionError::Overflow)?;
         Ok(())
@@ -663,8 +923,15 @@ mod sequential_cache_revision_tests {
 
     #[test]
     fn accepted_update_invalidates_cache_until_exact_rebuild() {
-        let yes = ConeBucket { gates: 80, cone_gates: 5, accepted: true };
-        let no = ConeBucket { accepted: false, ..yes };
+        let yes = ConeBucket {
+            gates: 80,
+            cone_gates: 5,
+            accepted: true,
+        };
+        let no = ConeBucket {
+            accepted: false,
+            ..yes
+        };
         let policy = |bucket| BucketPolicy {
             bucket,
             choice: EngineChoice::Incremental,
@@ -707,7 +974,6 @@ mod sequential_cache_revision_tests {
     }
 }
 
-
 /// Rebuild a cache for the committed revision as a fail-closed transaction.
 ///
 /// The callback must actually rebuild the caller-owned cache from the current
@@ -739,18 +1005,22 @@ mod transactional_cache_tests {
             cached_revision: Some(4),
         };
         let mut observed = None;
-        state.rebuild_transaction(|revision| {
-            observed = Some(revision);
-            Ok::<(), ()>(())
-        }).unwrap();
+        state
+            .rebuild_transaction(|revision| {
+                observed = Some(revision);
+                Ok::<(), ()>(())
+            })
+            .unwrap();
         assert_eq!(observed, Some(4));
         assert_eq!(state.cached_revision, Some(4));
         state.committed().unwrap();
         assert_eq!(state.cached_revision, None);
-        state.rebuild_transaction(|revision| {
-            assert_eq!(revision, 5);
-            Ok::<(), ()>(())
-        }).unwrap();
+        state
+            .rebuild_transaction(|revision| {
+                assert_eq!(revision, 5);
+                Ok::<(), ()>(())
+            })
+            .unwrap();
         assert_eq!(state.cached_revision, Some(5));
     }
 
@@ -769,7 +1039,6 @@ mod transactional_cache_tests {
         assert_eq!(state.choose(100, 1, &[]), Ok(EngineChoice::Full));
     }
 }
-
 
 /// One real, paired sequential intervention. Timings must include cache
 /// maintenance performed *after* a committed intervention, before the next
@@ -810,34 +1079,50 @@ pub fn summarize_sequential_pairs(
 ) -> Result<SequentialPairedSummary, PolicyError> {
     let mut out = SequentialPairedSummary::default();
     for sample in samples {
-        if sample.full_execution_ns == 0 || sample.incremental_execution_ns == 0
+        if sample.full_execution_ns == 0
+            || sample.incremental_execution_ns == 0
             || (!sample.accepted
                 && (sample.full_refresh_ns != 0 || sample.incremental_refresh_ns != 0))
         {
             return Err(PolicyError::InvalidSample);
         }
-        let full = sample.full_execution_ns.checked_add(sample.full_refresh_ns)
+        let full = sample
+            .full_execution_ns
+            .checked_add(sample.full_refresh_ns)
             .ok_or(PolicyError::Overflow)?;
-        let incremental = sample.incremental_execution_ns
+        let incremental = sample
+            .incremental_execution_ns
             .checked_add(sample.incremental_refresh_ns)
             .ok_or(PolicyError::Overflow)?;
-        out.interventions = out.interventions.checked_add(1).ok_or(PolicyError::Overflow)?;
+        out.interventions = out
+            .interventions
+            .checked_add(1)
+            .ok_or(PolicyError::Overflow)?;
         if sample.accepted {
             out.accepted = out.accepted.checked_add(1).ok_or(PolicyError::Overflow)?;
         } else {
             out.rejected = out.rejected.checked_add(1).ok_or(PolicyError::Overflow)?;
         }
-        out.full_total_ns = out.full_total_ns.checked_add(full).ok_or(PolicyError::Overflow)?;
-        out.incremental_total_ns = out.incremental_total_ns
-            .checked_add(incremental).ok_or(PolicyError::Overflow)?;
+        out.full_total_ns = out
+            .full_total_ns
+            .checked_add(full)
+            .ok_or(PolicyError::Overflow)?;
+        out.incremental_total_ns = out
+            .incremental_total_ns
+            .checked_add(incremental)
+            .ok_or(PolicyError::Overflow)?;
         out.full_peak_vmhwm_kib = out.full_peak_vmhwm_kib.max(sample.full_vmhwm_kib);
-        out.incremental_peak_vmhwm_kib =
-            out.incremental_peak_vmhwm_kib.max(sample.incremental_vmhwm_kib);
+        out.incremental_peak_vmhwm_kib = out
+            .incremental_peak_vmhwm_kib
+            .max(sample.incremental_vmhwm_kib);
         if !sample.same_output || !sample.same_decision {
             out.mismatches = out.mismatches.checked_add(1).ok_or(PolicyError::Overflow)?;
         }
         if incremental > full {
-            out.regressions = out.regressions.checked_add(1).ok_or(PolicyError::Overflow)?;
+            out.regressions = out
+                .regressions
+                .checked_add(1)
+                .ok_or(PolicyError::Overflow)?;
         }
     }
     Ok(out)
@@ -850,49 +1135,86 @@ mod sequential_accounting_oracle_tests {
     #[test]
     fn accepted_refresh_is_charged_and_negative_results_are_preserved() {
         let accepted = SequentialPairedObservation {
-            accepted: true, same_output: true, same_decision: true,
-            full_execution_ns: 100, incremental_execution_ns: 40,
-            full_refresh_ns: 0, incremental_refresh_ns: 90,
-            full_vmhwm_kib: 1000, incremental_vmhwm_kib: 1500,
+            accepted: true,
+            same_output: true,
+            same_decision: true,
+            full_execution_ns: 100,
+            incremental_execution_ns: 40,
+            full_refresh_ns: 0,
+            incremental_refresh_ns: 90,
+            full_vmhwm_kib: 1000,
+            incremental_vmhwm_kib: 1500,
         };
         let rejected = SequentialPairedObservation {
-            accepted: false, same_output: true, same_decision: false,
-            full_execution_ns: 80, incremental_execution_ns: 20,
-            full_refresh_ns: 0, incremental_refresh_ns: 0,
-            full_vmhwm_kib: 1100, incremental_vmhwm_kib: 1400,
+            accepted: false,
+            same_output: true,
+            same_decision: false,
+            full_execution_ns: 80,
+            incremental_execution_ns: 20,
+            full_refresh_ns: 0,
+            incremental_refresh_ns: 0,
+            full_vmhwm_kib: 1100,
+            incremental_vmhwm_kib: 1400,
         };
         let report = summarize_sequential_pairs(&[accepted, rejected]).unwrap();
         // Independent hand calculation: Full 100+80=180; Inc 40+90+20=150.
-        assert_eq!((report.full_total_ns, report.incremental_total_ns), (180, 150));
+        assert_eq!(
+            (report.full_total_ns, report.incremental_total_ns),
+            (180, 150)
+        );
         assert_eq!((report.accepted, report.rejected), (1, 1));
         assert_eq!((report.mismatches, report.regressions), (1, 1));
-        assert_eq!((report.full_peak_vmhwm_kib, report.incremental_peak_vmhwm_kib),
-            (1100, 1500));
+        assert_eq!(
+            (
+                report.full_peak_vmhwm_kib,
+                report.incremental_peak_vmhwm_kib
+            ),
+            (1100, 1500)
+        );
         assert_eq!(summarize_sequential_pairs(&[]).unwrap().interventions, 0);
     }
 
     #[test]
     fn rejects_impossible_refresh_and_checked_overflow() {
         let base = SequentialPairedObservation {
-            accepted: false, same_output: true, same_decision: true,
-            full_execution_ns: 1, incremental_execution_ns: 1,
-            full_refresh_ns: 0, incremental_refresh_ns: 0,
-            full_vmhwm_kib: 1, incremental_vmhwm_kib: 1,
+            accepted: false,
+            same_output: true,
+            same_decision: true,
+            full_execution_ns: 1,
+            incremental_execution_ns: 1,
+            full_refresh_ns: 0,
+            incremental_refresh_ns: 0,
+            full_vmhwm_kib: 1,
+            incremental_vmhwm_kib: 1,
         };
-        assert_eq!(summarize_sequential_pairs(&[
-            SequentialPairedObservation { incremental_refresh_ns: 1, ..base }
-        ]), Err(PolicyError::InvalidSample));
-        assert_eq!(summarize_sequential_pairs(&[
-            SequentialPairedObservation { accepted: true, full_execution_ns: u128::MAX,
-                full_refresh_ns: 1, ..base }
-        ]), Err(PolicyError::Overflow));
-        assert_eq!(summarize_sequential_pairs(&[
-            SequentialPairedObservation { full_execution_ns: u128::MAX, ..base },
-            base,
-        ]), Err(PolicyError::Overflow));
+        assert_eq!(
+            summarize_sequential_pairs(&[SequentialPairedObservation {
+                incremental_refresh_ns: 1,
+                ..base
+            }]),
+            Err(PolicyError::InvalidSample)
+        );
+        assert_eq!(
+            summarize_sequential_pairs(&[SequentialPairedObservation {
+                accepted: true,
+                full_execution_ns: u128::MAX,
+                full_refresh_ns: 1,
+                ..base
+            }]),
+            Err(PolicyError::Overflow)
+        );
+        assert_eq!(
+            summarize_sequential_pairs(&[
+                SequentialPairedObservation {
+                    full_execution_ns: u128::MAX,
+                    ..base
+                },
+                base,
+            ]),
+            Err(PolicyError::Overflow)
+        );
     }
 }
-
 
 /// A measured sequential intervention associated with a pre-decision cone.
 /// The bucket's accepted flag must equal the observed outcome; dispatch
@@ -923,24 +1245,38 @@ pub fn summarize_sequential_by_bucket(
             .position(|(bucket, _)| *bucket == sample.bucket);
         if let Some(index) = index {
             let summary = &mut groups[index].1;
-            summary.interventions = summary.interventions.checked_add(one.interventions)
+            summary.interventions = summary
+                .interventions
+                .checked_add(one.interventions)
                 .ok_or(PolicyError::Overflow)?;
-            summary.accepted = summary.accepted.checked_add(one.accepted)
+            summary.accepted = summary
+                .accepted
+                .checked_add(one.accepted)
                 .ok_or(PolicyError::Overflow)?;
-            summary.rejected = summary.rejected.checked_add(one.rejected)
+            summary.rejected = summary
+                .rejected
+                .checked_add(one.rejected)
                 .ok_or(PolicyError::Overflow)?;
-            summary.full_total_ns = summary.full_total_ns.checked_add(one.full_total_ns)
+            summary.full_total_ns = summary
+                .full_total_ns
+                .checked_add(one.full_total_ns)
                 .ok_or(PolicyError::Overflow)?;
-            summary.incremental_total_ns = summary.incremental_total_ns
-                .checked_add(one.incremental_total_ns).ok_or(PolicyError::Overflow)?;
-            summary.mismatches = summary.mismatches.checked_add(one.mismatches)
+            summary.incremental_total_ns = summary
+                .incremental_total_ns
+                .checked_add(one.incremental_total_ns)
                 .ok_or(PolicyError::Overflow)?;
-            summary.regressions = summary.regressions.checked_add(one.regressions)
+            summary.mismatches = summary
+                .mismatches
+                .checked_add(one.mismatches)
                 .ok_or(PolicyError::Overflow)?;
-            summary.full_peak_vmhwm_kib =
-                summary.full_peak_vmhwm_kib.max(one.full_peak_vmhwm_kib);
-            summary.incremental_peak_vmhwm_kib =
-                summary.incremental_peak_vmhwm_kib.max(one.incremental_peak_vmhwm_kib);
+            summary.regressions = summary
+                .regressions
+                .checked_add(one.regressions)
+                .ok_or(PolicyError::Overflow)?;
+            summary.full_peak_vmhwm_kib = summary.full_peak_vmhwm_kib.max(one.full_peak_vmhwm_kib);
+            summary.incremental_peak_vmhwm_kib = summary
+                .incremental_peak_vmhwm_kib
+                .max(one.incremental_peak_vmhwm_kib);
         } else {
             groups.push((sample.bucket, one));
         }
@@ -954,8 +1290,16 @@ mod heterogeneous_sequential_oracle_tests {
 
     #[test]
     fn slow_cone_cannot_hide_behind_fast_cone() {
-        let fast = ConeBucket { gates: 100, cone_gates: 1, accepted: true };
-        let slow = ConeBucket { gates: 100, cone_gates: 90, accepted: true };
+        let fast = ConeBucket {
+            gates: 100,
+            cone_gates: 1,
+            accepted: true,
+        };
+        let slow = ConeBucket {
+            gates: 100,
+            cone_gates: 90,
+            accepted: true,
+        };
         let observation = |execution| SequentialPairedObservation {
             accepted: true,
             same_output: true,
@@ -968,47 +1312,76 @@ mod heterogeneous_sequential_oracle_tests {
             incremental_vmhwm_kib: 2048,
         };
         let samples = [
-            BucketedSequentialObservation { bucket: fast, observation: observation(1) },
-            BucketedSequentialObservation { bucket: fast, observation: observation(1) },
-            BucketedSequentialObservation { bucket: slow, observation: observation(150) },
+            BucketedSequentialObservation {
+                bucket: fast,
+                observation: observation(1),
+            },
+            BucketedSequentialObservation {
+                bucket: fast,
+                observation: observation(1),
+            },
+            BucketedSequentialObservation {
+                bucket: slow,
+                observation: observation(150),
+            },
         ];
-        let overall = summarize_sequential_pairs(
-            &samples.map(|sample| sample.observation),
-        ).unwrap();
+        let overall =
+            summarize_sequential_pairs(&samples.map(|sample| sample.observation)).unwrap();
         assert!(overall.incremental_total_ns < overall.full_total_ns);
         let groups = summarize_sequential_by_bucket(&samples).unwrap();
         assert_eq!(groups.len(), 2);
         assert_eq!(groups[0].0, fast);
-        assert_eq!((groups[0].1.full_total_ns, groups[0].1.incremental_total_ns),
-            (200, 22));
+        assert_eq!(
+            (groups[0].1.full_total_ns, groups[0].1.incremental_total_ns),
+            (200, 22)
+        );
         assert_eq!(groups[1].0, slow);
-        assert_eq!((groups[1].1.full_total_ns, groups[1].1.incremental_total_ns),
-            (100, 160));
+        assert_eq!(
+            (groups[1].1.full_total_ns, groups[1].1.incremental_total_ns),
+            (100, 160)
+        );
         assert_eq!(groups[1].1.regressions, 1);
         assert_eq!(groups[1].1.incremental_peak_vmhwm_kib, 2048);
     }
 
     #[test]
     fn rejects_outcome_mismatch_and_impossible_cone() {
-        let bucket = ConeBucket { gates: 10, cone_gates: 2, accepted: false };
-        let observation = SequentialPairedObservation {
-            accepted: true, same_output: true, same_decision: true,
-            full_execution_ns: 1, incremental_execution_ns: 1,
-            full_refresh_ns: 0, incremental_refresh_ns: 0,
-            full_vmhwm_kib: 0, incremental_vmhwm_kib: 0,
+        let bucket = ConeBucket {
+            gates: 10,
+            cone_gates: 2,
+            accepted: false,
         };
-        assert_eq!(summarize_sequential_by_bucket(&[
-            BucketedSequentialObservation { bucket, observation },
-        ]), Err(PolicyError::InvalidSample));
-        assert_eq!(summarize_sequential_by_bucket(&[
-            BucketedSequentialObservation {
-                bucket: ConeBucket { gates: 10, cone_gates: 11, accepted: true },
+        let observation = SequentialPairedObservation {
+            accepted: true,
+            same_output: true,
+            same_decision: true,
+            full_execution_ns: 1,
+            incremental_execution_ns: 1,
+            full_refresh_ns: 0,
+            incremental_refresh_ns: 0,
+            full_vmhwm_kib: 0,
+            incremental_vmhwm_kib: 0,
+        };
+        assert_eq!(
+            summarize_sequential_by_bucket(&[BucketedSequentialObservation {
+                bucket,
+                observation
+            },]),
+            Err(PolicyError::InvalidSample)
+        );
+        assert_eq!(
+            summarize_sequential_by_bucket(&[BucketedSequentialObservation {
+                bucket: ConeBucket {
+                    gates: 10,
+                    cone_gates: 11,
+                    accepted: true
+                },
                 observation,
-            },
-        ]), Err(PolicyError::InvalidSample));
+            },]),
+            Err(PolicyError::InvalidSample)
+        );
     }
 }
-
 
 /// A conservative sequential-cost eligibility decision made *before* the
 /// intervention outcome is known. Both accepted and rejected histories must
@@ -1026,14 +1399,18 @@ pub fn sequential_predecision_eligible(
     }
     [false, true].into_iter().all(|accepted| {
         let mut matches = groups.iter().filter(|(bucket, _)| {
-            bucket.gates == gates && bucket.cone_gates == cone_gates
-                && bucket.accepted == accepted
+            bucket.gates == gates && bucket.cone_gates == cone_gates && bucket.accepted == accepted
         });
-        let Some((_, summary)) = matches.next() else { return false };
+        let Some((_, summary)) = matches.next() else {
+            return false;
+        };
         // Ambiguous duplicate buckets cannot authorize an incremental run.
-        if matches.next().is_some() { return false; }
+        if matches.next().is_some() {
+            return false;
+        }
         if summary.interventions < min_samples_per_outcome
-            || summary.mismatches != 0 || summary.regressions != 0
+            || summary.mismatches != 0
+            || summary.regressions != 0
             || summary.incremental_peak_vmhwm_kib > max_incremental_vmhwm_kib
             || summary.accepted != if accepted { summary.interventions } else { 0 }
             || summary.rejected != if accepted { 0 } else { summary.interventions }
@@ -1041,8 +1418,12 @@ pub fn sequential_predecision_eligible(
             return false;
         }
         // Strict improvement even when the configured margin is zero.
-        let Some(required) = summary.incremental_total_ns
-            .checked_add(required_saving_ns.max(1)) else { return false };
+        let Some(required) = summary
+            .incremental_total_ns
+            .checked_add(required_saving_ns.max(1))
+        else {
+            return false;
+        };
         required <= summary.full_total_ns
     })
 }
@@ -1065,8 +1446,15 @@ mod sequential_predecision_oracle_tests {
 
     #[test]
     fn requires_both_outcomes_and_checks_memory_and_margin() {
-        let yes = ConeBucket { gates: 100, cone_gates: 5, accepted: true };
-        let no = ConeBucket { accepted: false, ..yes };
+        let yes = ConeBucket {
+            gates: 100,
+            cone_gates: 5,
+            accepted: true,
+        };
+        let no = ConeBucket {
+            accepted: false,
+            ..yes
+        };
         let mut groups = vec![(yes, summary(true)), (no, summary(false))];
         let eligible = |g: &[(ConeBucket, SequentialPairedSummary)], margin, memory| {
             sequential_predecision_eligible(g, 100, 5, 2, margin, memory)
@@ -1075,7 +1463,9 @@ mod sequential_predecision_oracle_tests {
         assert!(!eligible(&groups[..1], 50, 1024));
         assert!(!eligible(&groups, 101, 1024));
         assert!(!eligible(&groups, 50, 1023));
-        assert!(!sequential_predecision_eligible(&groups, 100, 6, 2, 50, 1024));
+        assert!(!sequential_predecision_eligible(
+            &groups, 100, 6, 2, 50, 1024
+        ));
         groups[1].1.regressions = 1;
         assert!(!eligible(&groups, 50, 1024));
         groups[1].1.regressions = 0;
@@ -1085,8 +1475,15 @@ mod sequential_predecision_oracle_tests {
 
     #[test]
     fn rejects_invalid_histories_and_overflow() {
-        let yes = ConeBucket { gates: 20, cone_gates: 2, accepted: true };
-        let no = ConeBucket { accepted: false, ..yes };
+        let yes = ConeBucket {
+            gates: 20,
+            cone_gates: 2,
+            accepted: true,
+        };
+        let no = ConeBucket {
+            accepted: false,
+            ..yes
+        };
         let mut groups = vec![(yes, summary(true)), (no, summary(false))];
         let check = |g: &[(ConeBucket, SequentialPairedSummary)]| {
             sequential_predecision_eligible(g, 20, 2, 2, 1, 2048)
@@ -1102,7 +1499,6 @@ mod sequential_predecision_oracle_tests {
         assert!(!sequential_predecision_eligible(&groups, 20, 2, 0, 1, 2048));
     }
 }
-
 
 /// Runtime admission gate: all three independent safety conditions must agree.
 /// This function is invoked before the intervention outcome is known.
@@ -1143,11 +1539,21 @@ mod measured_sequential_runtime_oracle_tests {
 
     #[test]
     fn admission_requires_policy_evidence_and_exact_cache_revision() {
-        let yes = ConeBucket { gates: 64, cone_gates: 4, accepted: true };
-        let no = ConeBucket { accepted: false, ..yes };
+        let yes = ConeBucket {
+            gates: 64,
+            cone_gates: 4,
+            accepted: true,
+        };
+        let no = ConeBucket {
+            accepted: false,
+            ..yes
+        };
         let policy = |bucket| BucketPolicy {
-            bucket, choice: EngineChoice::Incremental, pairs: 3,
-            full_total_ns: 300, incremental_total_ns: 60,
+            bucket,
+            choice: EngineChoice::Incremental,
+            pairs: 3,
+            full_total_ns: 300,
+            incremental_total_ns: 60,
         };
         let summary = |accepted| SequentialPairedSummary {
             interventions: 3,
@@ -1161,15 +1567,19 @@ mod measured_sequential_runtime_oracle_tests {
         let frozen = [policy(yes), policy(no)];
         let groups = [(yes, summary(true)), (no, summary(false))];
         let mut revision = CacheRevision {
-            circuit_revision: 11, cached_revision: Some(11),
+            circuit_revision: 11,
+            cached_revision: Some(11),
         };
-        let choose = |revision: &CacheRevision, groups: &[(ConeBucket, SequentialPairedSummary)]| {
+        let choose = |revision: &CacheRevision,
+                      groups: &[(ConeBucket, SequentialPairedSummary)]| {
             choose_measured_sequential(revision, 64, 4, &frozen, groups, 3, 50, 2048)
         };
         assert_eq!(choose(&revision, &groups), Ok(EngineChoice::Incremental));
         assert_eq!(choose(&revision, &groups[..1]), Ok(EngineChoice::Full));
-        assert_eq!(choose_measured_sequential(&revision, 64, 4, &frozen[..1],
-            &groups, 3, 50, 2048), Ok(EngineChoice::Full));
+        assert_eq!(
+            choose_measured_sequential(&revision, 64, 4, &frozen[..1], &groups, 3, 50, 2048),
+            Ok(EngineChoice::Full)
+        );
         revision.committed().unwrap();
         assert_eq!(choose(&revision, &groups), Ok(EngineChoice::Full));
         revision.rebuilt(12).unwrap();
@@ -1180,11 +1590,21 @@ mod measured_sequential_runtime_oracle_tests {
 
     #[test]
     fn individual_regression_and_memory_cap_force_full() {
-        let yes = ConeBucket { gates: 8, cone_gates: 2, accepted: true };
-        let no = ConeBucket { accepted: false, ..yes };
+        let yes = ConeBucket {
+            gates: 8,
+            cone_gates: 2,
+            accepted: true,
+        };
+        let no = ConeBucket {
+            accepted: false,
+            ..yes
+        };
         let policy = |bucket| BucketPolicy {
-            bucket, choice: EngineChoice::Incremental, pairs: 2,
-            full_total_ns: 200, incremental_total_ns: 50,
+            bucket,
+            choice: EngineChoice::Incremental,
+            pairs: 2,
+            full_total_ns: 200,
+            incremental_total_ns: 50,
         };
         let summary = |accepted| SequentialPairedSummary {
             interventions: 2,
@@ -1197,7 +1617,10 @@ mod measured_sequential_runtime_oracle_tests {
         };
         let frozen = [policy(yes), policy(no)];
         let mut groups = [(yes, summary(true)), (no, summary(false))];
-        let revision = CacheRevision { circuit_revision: 1, cached_revision: Some(1) };
+        let revision = CacheRevision {
+            circuit_revision: 1,
+            cached_revision: Some(1),
+        };
         let choose = |groups: &[(ConeBucket, SequentialPairedSummary)], cap| {
             choose_measured_sequential(&revision, 8, 2, &frozen, groups, 2, 20, cap)
         };
@@ -1207,7 +1630,6 @@ mod measured_sequential_runtime_oracle_tests {
         assert_eq!(choose(&groups, 100), Ok(EngineChoice::Full));
     }
 }
-
 
 /// Execute a sequential intervention and maintain the cache certificate.
 ///
@@ -1232,7 +1654,10 @@ pub fn execute_sequential_commit<E>(
     if revision.circuit_revision == u64::MAX {
         return Err(SequentialCommitError::Revision(RevisionError::Overflow));
     }
-    if revision.cached_revision.is_some_and(|cached| cached > revision.circuit_revision) {
+    if revision
+        .cached_revision
+        .is_some_and(|cached| cached > revision.circuit_revision)
+    {
         return Err(SequentialCommitError::Revision(RevisionError::FutureCache));
     }
     let accepted = mutate().map_err(SequentialCommitError::Mutation)?;
@@ -1240,8 +1665,11 @@ pub fn execute_sequential_commit<E>(
         revision.rejected();
         return Ok(false);
     }
-    revision.committed().map_err(SequentialCommitError::Revision)?;
-    revision.rebuild_transaction(rebuild)
+    revision
+        .committed()
+        .map_err(SequentialCommitError::Revision)?;
+    revision
+        .rebuild_transaction(rebuild)
         .map_err(SequentialCommitError::Rebuild)?;
     Ok(true)
 }
@@ -1259,29 +1687,47 @@ mod sequential_commit_oracle_tests {
         };
         let rebuild_count = Cell::new(0);
         assert_eq!(
-            execute_sequential_commit(&mut state, || Ok::<_, &str>(false), |_| {
-                rebuild_count.set(rebuild_count.get() + 1);
-                Ok(())
-            }),
+            execute_sequential_commit(
+                &mut state,
+                || Ok::<_, &str>(false),
+                |_| {
+                    rebuild_count.set(rebuild_count.get() + 1);
+                    Ok(())
+                }
+            ),
             Ok(false)
         );
-        assert_eq!((state.circuit_revision, state.cached_revision), (12, Some(12)));
+        assert_eq!(
+            (state.circuit_revision, state.cached_revision),
+            (12, Some(12))
+        );
         assert_eq!(rebuild_count.get(), 0);
         assert_eq!(
-            execute_sequential_commit(&mut state, || Ok::<_, &str>(true), |rev| {
-                assert_eq!(rev, 13);
-                rebuild_count.set(rebuild_count.get() + 1);
-                Ok(())
-            }),
+            execute_sequential_commit(
+                &mut state,
+                || Ok::<_, &str>(true),
+                |rev| {
+                    assert_eq!(rev, 13);
+                    rebuild_count.set(rebuild_count.get() + 1);
+                    Ok(())
+                }
+            ),
             Ok(true)
         );
-        assert_eq!((state.circuit_revision, state.cached_revision), (13, Some(13)));
+        assert_eq!(
+            (state.circuit_revision, state.cached_revision),
+            (13, Some(13))
+        );
         assert_eq!(rebuild_count.get(), 1);
         assert_eq!(
-            execute_sequential_commit(&mut state, || Ok::<_, &str>(true), |rev| {
-                assert_eq!(rev, 14);
-                Err("rebuild failed")
-            }),
+            execute_sequential_commit(
+                &mut state,
+                || Ok::<_, &str>(true),
+                |rev| {
+                    assert_eq!(rev, 14);
+                    Err("rebuild failed")
+                }
+            ),
             Err(SequentialCommitError::Rebuild("rebuild failed"))
         );
         assert_eq!((state.circuit_revision, state.cached_revision), (14, None));
@@ -1295,22 +1741,33 @@ mod sequential_commit_oracle_tests {
         };
         let rebuilt = Cell::new(false);
         assert_eq!(
-            execute_sequential_commit(&mut state, || Err::<bool, _>("mutation failed"), |_| {
-                rebuilt.set(true);
-                Ok(())
-            }),
+            execute_sequential_commit(
+                &mut state,
+                || Err::<bool, _>("mutation failed"),
+                |_| {
+                    rebuilt.set(true);
+                    Ok(())
+                }
+            ),
             Err(SequentialCommitError::Mutation("mutation failed"))
         );
-        assert_eq!((state.circuit_revision, state.cached_revision), (2, Some(2)));
+        assert_eq!(
+            (state.circuit_revision, state.cached_revision),
+            (2, Some(2))
+        );
         assert!(!rebuilt.get());
         state.circuit_revision = u64::MAX;
         state.cached_revision = Some(u64::MAX);
         let mutated = Cell::new(false);
         assert_eq!(
-            execute_sequential_commit(&mut state, || {
-                mutated.set(true);
-                Ok::<_, &str>(true)
-            }, |_| Ok(())),
+            execute_sequential_commit(
+                &mut state,
+                || {
+                    mutated.set(true);
+                    Ok::<_, &str>(true)
+                },
+                |_| Ok(())
+            ),
             Err(SequentialCommitError::Revision(RevisionError::Overflow))
         );
         assert!(!mutated.get());

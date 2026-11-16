@@ -56,8 +56,10 @@ pub fn audit_sequence(
         max_vmhwm_kib: 0,
     };
     for step in steps {
-        if step.gates == 0 || step.cone_gates > step.gates
-            || step.full_ns == 0 || step.incremental_ns == 0
+        if step.gates == 0
+            || step.cone_gates > step.gates
+            || step.full_ns == 0
+            || step.incremental_ns == 0
         {
             return Err(AuditError::InvalidStep);
         }
@@ -68,23 +70,32 @@ pub fn audit_sequence(
         if step.accepted {
             result.accepted = result.accepted.checked_add(1).ok_or(AuditError::Overflow)?;
         }
-        result.full_total_ns = result.full_total_ns
-            .checked_add(u128::from(step.full_ns)).ok_or(AuditError::Overflow)?;
+        result.full_total_ns = result
+            .full_total_ns
+            .checked_add(u128::from(step.full_ns))
+            .ok_or(AuditError::Overflow)?;
         let selected = if policy.select(step.gates, step.cone_gates) == Engine::Incremental {
-            result.incremental_selected = result.incremental_selected
-                .checked_add(1).ok_or(AuditError::Overflow)?;
+            result.incremental_selected = result
+                .incremental_selected
+                .checked_add(1)
+                .ok_or(AuditError::Overflow)?;
             if step.incremental_ns > step.full_ns {
-                result.incremental_regressions = result.incremental_regressions
-                    .checked_add(1).ok_or(AuditError::Overflow)?;
-                result.worst_regression_ns = result.worst_regression_ns
+                result.incremental_regressions = result
+                    .incremental_regressions
+                    .checked_add(1)
+                    .ok_or(AuditError::Overflow)?;
+                result.worst_regression_ns = result
+                    .worst_regression_ns
                     .max(step.incremental_ns - step.full_ns);
             }
             step.incremental_ns
         } else {
             step.full_ns
         };
-        result.selected_total_ns = result.selected_total_ns
-            .checked_add(u128::from(selected)).ok_or(AuditError::Overflow)?;
+        result.selected_total_ns = result
+            .selected_total_ns
+            .checked_add(u128::from(selected))
+            .ok_or(AuditError::Overflow)?;
         result.max_vmhwm_kib = result.max_vmhwm_kib.max(step.vmhwm_kib);
     }
     Ok(result)
@@ -107,16 +118,29 @@ mod tests {
     use crate::fourier5_conservative_policy::PairedObservation;
 
     fn policy() -> FrozenPolicy {
-        FrozenPolicy::fit_valid(&[PairedObservation {
-            gates: 100, cone_gates: 2, full_ns: 100,
-            incremental_ns: 20, same_output: true, same_decision: true,
-        }], 1).unwrap()
+        FrozenPolicy::fit_valid(
+            &[PairedObservation {
+                gates: 100,
+                cone_gates: 2,
+                full_ns: 100,
+                incremental_ns: 20,
+                same_output: true,
+                same_decision: true,
+            }],
+            1,
+        )
+        .unwrap()
     }
     fn step(cone: u64, full: u64, inc: u64) -> SequentialStep {
         SequentialStep {
-            gates: 100, cone_gates: cone, accepted: true,
-            full_ns: full, incremental_ns: inc,
-            same_output: true, same_decision: true, vmhwm_kib: 2048,
+            gates: 100,
+            cone_gates: cone,
+            accepted: true,
+            full_ns: full,
+            incremental_ns: inc,
+            same_output: true,
+            same_decision: true,
+            vmhwm_kib: 2048,
         }
     }
     #[test]
@@ -124,9 +148,16 @@ mod tests {
         let steps = [step(2, 100, 20), step(80, 50, 90), step(3, 70, 30)];
         let p = policy();
         let result = audit_sequence(&p, &steps).unwrap();
-        let oracle: u128 = steps.iter().map(|s| {
-            u128::from(if s.cone_gates < 7 { s.incremental_ns } else { s.full_ns })
-        }).sum();
+        let oracle: u128 = steps
+            .iter()
+            .map(|s| {
+                u128::from(if s.cone_gates < 7 {
+                    s.incremental_ns
+                } else {
+                    s.full_ns
+                })
+            })
+            .sum();
         assert_eq!(result.full_total_ns, 220);
         assert_eq!(result.selected_total_ns, oracle);
         assert_eq!(result.incremental_selected, 2);
@@ -143,10 +174,16 @@ mod tests {
     fn oracle_mismatch_and_invalid_timing_fail_closed() {
         let mut s = step(2, 100, 20);
         s.same_decision = false;
-        assert_eq!(audit_sequence(&policy(), &[s]), Err(AuditError::OracleMismatch));
+        assert_eq!(
+            audit_sequence(&policy(), &[s]),
+            Err(AuditError::OracleMismatch)
+        );
         s.same_decision = true;
         s.incremental_ns = 0;
-        assert_eq!(audit_sequence(&policy(), &[s]), Err(AuditError::InvalidStep));
+        assert_eq!(
+            audit_sequence(&policy(), &[s]),
+            Err(AuditError::InvalidStep)
+        );
         assert_eq!(audit_sequence(&policy(), &[]), Err(AuditError::Empty));
     }
     #[test]
