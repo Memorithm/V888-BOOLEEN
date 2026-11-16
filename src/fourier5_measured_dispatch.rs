@@ -892,3 +892,119 @@ mod sequential_accounting_oracle_tests {
         ]), Err(PolicyError::Overflow));
     }
 }
+
+
+/// A measured sequential intervention associated with a pre-decision cone.
+/// The bucket's accepted flag must equal the observed outcome; dispatch
+/// itself must not use that flag before executing the intervention.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BucketedSequentialObservation {
+    pub bucket: ConeBucket,
+    pub observation: SequentialPairedObservation,
+}
+
+/// Preserve negative results per workload shape rather than allowing a large,
+/// fast cone class to hide a slower class in an aggregate. Bucket ordering
+/// follows first appearance, so the report is deterministic without sorting.
+pub fn summarize_sequential_by_bucket(
+    samples: &[BucketedSequentialObservation],
+) -> Result<Vec<(ConeBucket, SequentialPairedSummary)>, PolicyError> {
+    let mut groups: Vec<(ConeBucket, SequentialPairedSummary)> = Vec::new();
+    for sample in samples {
+        if sample.bucket.gates == 0
+            || sample.bucket.cone_gates > sample.bucket.gates
+            || sample.bucket.accepted != sample.observation.accepted
+        {
+            return Err(PolicyError::InvalidSample);
+        }
+        let one = summarize_sequential_pairs(&[sample.observation])?;
+        let index = groups
+            .iter()
+            .position(|(bucket, _)| *bucket == sample.bucket);
+        if let Some(index) = index {
+            let summary = &mut groups[index].1;
+            summary.interventions = summary.interventions.checked_add(one.interventions)
+                .ok_or(PolicyError::Overflow)?;
+            summary.accepted = summary.accepted.checked_add(one.accepted)
+                .ok_or(PolicyError::Overflow)?;
+            summary.rejected = summary.rejected.checked_add(one.rejected)
+                .ok_or(PolicyError::Overflow)?;
+            summary.full_total_ns = summary.full_total_ns.checked_add(one.full_total_ns)
+                .ok_or(PolicyError::Overflow)?;
+            summary.incremental_total_ns = summary.incremental_total_ns
+                .checked_add(one.incremental_total_ns).ok_or(PolicyError::Overflow)?;
+            summary.mismatches = summary.mismatches.checked_add(one.mismatches)
+                .ok_or(PolicyError::Overflow)?;
+            summary.regressions = summary.regressions.checked_add(one.regressions)
+                .ok_or(PolicyError::Overflow)?;
+            summary.full_peak_vmhwm_kib =
+                summary.full_peak_vmhwm_kib.max(one.full_peak_vmhwm_kib);
+            summary.incremental_peak_vmhwm_kib =
+                summary.incremental_peak_vmhwm_kib.max(one.incremental_peak_vmhwm_kib);
+        } else {
+            groups.push((sample.bucket, one));
+        }
+    }
+    Ok(groups)
+}
+
+#[cfg(test)]
+mod heterogeneous_sequential_oracle_tests {
+    use super::*;
+
+    #[test]
+    fn slow_cone_cannot_hide_behind_fast_cone() {
+        let fast = ConeBucket { gates: 100, cone_gates: 1, accepted: true };
+        let slow = ConeBucket { gates: 100, cone_gates: 90, accepted: true };
+        let observation = |execution| SequentialPairedObservation {
+            accepted: true,
+            same_output: true,
+            same_decision: true,
+            full_execution_ns: 100,
+            incremental_execution_ns: execution,
+            full_refresh_ns: 0,
+            incremental_refresh_ns: 10,
+            full_vmhwm_kib: 1024,
+            incremental_vmhwm_kib: 2048,
+        };
+        let samples = [
+            BucketedSequentialObservation { bucket: fast, observation: observation(1) },
+            BucketedSequentialObservation { bucket: fast, observation: observation(1) },
+            BucketedSequentialObservation { bucket: slow, observation: observation(150) },
+        ];
+        let overall = summarize_sequential_pairs(
+            &samples.map(|sample| sample.observation),
+        ).unwrap();
+        assert!(overall.incremental_total_ns < overall.full_total_ns);
+        let groups = summarize_sequential_by_bucket(&samples).unwrap();
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].0, fast);
+        assert_eq!((groups[0].1.full_total_ns, groups[0].1.incremental_total_ns),
+            (200, 22));
+        assert_eq!(groups[1].0, slow);
+        assert_eq!((groups[1].1.full_total_ns, groups[1].1.incremental_total_ns),
+            (100, 160));
+        assert_eq!(groups[1].1.regressions, 1);
+        assert_eq!(groups[1].1.incremental_peak_vmhwm_kib, 2048);
+    }
+
+    #[test]
+    fn rejects_outcome_mismatch_and_impossible_cone() {
+        let bucket = ConeBucket { gates: 10, cone_gates: 2, accepted: false };
+        let observation = SequentialPairedObservation {
+            accepted: true, same_output: true, same_decision: true,
+            full_execution_ns: 1, incremental_execution_ns: 1,
+            full_refresh_ns: 0, incremental_refresh_ns: 0,
+            full_vmhwm_kib: 0, incremental_vmhwm_kib: 0,
+        };
+        assert_eq!(summarize_sequential_by_bucket(&[
+            BucketedSequentialObservation { bucket, observation },
+        ]), Err(PolicyError::InvalidSample));
+        assert_eq!(summarize_sequential_by_bucket(&[
+            BucketedSequentialObservation {
+                bucket: ConeBucket { gates: 10, cone_gates: 11, accepted: true },
+                observation,
+            },
+        ]), Err(PolicyError::InvalidSample));
+    }
+}
