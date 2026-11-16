@@ -1102,3 +1102,108 @@ mod sequential_predecision_oracle_tests {
         assert!(!sequential_predecision_eligible(&groups, 20, 2, 0, 1, 2048));
     }
 }
+
+
+/// Runtime admission gate: all three independent safety conditions must agree.
+/// This function is invoked before the intervention outcome is known.
+/// The sequential evidence must be frozen from TRAIN/VALID; never feed TEST/OOD
+/// observations back into `groups` during evaluation.
+pub fn choose_measured_sequential(
+    revision: &CacheRevision,
+    gates: usize,
+    cone_gates: usize,
+    frozen: &[BucketPolicy],
+    groups: &[(ConeBucket, SequentialPairedSummary)],
+    min_samples_per_outcome: usize,
+    required_saving_ns: u128,
+    max_incremental_vmhwm_kib: u64,
+) -> Result<EngineChoice, RevisionError> {
+    // Check revision integrity even when measurements are missing.
+    let candidate = revision.choose(gates, cone_gates, frozen)?;
+    if candidate != EngineChoice::Incremental {
+        return Ok(EngineChoice::Full);
+    }
+    if sequential_predecision_eligible(
+        groups,
+        gates,
+        cone_gates,
+        min_samples_per_outcome,
+        required_saving_ns,
+        max_incremental_vmhwm_kib,
+    ) {
+        Ok(EngineChoice::Incremental)
+    } else {
+        Ok(EngineChoice::Full)
+    }
+}
+
+#[cfg(test)]
+mod measured_sequential_runtime_oracle_tests {
+    use super::*;
+
+    #[test]
+    fn admission_requires_policy_evidence_and_exact_cache_revision() {
+        let yes = ConeBucket { gates: 64, cone_gates: 4, accepted: true };
+        let no = ConeBucket { accepted: false, ..yes };
+        let policy = |bucket| BucketPolicy {
+            bucket, choice: EngineChoice::Incremental, pairs: 3,
+            full_total_ns: 300, incremental_total_ns: 60,
+        };
+        let summary = |accepted| SequentialPairedSummary {
+            interventions: 3,
+            accepted: if accepted { 3 } else { 0 },
+            rejected: if accepted { 0 } else { 3 },
+            full_total_ns: 300,
+            incremental_total_ns: 120,
+            incremental_peak_vmhwm_kib: 2048,
+            ..SequentialPairedSummary::default()
+        };
+        let frozen = [policy(yes), policy(no)];
+        let groups = [(yes, summary(true)), (no, summary(false))];
+        let mut revision = CacheRevision {
+            circuit_revision: 11, cached_revision: Some(11),
+        };
+        let choose = |revision: &CacheRevision, groups: &[(ConeBucket, SequentialPairedSummary)]| {
+            choose_measured_sequential(revision, 64, 4, &frozen, groups, 3, 50, 2048)
+        };
+        assert_eq!(choose(&revision, &groups), Ok(EngineChoice::Incremental));
+        assert_eq!(choose(&revision, &groups[..1]), Ok(EngineChoice::Full));
+        assert_eq!(choose_measured_sequential(&revision, 64, 4, &frozen[..1],
+            &groups, 3, 50, 2048), Ok(EngineChoice::Full));
+        revision.committed().unwrap();
+        assert_eq!(choose(&revision, &groups), Ok(EngineChoice::Full));
+        revision.rebuilt(12).unwrap();
+        assert_eq!(choose(&revision, &groups), Ok(EngineChoice::Incremental));
+        revision.cached_revision = Some(13);
+        assert_eq!(choose(&revision, &groups), Err(RevisionError::FutureCache));
+    }
+
+    #[test]
+    fn individual_regression_and_memory_cap_force_full() {
+        let yes = ConeBucket { gates: 8, cone_gates: 2, accepted: true };
+        let no = ConeBucket { accepted: false, ..yes };
+        let policy = |bucket| BucketPolicy {
+            bucket, choice: EngineChoice::Incremental, pairs: 2,
+            full_total_ns: 200, incremental_total_ns: 50,
+        };
+        let summary = |accepted| SequentialPairedSummary {
+            interventions: 2,
+            accepted: if accepted { 2 } else { 0 },
+            rejected: if accepted { 0 } else { 2 },
+            full_total_ns: 200,
+            incremental_total_ns: 80,
+            incremental_peak_vmhwm_kib: 100,
+            ..SequentialPairedSummary::default()
+        };
+        let frozen = [policy(yes), policy(no)];
+        let mut groups = [(yes, summary(true)), (no, summary(false))];
+        let revision = CacheRevision { circuit_revision: 1, cached_revision: Some(1) };
+        let choose = |groups: &[(ConeBucket, SequentialPairedSummary)], cap| {
+            choose_measured_sequential(&revision, 8, 2, &frozen, groups, 2, 20, cap)
+        };
+        assert_eq!(choose(&groups, 100), Ok(EngineChoice::Incremental));
+        assert_eq!(choose(&groups, 99), Ok(EngineChoice::Full));
+        groups[1].1.regressions = 1;
+        assert_eq!(choose(&groups, 100), Ok(EngineChoice::Full));
+    }
+}
