@@ -54,6 +54,7 @@ après admission explicite dans son groupe de runners.
 - [Exploitation sous RemoteOps](docs/REMOTEOPS.md)
 - [Moteur événementiel asynchrone](docs/EVENT_RUNTIME.md)
 - [Préparation parallèle des frontières causales](docs/EVENT_PARALLEL.md)
+- [Commits parallèles des compteurs sans conflit](docs/EVENT_DISJOINT_COMMIT.md)
 
 ## Droits
 
