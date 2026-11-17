@@ -61,3 +61,5 @@ Code réservé à ses titulaires : aucune licence de redistribution n'est accord
 
 Le moteur Rust est exécutable. `cargo run -- demo` utilise des données synthétiques, tandis que les exécutions réelles sont qualifiées via RemoteOps sur le Dell. Consulte les [spécifications du moteur](docs/ENGINE.md), du [flux individuel des synapses](docs/SYNAPSE_PAIRS.md) et des [portes booléennes de neurotransmetteurs](docs/NT_BOOLEAN.md).
 
+Un ordonnanceur [asynchrone événementiel expérimental](docs/EVENT_RUNTIME.md) est également disponible en Rust, sans interprétation biologique ni revendication de gain énergétique.
+
