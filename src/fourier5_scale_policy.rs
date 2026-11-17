@@ -90,6 +90,22 @@ impl ScaleAwarePolicy {
         self.select(gates, cone_gates)
     }
 
+    /// Route a sequential intervention only if its cache was rebuilt for the
+    /// exact post-mutation revision. Overflow is a hard error: a wrapped
+    /// revision could otherwise make an obsolete cache appear current.
+    /// The caller must update its circuit revision only after an accepted
+    /// mutation, and assign the returned revision to a rebuilt cache.
+    pub fn next_generation(current: u64) -> Result<u64, PolicyError> {
+        current.checked_add(1).ok_or(PolicyError::Overflow)
+    }
+
+    /// Explicitly reject a cache revision from the future as well as stale
+    /// revisions; callers may use this after a successful full-oracle check.
+    #[must_use]
+    pub fn cache_is_current(circuit_generation: u64, cache_generation: Option<u64>) -> bool {
+        cache_generation == Some(circuit_generation)
+    }
+
     #[must_use]
     pub fn validation_samples(&self, gates: u64, cone_gates: u64) -> u64 {
         if gates == 0 || cone_gates > gates {
@@ -266,6 +282,21 @@ mod tests {
         let policy = ScaleAwarePolicy::fit_valid(&valid, 1, 0).unwrap();
         assert_eq!(policy.select_for_generation(1_562_501, 0, 1, Some(1)), Engine::Full);
         assert_eq!(policy.select_for_generation(0, 0, 1, Some(1)), Engine::Full);
+    }
+
+    #[test]
+    fn sequential_revisions_advance_without_wraparound() {
+        assert_eq!(ScaleAwarePolicy::next_generation(0), Ok(1));
+        assert_eq!(ScaleAwarePolicy::next_generation(u64::MAX - 1), Ok(u64::MAX));
+        assert_eq!(ScaleAwarePolicy::next_generation(u64::MAX), Err(PolicyError::Overflow));
+    }
+
+    #[test]
+    fn cache_revision_never_matches_future_or_missing_cache() {
+        assert!(ScaleAwarePolicy::cache_is_current(8, Some(8)));
+        assert!(!ScaleAwarePolicy::cache_is_current(8, Some(7)));
+        assert!(!ScaleAwarePolicy::cache_is_current(8, Some(9)));
+        assert!(!ScaleAwarePolicy::cache_is_current(8, None));
     }
 
     #[test]
