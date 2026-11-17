@@ -52,9 +52,11 @@ pub fn dispatch_verified<T: Eq>(
 pub fn after_accepted_intervention(stamp: CacheStamp) -> Result<CacheStamp, DispatchError> {
     let generation = ScaleAwarePolicy::next_generation(stamp.generation)
         .map_err(|_| DispatchError::GenerationOverflow)?;
-    Ok(CacheStamp { generation, ..stamp })
+    Ok(CacheStamp {
+        generation,
+        ..stamp
+    })
 }
-
 
 /// Owns the cache revision for sequential synthetic interventions. A cache is
 /// published only after its rebuild succeeds for the next circuit generation.
@@ -228,7 +230,6 @@ impl SequentialCacheState {
             incremental,
         )
     }
-
 }
 
 #[cfg(test)]
@@ -238,30 +239,60 @@ mod tests {
     use std::cell::Cell;
 
     fn policy() -> ScaleAwarePolicy {
-        ScaleAwarePolicy::fit_valid(&[PairedObservation {
-            gates: 128, cone_gates: 4, full_ns: 100, incremental_ns: 10,
-            same_output: true, same_decision: true,
-        }], 1, 0).unwrap()
+        ScaleAwarePolicy::fit_valid(
+            &[PairedObservation {
+                gates: 128,
+                cone_gates: 4,
+                full_ns: 100,
+                incremental_ns: 10,
+                same_output: true,
+                same_decision: true,
+            }],
+            1,
+            0,
+        )
+        .unwrap()
     }
 
     #[test]
     fn oracle_rejects_wrong_incremental_output() {
-        let stamp = CacheStamp { circuit_id: 7, generation: 2 };
-        let result = dispatch_verified(&policy(), 128, 4, stamp, Some(stamp),
-            || Ok(42), || Ok(41));
+        let stamp = CacheStamp {
+            circuit_id: 7,
+            generation: 2,
+        };
+        let result = dispatch_verified(&policy(), 128, 4, stamp, Some(stamp), || Ok(42), || Ok(41));
         assert_eq!(result, Ok((42, Engine::Full)));
     }
 
     #[test]
     fn stale_and_cross_circuit_cache_never_execute_incremental() {
-        let stamp = CacheStamp { circuit_id: 7, generation: 2 };
+        let stamp = CacheStamp {
+            circuit_id: 7,
+            generation: 2,
+        };
         for other in [
-            CacheStamp { circuit_id: 8, generation: 2 },
-            CacheStamp { circuit_id: 7, generation: 1 },
+            CacheStamp {
+                circuit_id: 8,
+                generation: 2,
+            },
+            CacheStamp {
+                circuit_id: 7,
+                generation: 1,
+            },
         ] {
             let calls = Cell::new(0);
-            let result = dispatch_verified(&policy(), 128, 4, stamp, Some(other),
-                || Ok(42), || { calls.set(calls.get() + 1); Ok(42) });
+            let result = dispatch_verified(
+                &policy(),
+                128,
+                4,
+                stamp,
+                Some(other),
+                || Ok(42),
+                || {
+                    calls.set(calls.get() + 1);
+                    Ok(42)
+                },
+            );
             assert_eq!(result, Ok((42, Engine::Full)));
             assert_eq!(calls.get(), 0);
         }
@@ -269,28 +300,63 @@ mod tests {
 
     #[test]
     fn accepted_mutation_invalidates_old_cache_until_rebuild() {
-        let before = CacheStamp { circuit_id: 7, generation: 2 };
+        let before = CacheStamp {
+            circuit_id: 7,
+            generation: 2,
+        };
         let after = after_accepted_intervention(before).unwrap();
         assert_eq!(after.generation, 3);
-        assert_eq!(dispatch_verified(&policy(), 128, 4, after, Some(before),
-            || Ok(1), || Err(DispatchError::FullOracleFailed)), Ok((1, Engine::Full)));
-        assert_eq!(dispatch_verified(&policy(), 128, 4, after, Some(after),
-            || Ok(1), || Ok(1)), Ok((1, Engine::Incremental)));
-        assert_eq!(after_accepted_intervention(CacheStamp { generation: u64::MAX, ..before }),
-            Err(DispatchError::GenerationOverflow));
+        assert_eq!(
+            dispatch_verified(
+                &policy(),
+                128,
+                4,
+                after,
+                Some(before),
+                || Ok(1),
+                || Err(DispatchError::FullOracleFailed)
+            ),
+            Ok((1, Engine::Full))
+        );
+        assert_eq!(
+            dispatch_verified(&policy(), 128, 4, after, Some(after), || Ok(1), || Ok(1)),
+            Ok((1, Engine::Incremental))
+        );
+        assert_eq!(
+            after_accepted_intervention(CacheStamp {
+                generation: u64::MAX,
+                ..before
+            }),
+            Err(DispatchError::GenerationOverflow)
+        );
     }
 
     #[test]
     fn full_oracle_failure_is_not_hidden() {
-        let stamp = CacheStamp { circuit_id: 7, generation: 2 };
-        assert_eq!(dispatch_verified::<u8>(&policy(), 128, 4, stamp, Some(stamp),
-            || Err(DispatchError::FullOracleFailed), || Ok(1)),
-            Err(DispatchError::FullOracleFailed));
+        let stamp = CacheStamp {
+            circuit_id: 7,
+            generation: 2,
+        };
+        assert_eq!(
+            dispatch_verified::<u8>(
+                &policy(),
+                128,
+                4,
+                stamp,
+                Some(stamp),
+                || Err(DispatchError::FullOracleFailed),
+                || Ok(1)
+            ),
+            Err(DispatchError::FullOracleFailed)
+        );
     }
 
     #[test]
     fn sequential_rebuild_commits_only_on_success() {
-        let initial = CacheStamp { circuit_id: 17, generation: 5 };
+        let initial = CacheStamp {
+            circuit_id: 17,
+            generation: 5,
+        };
         let mut state = SequentialCacheState::new(initial, Some(initial));
         assert_eq!(
             state.accept_with_rebuild(|_| Err(DispatchError::FullOracleFailed)),
@@ -298,10 +364,12 @@ mod tests {
         );
         assert_eq!(state.circuit(), initial);
         assert_eq!(state.cache(), Some(initial));
-        let next = state.accept_with_rebuild(|stamp| {
-            assert_eq!(stamp.generation, 6);
-            Ok(())
-        }).unwrap();
+        let next = state
+            .accept_with_rebuild(|stamp| {
+                assert_eq!(stamp.generation, 6);
+                Ok(())
+            })
+            .unwrap();
         assert_eq!(state.circuit(), next);
         assert_eq!(state.cache(), Some(next));
         assert!(!state.publish_rebuilt_cache(initial));
@@ -310,31 +378,50 @@ mod tests {
 
     #[test]
     fn sequential_cache_invalidation_and_overflow_are_fail_closed() {
-        let initial = CacheStamp { circuit_id: 19, generation: 9 };
+        let initial = CacheStamp {
+            circuit_id: 19,
+            generation: 9,
+        };
         let mut state = SequentialCacheState::new(initial, Some(initial));
         let next = state.accept_without_cache().unwrap();
         assert_eq!(state.cache(), None);
         assert!(!state.publish_rebuilt_cache(initial));
         assert!(state.publish_rebuilt_cache(next));
         assert_eq!(state.cache(), Some(next));
-        let terminal = CacheStamp { generation: u64::MAX, ..initial };
+        let terminal = CacheStamp {
+            generation: u64::MAX,
+            ..initial
+        };
         let mut saturated = SequentialCacheState::new(terminal, Some(terminal));
-        assert_eq!(saturated.accept_without_cache(), Err(DispatchError::GenerationOverflow));
+        assert_eq!(
+            saturated.accept_without_cache(),
+            Err(DispatchError::GenerationOverflow)
+        );
         assert_eq!(saturated.cache(), Some(terminal));
         assert_eq!(saturated.circuit(), terminal);
     }
 
-
     #[test]
     fn transactional_mutation_rolls_back_on_oracle_disagreement() {
-        let initial = CacheStamp { circuit_id: 29, generation: 4 };
+        let initial = CacheStamp {
+            circuit_id: 29,
+            generation: 4,
+        };
         let mut state = SequentialCacheState::new(initial, Some(initial));
         let mut circuit = vec![false, true];
         let mut cache = vec![false, true];
         let result = state.transact_verified(
-            &mut circuit, &mut cache,
-            |c| { c[0] = true; Ok(()) },
-            |c, k| { *k = c.clone(); k[1] = false; Ok(()) },
+            &mut circuit,
+            &mut cache,
+            |c| {
+                c[0] = true;
+                Ok(())
+            },
+            |c, k| {
+                *k = c.clone();
+                k[1] = false;
+                Ok(())
+            },
             |c| Ok(c.clone()),
             |_, k| Ok(k.clone()),
         );
@@ -347,17 +434,29 @@ mod tests {
 
     #[test]
     fn transactional_mutation_publishes_only_verified_generation() {
-        let initial = CacheStamp { circuit_id: 31, generation: 0 };
+        let initial = CacheStamp {
+            circuit_id: 31,
+            generation: 0,
+        };
         let mut state = SequentialCacheState::new(initial, Some(initial));
         let mut circuit = vec![false, false];
         let mut cache = circuit.clone();
-        let next = state.transact_verified(
-            &mut circuit, &mut cache,
-            |c| { c[1] = true; Ok(()) },
-            |c, k| { *k = c.clone(); Ok(()) },
-            |c| Ok(c.clone()),
-            |_, k| Ok(k.clone()),
-        ).unwrap();
+        let next = state
+            .transact_verified(
+                &mut circuit,
+                &mut cache,
+                |c| {
+                    c[1] = true;
+                    Ok(())
+                },
+                |c, k| {
+                    *k = c.clone();
+                    Ok(())
+                },
+                |c| Ok(c.clone()),
+                |_, k| Ok(k.clone()),
+            )
+            .unwrap();
         assert_eq!(next.generation, 1);
         assert_eq!(circuit, vec![false, true]);
         assert_eq!(cache, circuit);
@@ -368,13 +467,20 @@ mod tests {
     #[test]
     fn fresh_cache_transaction_supports_non_clone_cache_and_rollback() {
         struct NonClone(Vec<bool>);
-        let initial = CacheStamp { circuit_id: 37, generation: 3 };
+        let initial = CacheStamp {
+            circuit_id: 37,
+            generation: 3,
+        };
         let mut state = SequentialCacheState::new(initial, Some(initial));
         let mut circuit = vec![false, true];
         let mut cache = NonClone(circuit.clone());
         let failed = state.transact_with_fresh_cache(
-            &mut circuit, &mut cache,
-            |c| { c[0] = true; Ok(()) },
+            &mut circuit,
+            &mut cache,
+            |c| {
+                c[0] = true;
+                Ok(())
+            },
             |c| Ok(NonClone(vec![false; c.len()])),
             |c| Ok(c.clone()),
             |_, k| Ok(k.0.clone()),
@@ -383,13 +489,19 @@ mod tests {
         assert_eq!(circuit, vec![false, true]);
         assert_eq!(cache.0, circuit);
         assert_eq!(state.circuit(), initial);
-        let next = state.transact_with_fresh_cache(
-            &mut circuit, &mut cache,
-            |c| { c[0] = true; Ok(()) },
-            |c| Ok(NonClone(c.clone())),
-            |c| Ok(c.clone()),
-            |_, k| Ok(k.0.clone()),
-        ).unwrap();
+        let next = state
+            .transact_with_fresh_cache(
+                &mut circuit,
+                &mut cache,
+                |c| {
+                    c[0] = true;
+                    Ok(())
+                },
+                |c| Ok(NonClone(c.clone())),
+                |c| Ok(c.clone()),
+                |_, k| Ok(k.0.clone()),
+            )
+            .unwrap();
         assert_eq!(next.generation, 4);
         assert_eq!(circuit, vec![true, true]);
         assert_eq!(cache.0, circuit);
@@ -399,13 +511,20 @@ mod tests {
     #[test]
     fn fresh_cache_builder_failure_does_not_publish_revision() {
         struct NonClone;
-        let initial = CacheStamp { circuit_id: 41, generation: 0 };
+        let initial = CacheStamp {
+            circuit_id: 41,
+            generation: 0,
+        };
         let mut state = SequentialCacheState::new(initial, Some(initial));
         let mut circuit = 1_u8;
         let mut cache = NonClone;
         let result = state.transact_with_fresh_cache(
-            &mut circuit, &mut cache,
-            |c| { *c = 2; Ok(()) },
+            &mut circuit,
+            &mut cache,
+            |c| {
+                *c = 2;
+                Ok(())
+            },
             |_| Err(DispatchError::FullOracleFailed),
             |c| Ok(*c),
             |_, _| Ok(2_u8),
@@ -419,19 +538,32 @@ mod tests {
     #[test]
     fn sequential_fresh_batch_verifies_every_step_and_rolls_back() {
         struct NonClone(Vec<bool>);
-        let initial = CacheStamp { circuit_id: 51, generation: 3 };
+        let initial = CacheStamp {
+            circuit_id: 51,
+            generation: 3,
+        };
         let mut state = SequentialCacheState::new(initial, Some(initial));
         let mut circuit = vec![false, false, false];
         let mut cache = NonClone(circuit.clone());
         let mut checked = 0;
         let rejected = state.transact_sequential_fresh(
-            &mut circuit, &mut cache, [0_usize, 1],
-            |c, i| { c[i] = true; Ok(()) },
+            &mut circuit,
+            &mut cache,
+            [0_usize, 1],
+            |c, i| {
+                c[i] = true;
+                Ok(())
+            },
             |c| Ok(NonClone(c.clone())),
-            |c| { checked += 1; Ok(c.clone()) },
+            |c| {
+                checked += 1;
+                Ok(c.clone())
+            },
             |_, k| {
                 let mut value = k.0.clone();
-                if value[1] { value[1] = false; }
+                if value[1] {
+                    value[1] = false;
+                }
                 Ok(value)
             },
         );
@@ -440,13 +572,20 @@ mod tests {
         assert_eq!(circuit, vec![false; 3]);
         assert_eq!(cache.0, circuit);
         assert_eq!(state.circuit(), initial);
-        let accepted = state.transact_sequential_fresh(
-            &mut circuit, &mut cache, [0_usize, 2],
-            |c, i| { c[i] = true; Ok(()) },
-            |c| Ok(NonClone(c.clone())),
-            |c| Ok(c.clone()),
-            |_, k| Ok(k.0.clone()),
-        ).unwrap();
+        let accepted = state
+            .transact_sequential_fresh(
+                &mut circuit,
+                &mut cache,
+                [0_usize, 2],
+                |c, i| {
+                    c[i] = true;
+                    Ok(())
+                },
+                |c| Ok(NonClone(c.clone())),
+                |c| Ok(c.clone()),
+                |_, k| Ok(k.0.clone()),
+            )
+            .unwrap();
         assert_eq!(accepted.generation, 5);
         assert_eq!(circuit, vec![true, false, true]);
         assert_eq!(cache.0, circuit);
@@ -456,20 +595,37 @@ mod tests {
     #[test]
     fn sequential_fresh_empty_and_overflow_are_non_mutating() {
         struct NonClone;
-        let initial = CacheStamp { circuit_id: 52, generation: u64::MAX };
+        let initial = CacheStamp {
+            circuit_id: 52,
+            generation: u64::MAX,
+        };
         let mut state = SequentialCacheState::new(initial, Some(initial));
         let mut circuit = 0_u8;
         let mut cache = NonClone;
         let empty = state.transact_sequential_fresh(
-            &mut circuit, &mut cache, std::iter::empty::<u8>(),
-            |c, _| { *c = 1; Ok(()) },
-            |_| Ok(NonClone), |c| Ok(*c), |_, _| Ok(0_u8),
+            &mut circuit,
+            &mut cache,
+            std::iter::empty::<u8>(),
+            |c, _| {
+                *c = 1;
+                Ok(())
+            },
+            |_| Ok(NonClone),
+            |c| Ok(*c),
+            |_, _| Ok(0_u8),
         );
         assert_eq!(empty, Ok(initial));
         let overflow = state.transact_sequential_fresh(
-            &mut circuit, &mut cache, [1_u8],
-            |c, value| { *c = value; Ok(()) },
-            |_| Ok(NonClone), |c| Ok(*c), |_, _| Ok(1_u8),
+            &mut circuit,
+            &mut cache,
+            [1_u8],
+            |c, value| {
+                *c = value;
+                Ok(())
+            },
+            |_| Ok(NonClone),
+            |c| Ok(*c),
+            |_, _| Ok(1_u8),
         );
         assert_eq!(overflow, Err(DispatchError::GenerationOverflow));
         assert_eq!(circuit, 0);
@@ -479,29 +635,71 @@ mod tests {
 
     #[test]
     fn state_owned_dispatch_tracks_sequential_cache_rebuilds() {
-        let initial = CacheStamp { circuit_id: 23, generation: 0 };
+        let initial = CacheStamp {
+            circuit_id: 23,
+            generation: 0,
+        };
         let mut state = SequentialCacheState::new(initial, Some(initial));
         let calls = Cell::new(0);
-        assert_eq!(state.dispatch(&policy(), 128, 4,
-            || Ok(9), || { calls.set(calls.get() + 1); Ok(9) }),
-            Ok((9, Engine::Incremental)));
+        assert_eq!(
+            state.dispatch(
+                &policy(),
+                128,
+                4,
+                || Ok(9),
+                || {
+                    calls.set(calls.get() + 1);
+                    Ok(9)
+                }
+            ),
+            Ok((9, Engine::Incremental))
+        );
         assert_eq!(calls.get(), 1);
 
         let next = state.accept_without_cache().unwrap();
-        assert_eq!(state.dispatch(&policy(), 128, 4,
-            || Ok(10), || { calls.set(calls.get() + 1); Ok(10) }),
-            Ok((10, Engine::Full)));
+        assert_eq!(
+            state.dispatch(
+                &policy(),
+                128,
+                4,
+                || Ok(10),
+                || {
+                    calls.set(calls.get() + 1);
+                    Ok(10)
+                }
+            ),
+            Ok((10, Engine::Full))
+        );
         assert_eq!(calls.get(), 1);
         assert!(!state.publish_rebuilt_cache(initial));
         assert!(state.publish_rebuilt_cache(next));
-        assert_eq!(state.dispatch(&policy(), 128, 4,
-            || Ok(10), || { calls.set(calls.get() + 1); Ok(11) }),
-            Ok((10, Engine::Full)));
+        assert_eq!(
+            state.dispatch(
+                &policy(),
+                128,
+                4,
+                || Ok(10),
+                || {
+                    calls.set(calls.get() + 1);
+                    Ok(11)
+                }
+            ),
+            Ok((10, Engine::Full))
+        );
         assert_eq!(calls.get(), 2);
-        assert_eq!(state.dispatch(&policy(), 128, 4,
-            || Ok(10), || { calls.set(calls.get() + 1); Ok(10) }),
-            Ok((10, Engine::Incremental)));
+        assert_eq!(
+            state.dispatch(
+                &policy(),
+                128,
+                4,
+                || Ok(10),
+                || {
+                    calls.set(calls.get() + 1);
+                    Ok(10)
+                }
+            ),
+            Ok((10, Engine::Incremental))
+        );
         assert_eq!(calls.get(), 3);
     }
-
 }
