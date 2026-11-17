@@ -63,9 +63,17 @@ mod tests {
         let mut cached = false;
         for index in [0, 8, 16, 8, 2, 0] {
             let result = apply_verified(
-                &mut bits, &mut cached, index,
-                |candidate, i| { candidate[i] = !candidate[i]; Ok::<_, ()>(true) },
-                |candidate, value| { *value = candidate.iter().fold(false, |a, b| a ^ b); Ok::<_, ()>(()) },
+                &mut bits,
+                &mut cached,
+                index,
+                |candidate, i| {
+                    candidate[i] = !candidate[i];
+                    Ok::<_, ()>(true)
+                },
+                |candidate, value| {
+                    *value = candidate.iter().fold(false, |a, b| a ^ b);
+                    Ok::<_, ()>(())
+                },
                 |candidate| Ok::<_, ()>(parity(candidate)),
             );
             assert_eq!(result, StepOutcome::Committed);
@@ -78,8 +86,13 @@ mod tests {
         let mut bits = vec![false; 2];
         let mut cached = false;
         let result = apply_verified(
-            &mut bits, &mut cached, 1,
-            |candidate, i| { candidate[i] = true; Ok::<_, ()>(false) },
+            &mut bits,
+            &mut cached,
+            1,
+            |candidate, i| {
+                candidate[i] = true;
+                Ok::<_, ()>(false)
+            },
             |_, _| Ok::<_, ()>(()),
             |_| Ok::<_, ()>(true),
         );
@@ -93,8 +106,13 @@ mod tests {
         let mut bits = vec![false; 2];
         let mut cached = false;
         let result = apply_verified(
-            &mut bits, &mut cached, 0,
-            |candidate, i| { candidate[i] = true; Ok::<_, ()>(true) },
+            &mut bits,
+            &mut cached,
+            0,
+            |candidate, i| {
+                candidate[i] = true;
+                Ok::<_, ()>(true)
+            },
             |_, _| Ok::<_, ()>(()),
             |candidate| Ok::<_, ()>(parity(candidate)),
         );
@@ -108,12 +126,25 @@ mod tests {
         let mut bits = vec![false];
         let mut cached = false;
         let result = apply_verified(
-            &mut bits, &mut cached, 0,
-            |candidate, i| { candidate[i] = true; Ok::<_, &str>(true) },
-            |_, value| { *value = true; Ok::<_, &str>(()) },
+            &mut bits,
+            &mut cached,
+            0,
+            |candidate, i| {
+                candidate[i] = true;
+                Ok::<_, &str>(true)
+            },
+            |_, value| {
+                *value = true;
+                Ok::<_, &str>(())
+            },
             |_| Err::<bool, _>("oracle failed"),
         );
-        assert_eq!(result, StepOutcome::Aborted { error: "oracle failed" });
+        assert_eq!(
+            result,
+            StepOutcome::Aborted {
+                error: "oracle failed"
+            }
+        );
         assert_eq!(bits, vec![false]);
         assert!(!cached);
     }
