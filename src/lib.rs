@@ -18,6 +18,7 @@ pub mod cue_reach;
 pub mod cue_robustness;
 pub mod cue_similarity;
 pub mod eligibility_trace;
+pub mod event_runtime;
 pub mod engine;
 pub mod error_gated;
 pub mod fourier5;
