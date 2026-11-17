@@ -52,6 +52,8 @@ après admission explicite dans son groupe de runners.
 - [Contrat d'exactitude et de provenance](docs/CONTRACT.md)
 - [Sources biologiques et licences](docs/SOURCES.md)
 - [Exploitation sous RemoteOps](docs/REMOTEOPS.md)
+- [Moteur événementiel asynchrone](docs/EVENT_RUNTIME.md)
+- [Préparation parallèle des frontières causales](docs/EVENT_PARALLEL.md)
 
 ## Droits
 
