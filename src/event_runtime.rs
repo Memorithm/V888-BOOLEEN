@@ -13,6 +13,9 @@ use std::collections::BTreeMap;
 use crate::connectome::Connectome;
 use crate::BooleanState;
 
+mod parallel;
+pub use parallel::ParallelFrontierWork;
+
 const DRIVE: u8 = 0;
 const RECHECK: u8 = 1;
 type EventKey = (u64, u8, usize);
@@ -22,6 +25,7 @@ pub enum EventError {
     InvalidGraph,
     InvalidThreshold,
     InvalidPendingBudget,
+    InvalidWorkerCount,
     UnknownNeuron,
     TimeNotFuture,
     ConflictingDrive,
