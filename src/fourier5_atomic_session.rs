@@ -51,7 +51,6 @@ type TestOperation = Box<dyn FnMut(&mut Vec<bool>) -> Result<bool, &'static str>
 mod tests {
     use super::*;
 
-
     // Independent full-recomputation oracle: cache equals the sum of all bits.
     fn full(c: &[bool]) -> usize {
         c.iter().filter(|&&bit| bit).count()
