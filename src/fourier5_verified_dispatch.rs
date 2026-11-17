@@ -123,6 +123,34 @@ impl SequentialCacheState {
         Ok(next)
     }
 
+    /// Build a fresh cache instead of cloning the old one. The staged circuit and
+    /// newly constructed cache remain private until independent Full verification.
+    /// This avoids cloning a potentially large stale cache on every intervention.
+    /// A failed build or oracle check leaves all published state unchanged.
+    pub fn transact_with_fresh_cache<C: Clone, K, T: Eq>(
+        &mut self,
+        circuit: &mut C,
+        cache: &mut K,
+        mutate: impl FnOnce(&mut C) -> Result<(), DispatchError>,
+        build_cache: impl FnOnce(&C) -> Result<K, DispatchError>,
+        full_oracle: impl FnOnce(&C) -> Result<T, DispatchError>,
+        cache_oracle: impl FnOnce(&C, &K) -> Result<T, DispatchError>,
+    ) -> Result<CacheStamp, DispatchError> {
+        let next = after_accepted_intervention(self.circuit)?;
+        let mut staged = circuit.clone();
+        mutate(&mut staged)?;
+        let fresh = build_cache(&staged)?;
+        let reference = full_oracle(&staged)?;
+        if cache_oracle(&staged, &fresh)? != reference {
+            return Err(DispatchError::FullOracleFailed);
+        }
+        *circuit = staged;
+        *cache = fresh;
+        self.circuit = next;
+        self.cache = Some(next);
+        Ok(next)
+    }
+
     /// Commit an accepted intervention without a rebuilt cache: Full is required.
     pub fn accept_without_cache(&mut self) -> Result<CacheStamp, DispatchError> {
         let next = after_accepted_intervention(self.circuit)?;
@@ -296,6 +324,57 @@ mod tests {
         assert_eq!(cache, circuit);
         assert_eq!(state.cache(), Some(next));
         assert!(!state.publish_rebuilt_cache(initial));
+    }
+
+    #[test]
+    fn fresh_cache_transaction_supports_non_clone_cache_and_rollback() {
+        struct NonClone(Vec<bool>);
+        let initial = CacheStamp { circuit_id: 37, generation: 3 };
+        let mut state = SequentialCacheState::new(initial, Some(initial));
+        let mut circuit = vec![false, true];
+        let mut cache = NonClone(circuit.clone());
+        let failed = state.transact_with_fresh_cache(
+            &mut circuit, &mut cache,
+            |c| { c[0] = true; Ok(()) },
+            |c| Ok(NonClone(vec![false; c.len()])),
+            |c| Ok(c.clone()),
+            |_, k| Ok(k.0.clone()),
+        );
+        assert_eq!(failed, Err(DispatchError::FullOracleFailed));
+        assert_eq!(circuit, vec![false, true]);
+        assert_eq!(cache.0, circuit);
+        assert_eq!(state.circuit(), initial);
+        let next = state.transact_with_fresh_cache(
+            &mut circuit, &mut cache,
+            |c| { c[0] = true; Ok(()) },
+            |c| Ok(NonClone(c.clone())),
+            |c| Ok(c.clone()),
+            |_, k| Ok(k.0.clone()),
+        ).unwrap();
+        assert_eq!(next.generation, 4);
+        assert_eq!(circuit, vec![true, true]);
+        assert_eq!(cache.0, circuit);
+        assert_eq!(state.cache(), Some(next));
+    }
+
+    #[test]
+    fn fresh_cache_builder_failure_does_not_publish_revision() {
+        struct NonClone;
+        let initial = CacheStamp { circuit_id: 41, generation: 0 };
+        let mut state = SequentialCacheState::new(initial, Some(initial));
+        let mut circuit = 1_u8;
+        let mut cache = NonClone;
+        let result = state.transact_with_fresh_cache(
+            &mut circuit, &mut cache,
+            |c| { *c = 2; Ok(()) },
+            |_| Err(DispatchError::FullOracleFailed),
+            |c| Ok(*c),
+            |_, _| Ok(2_u8),
+        );
+        assert_eq!(result, Err(DispatchError::FullOracleFailed));
+        assert_eq!(circuit, 1);
+        assert_eq!(state.circuit(), initial);
+        assert_eq!(state.cache(), Some(initial));
     }
 
     #[test]
