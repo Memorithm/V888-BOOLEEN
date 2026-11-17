@@ -293,3 +293,6 @@ pub mod fourier5_sequential_holdout;
 
 /// Split-disjoint provenance and sequential revision validation for synthetic traces.
 pub mod fourier5_trace_provenance;
+
+/// Transactional sequential cache commits checked against an independent Full oracle.
+pub mod fourier5_transactional_oracle;
