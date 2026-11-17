@@ -50,7 +50,10 @@ pub fn process_peak_rss() -> io::Result<PeakRss> {
 
 #[cfg(not(target_os = "linux"))]
 pub fn process_peak_rss() -> io::Result<PeakRss> {
-    Err(io::Error::new(io::ErrorKind::Unsupported, "VmHWM requires Linux"))
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "VmHWM requires Linux",
+    ))
 }
 
 /// Time one intervention including the caller's complete cache refresh.
@@ -76,15 +79,24 @@ mod tests {
 
     #[test]
     fn rejects_duplicates_and_unknown_units() {
-        assert_eq!(parse_vmhwm("VmHWM: 1 kB\nVmHWM: 2 kB"), Err(ParseError::Duplicate));
+        assert_eq!(
+            parse_vmhwm("VmHWM: 1 kB\nVmHWM: 2 kB"),
+            Err(ParseError::Duplicate)
+        );
         assert_eq!(parse_vmhwm("VmHWM: 2 MB"), Err(ParseError::Malformed));
         assert_eq!(parse_vmhwm("VmRSS: 2 kB"), Err(ParseError::Missing));
     }
 
     #[test]
     fn rejects_overflow_and_trailing_fields() {
-        assert_eq!(parse_vmhwm("VmHWM: 18446744073709551616 kB"), Err(ParseError::Overflow));
-        assert_eq!(parse_vmhwm("VmHWM: 12 kB extra"), Err(ParseError::Malformed));
+        assert_eq!(
+            parse_vmhwm("VmHWM: 18446744073709551616 kB"),
+            Err(ParseError::Overflow)
+        );
+        assert_eq!(
+            parse_vmhwm("VmHWM: 12 kB extra"),
+            Err(ParseError::Malformed)
+        );
     }
 
     #[test]
@@ -123,7 +135,14 @@ pub fn sample_intervention<T, E>(
     let before = process_peak_rss()?;
     let (elapsed, outcome) = time_intervention(operation);
     let after = process_peak_rss()?;
-    Ok((InterventionSample { elapsed, before, after }, outcome))
+    Ok((
+        InterventionSample {
+            elapsed,
+            before,
+            after,
+        },
+        outcome,
+    ))
 }
 
 #[cfg(test)]
@@ -158,7 +177,6 @@ mod sequential_sample_tests {
         assert_eq!(error, Err(7));
     }
 }
-
 
 /// A completed operation with its outcome preserved even when post-operation
 /// process-memory sampling fails. A post-sample error is NOT a rollback.
@@ -203,7 +221,10 @@ mod preserving_outcome_tests {
         let calls = Cell::new(0);
         let result = sample_intervention_with(
             || Err(io::Error::other("before")),
-            || { calls.set(calls.get() + 1); Ok::<_, ()>(()) },
+            || {
+                calls.set(calls.get() + 1);
+                Ok::<_, ()>(())
+            },
         );
         assert!(result.is_err());
         assert_eq!(calls.get(), 0);
@@ -222,8 +243,12 @@ mod preserving_outcome_tests {
                     Err(io::Error::other("after"))
                 }
             },
-            || { mutations.set(mutations.get() + 1); Ok::<_, u8>(17) },
-        ).unwrap();
+            || {
+                mutations.set(mutations.get() + 1);
+                Ok::<_, u8>(17)
+            },
+        )
+        .unwrap();
         assert_eq!(mutations.get(), 1);
         assert_eq!(result.outcome, Ok(17));
         assert_eq!(result.before.kib, 12);
@@ -232,15 +257,13 @@ mod preserving_outcome_tests {
 
     #[test]
     fn post_sample_success_preserves_rejected_intervention() {
-        let result = sample_intervention_with(
-            || Ok(PeakRss { kib: 20 }),
-            || Err::<(), _>("rejected"),
-        ).unwrap();
+        let result =
+            sample_intervention_with(|| Ok(PeakRss { kib: 20 }), || Err::<(), _>("rejected"))
+                .unwrap();
         assert_eq!(result.outcome, Err("rejected"));
         assert_eq!(result.after.unwrap().kib, 20);
     }
 }
-
 
 /// Two process-wide Linux memory indicators sampled from the same status read.
 /// VmRSS is instantaneous; VmHWM is the historical maximum. Neither isolates
@@ -277,7 +300,10 @@ pub fn parse_memory_snapshot(status: &str) -> Result<MemorySnapshot, ParseError>
     if current_rss.kib > peak_rss.kib {
         return Err(ParseError::Malformed);
     }
-    Ok(MemorySnapshot { current_rss, peak_rss })
+    Ok(MemorySnapshot {
+        current_rss,
+        peak_rss,
+    })
 }
 
 /// Read current and peak RSS from a single /proc/self/status snapshot.
@@ -290,7 +316,10 @@ pub fn process_memory_snapshot() -> io::Result<MemorySnapshot> {
 
 #[cfg(not(target_os = "linux"))]
 pub fn process_memory_snapshot() -> io::Result<MemorySnapshot> {
-    Err(io::Error::new(io::ErrorKind::Unsupported, "Linux /proc required"))
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "Linux /proc required",
+    ))
 }
 
 #[cfg(test)]
@@ -306,7 +335,10 @@ mod memory_snapshot_tests {
 
     #[test]
     fn rejects_missing_duplicate_and_impossible_current_rss() {
-        assert_eq!(parse_memory_snapshot("VmHWM: 5 kB\n"), Err(ParseError::Missing));
+        assert_eq!(
+            parse_memory_snapshot("VmHWM: 5 kB\n"),
+            Err(ParseError::Missing)
+        );
         assert_eq!(
             parse_memory_snapshot("VmRSS: 2 kB\nVmRSS: 3 kB\nVmHWM: 5 kB\n"),
             Err(ParseError::Duplicate)
@@ -336,7 +368,6 @@ mod memory_snapshot_tests {
         assert!(sample.current_rss.kib <= sample.peak_rss.kib);
     }
 }
-
 
 /// One sequential step with process-wide memory sampled around the complete
 /// operation, including any cache refresh performed by the callback.
@@ -405,20 +436,24 @@ mod sequential_execution_tests {
     #[test]
     fn heterogeneous_steps_execute_once_and_in_order() {
         let mut seen = Vec::new();
-        let steps = sample_sequential_with(
-            [3_i32, -2, 7],
-            || Ok(snapshot(12, 20)),
-            &mut |input| {
-                seen.push(input);
-                if input < 0 { Err(input) } else { Ok(input * 2) }
-            },
-        ).unwrap();
+        let steps = sample_sequential_with([3_i32, -2, 7], || Ok(snapshot(12, 20)), &mut |input| {
+            seen.push(input);
+            if input < 0 {
+                Err(input)
+            } else {
+                Ok(input * 2)
+            }
+        })
+        .unwrap();
         assert_eq!(seen, vec![3, -2, 7]);
         assert_eq!(steps.len(), 3);
         assert_eq!(steps[0].outcome, Ok(6));
         assert_eq!(steps[1].outcome, Err(-2));
         assert_eq!(steps[2].outcome, Ok(14));
-        assert_eq!(steps.iter().map(|s| s.index).collect::<Vec<_>>(), vec![0, 1, 2]);
+        assert_eq!(
+            steps.iter().map(|s| s.index).collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
     }
 
     #[test]
@@ -435,7 +470,8 @@ mod sequential_execution_tests {
                 }
             },
             &mut |n| Ok::<_, ()>(n),
-        ).unwrap();
+        )
+        .unwrap();
         assert!(steps[0].after.is_err());
         assert_eq!(steps[0].outcome, Ok(1));
         assert_eq!(steps[1].outcome, Ok(2));
@@ -465,7 +501,6 @@ mod sequential_execution_tests {
         assert_eq!(mutations.get(), 1);
     }
 }
-
 
 /// Preserves every completed step if sampling fails before a later operation.
 /// Unlike `sample_sequential`, the partial trace is returned on pre-sample
@@ -600,14 +635,11 @@ mod recoverable_sequence_tests {
     #[test]
     fn first_pre_sample_failure_executes_nothing() {
         let calls = Cell::new(0);
-        let run = sample_sequential_recoverable_with(
-            [1],
-            || Err(io::Error::other("pre")),
-            &mut |_| {
+        let run =
+            sample_sequential_recoverable_with([1], || Err(io::Error::other("pre")), &mut |_| {
                 calls.set(calls.get() + 1);
                 Ok::<_, ()>(())
-            },
-        );
+            });
         assert_eq!(calls.get(), 0);
         assert_eq!(run.stopped_before, Some(0));
         assert!(run.completed.is_empty());
