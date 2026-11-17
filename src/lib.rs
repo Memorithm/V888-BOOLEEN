@@ -25,6 +25,8 @@ pub mod event_runtime;
 pub mod fourier5;
 pub mod fourier5_atomic_session;
 pub mod fourier5_context_search;
+pub mod fourier5_conservative_policy;
+pub mod fourier5_scale_policy;
 pub mod fourier5_counterfactual_credit;
 pub mod fourier5_dynamic;
 pub mod fourier5_eligibility;
@@ -46,6 +48,7 @@ pub mod fourier5_sequential_phases;
 pub mod fourier5_sequential_profile;
 pub mod fourier5_shared_context;
 pub mod fourier5_task_memory;
+pub mod fourier5_verified_dispatch;
 pub mod fourier5_wide;
 pub mod fourier5_wide_learning;
 pub mod full_synapse;
@@ -304,3 +307,6 @@ pub mod fourier5_atomic_batch;
 
 /// Scale- and cone-aware conservative routing, frozen from synthetic VALID pairs.
 pub mod fourier5_scale_policy;
+
+/// VALID-only sequential dispatch including measured cache rebuild costs.
+pub mod fourier5_sequential_cost_policy;
