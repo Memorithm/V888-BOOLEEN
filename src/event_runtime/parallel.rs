@@ -8,9 +8,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::thread;
 
-use super::{DRIVE, EventError, EventKey, EventRuntime, EventWork, RECHECK};
-use crate::BooleanState;
+use super::{EventError, EventKey, EventRuntime, EventWork, DRIVE, RECHECK};
 use crate::connectome::Connectome;
+use crate::BooleanState;
 
 const MAX_WORKER_THREADS: usize = 32;
 const EVENTS_PER_WORKER: usize = 16;
@@ -62,7 +62,9 @@ fn prepare_one(
             }
             let target = graph.targets[edge] as usize;
             let item = deltas.entry(target).or_insert(0);
-            *item = item.checked_add(count).ok_or(EventError::ArithmeticOverflow)?;
+            *item = item
+                .checked_add(count)
+                .ok_or(EventError::ArithmeticOverflow)?;
         }
     }
     Ok(PreparedEvent {
@@ -173,8 +175,7 @@ impl<'g> EventRuntime<'g> {
                     let last = self.graph.offsets[source + 1] as usize;
                     for edge in first..last {
                         if self.graph.counts[edge] > 0 {
-                            touched_by_earlier_rechecks
-                                .insert(self.graph.targets[edge] as usize);
+                            touched_by_earlier_rechecks.insert(self.graph.targets[edge] as usize);
                         }
                     }
                 }
@@ -235,7 +236,9 @@ impl<'g> EventRuntime<'g> {
         }
         let _ = self.pending.pop_first();
         if current != desired {
-            self.state.set(source, desired).expect("validated source index");
+            self.state
+                .set(source, desired)
+                .expect("validated source index");
             if let Some(next) = future {
                 for (target, after) in staged {
                     self.incoming[target] = after;
@@ -298,7 +301,10 @@ mod tests {
         assert_eq!(concurrent.state(), sequential.state());
         assert_eq!(concurrent.incoming, sequential.incoming);
         assert_eq!(concurrent.pending, sequential.pending);
-        assert_eq!(concurrent.last_processed_time(), sequential.last_processed_time());
+        assert_eq!(
+            concurrent.last_processed_time(),
+            sequential.last_processed_time()
+        );
         assert_eq!(concurrent.audit_incoming(), Ok(true));
         actual
     }
@@ -312,8 +318,12 @@ mod tests {
             counts: vec![],
         };
         let stats = compare(
-            &graph, 1, &[(0, 40, true), (0, 20, true), (0, 10, true), (0, 30, true)],
-            16, 16, 4,
+            &graph,
+            1,
+            &[(0, 40, true), (0, 20, true), (0, 10, true), (0, 30, true)],
+            16,
+            16,
+            4,
         );
         assert_eq!(stats.parallel_groups, 1);
         assert_eq!(stats.prepared_events, 4);
@@ -397,9 +407,12 @@ mod tests {
     fn feedback_and_partial_slices_reproduce_every_reference_counter() {
         for limit in 0..=40 {
             let _ = compare(
-                &graph(), 1,
+                &graph(),
+                1,
                 &[(0, 10, true), (0, 20, true), (6, 10, false), (7, 20, false)],
-                limit, 64, 4,
+                limit,
+                64,
+                4,
             );
         }
     }
