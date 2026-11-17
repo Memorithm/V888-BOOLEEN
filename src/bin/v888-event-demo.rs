@@ -1,7 +1,7 @@
 //! Bounded, reproducible synthetic example of the event-driven Boolean runtime.
 use v888_booleen::connectome::Connectome;
-use v888_booleen::event_runtime::EventRuntime;
 use v888_booleen::event_resources::{EventResourceTariffs, EventResourceVector};
+use v888_booleen::event_runtime::EventRuntime;
 
 fn main() {
     // Two independently driven sources converge on one threshold-2 target.
