@@ -572,8 +572,8 @@ mod tests {
                     c[i] = true;
                     Ok(())
                 },
-                build_cache: |c| Ok(NonClone(c.clone())),
-                full_oracle: |c| {
+                build_cache: |c: &Vec<bool>| Ok(NonClone(c.clone())),
+                full_oracle: |c: &Vec<bool>| {
                     checked += 1;
                     Ok(c.clone())
                 },
@@ -601,8 +601,8 @@ mod tests {
                         c[i] = true;
                         Ok(())
                     },
-                    build_cache: |c| Ok(NonClone(c.clone())),
-                    full_oracle: |c| Ok(c.clone()),
+                    build_cache: |c: &Vec<bool>| Ok(NonClone(c.clone())),
+                    full_oracle: |c: &Vec<bool>| Ok(c.clone()),
                     cache_oracle: |_, k: &NonClone| Ok(k.0.clone()),
                 },
             )
@@ -633,7 +633,7 @@ mod tests {
                     Ok(())
                 },
                 build_cache: |_| Ok(NonClone),
-                full_oracle: |c| Ok(*c),
+                full_oracle: |c: &u8| Ok(*c),
                 cache_oracle: |_, _: &NonClone| Ok(0_u8),
             },
         );
@@ -648,7 +648,7 @@ mod tests {
                     Ok(())
                 },
                 build_cache: |_| Ok(NonClone),
-                full_oracle: |c| Ok(*c),
+                full_oracle: |c: &u8| Ok(*c),
                 cache_oracle: |_, _: &NonClone| Ok(1_u8),
             },
         );
