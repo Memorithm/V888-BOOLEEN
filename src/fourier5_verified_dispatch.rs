@@ -42,7 +42,7 @@ pub fn dispatch_verified<T: Eq>(
     // Never return an incremental value unless the oracle agrees.
     let candidate = incremental();
     let reference = full()?;
-    if candidate.as_ref().is_ok_and(|value| *value == reference) {
+    if candidate.as_ref().is_ok_and(|value| value == &reference) {
         Ok((reference, Engine::Incremental))
     } else {
         Ok((reference, Engine::Full))
