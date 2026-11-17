@@ -237,26 +237,42 @@ impl SequentialCostPolicy {
     ) -> Result<SequentialHoldoutAudit, SequentialPolicyError> {
         let mut cells = [SequentialHoldoutCell::default(); CELLS];
         for &(row, cache_current) in steps {
-            // Reuse the single-observation oracle accounting so both audit
-            // entry points have identical validity and overflow semantics.
-            let one = self.audit_holdout(&[row], cache_current)?;
+            // Stream each step into its bucket directly. In particular, do not
+            // construct a full 1024-cell audit for every intervention.
             let index = bucket(row.gates, row.cone_gates)
                 .ok_or(SequentialPolicyError::InvalidObservation)?;
+            if row.full_ns == 0 || row.incremental_ns == 0 {
+                return Err(SequentialPolicyError::InvalidObservation);
+            }
+            let incremental_total = row.incremental_ns.checked_add(row.cache_update_ns)
+                .ok_or(SequentialPolicyError::Overflow)?;
+            let selected = self.select(row.gates, row.cone_gates, cache_current)
+                == Engine::Incremental;
             let dst = &mut cells[index];
-            let src = &one.cells[index];
-            dst.observations = dst.observations.checked_add(src.observations)
+            dst.observations = dst.observations.checked_add(1)
                 .ok_or(SequentialPolicyError::Overflow)?;
-            dst.incremental_selected = dst.incremental_selected.checked_add(src.incremental_selected)
+            dst.total_full_ns = dst.total_full_ns.checked_add(u128::from(row.full_ns))
                 .ok_or(SequentialPolicyError::Overflow)?;
-            dst.output_mismatches = dst.output_mismatches.checked_add(src.output_mismatches)
-                .ok_or(SequentialPolicyError::Overflow)?;
-            dst.decision_mismatches = dst.decision_mismatches.checked_add(src.decision_mismatches)
-                .ok_or(SequentialPolicyError::Overflow)?;
-            dst.latency_regressions = dst.latency_regressions.checked_add(src.latency_regressions)
-                .ok_or(SequentialPolicyError::Overflow)?;
-            dst.total_full_ns = dst.total_full_ns.checked_add(src.total_full_ns)
-                .ok_or(SequentialPolicyError::Overflow)?;
-            dst.total_selected_ns = dst.total_selected_ns.checked_add(src.total_selected_ns)
+            let selected_ns = if selected {
+                dst.incremental_selected = dst.incremental_selected.checked_add(1)
+                    .ok_or(SequentialPolicyError::Overflow)?;
+                if !row.same_output {
+                    dst.output_mismatches = dst.output_mismatches.checked_add(1)
+                        .ok_or(SequentialPolicyError::Overflow)?;
+                }
+                if !row.same_decision {
+                    dst.decision_mismatches = dst.decision_mismatches.checked_add(1)
+                        .ok_or(SequentialPolicyError::Overflow)?;
+                }
+                if incremental_total >= row.full_ns {
+                    dst.latency_regressions = dst.latency_regressions.checked_add(1)
+                        .ok_or(SequentialPolicyError::Overflow)?;
+                }
+                incremental_total
+            } else {
+                row.full_ns
+            };
+            dst.total_selected_ns = dst.total_selected_ns.checked_add(u128::from(selected_ns))
                 .ok_or(SequentialPolicyError::Overflow)?;
         }
         Ok(SequentialHoldoutAudit { cells })
