@@ -151,6 +151,45 @@ impl SequentialCacheState {
         Ok(next)
     }
 
+    /// Apply a sequence of interventions atomically. Each staged step receives
+    /// a newly constructed cache and an independent Full comparison. A failure
+    /// at any step leaves the published circuit, cache and revision unchanged.
+    /// Only the final verified cache is published; K need not implement Clone.
+    pub fn transact_sequential_fresh<C: Clone, K, T: Eq, I>(
+        &mut self,
+        circuit: &mut C,
+        cache: &mut K,
+        interventions: I,
+        mut mutate: impl FnMut(&mut C, I::Item) -> Result<(), DispatchError>,
+        mut build_cache: impl FnMut(&C) -> Result<K, DispatchError>,
+        mut full_oracle: impl FnMut(&C) -> Result<T, DispatchError>,
+        mut cache_oracle: impl FnMut(&C, &K) -> Result<T, DispatchError>,
+    ) -> Result<CacheStamp, DispatchError>
+    where
+        I: IntoIterator,
+    {
+        let mut staged = circuit.clone();
+        let mut next = self.circuit;
+        let mut last_cache = None;
+        for intervention in interventions {
+            next = after_accepted_intervention(next)?;
+            mutate(&mut staged, intervention)?;
+            let fresh = build_cache(&staged)?;
+            let reference = full_oracle(&staged)?;
+            if cache_oracle(&staged, &fresh)? != reference {
+                return Err(DispatchError::FullOracleFailed);
+            }
+            last_cache = Some(fresh);
+        }
+        if let Some(fresh) = last_cache {
+            *circuit = staged;
+            *cache = fresh;
+            self.circuit = next;
+            self.cache = Some(next);
+        }
+        Ok(self.circuit)
+    }
+
     /// Commit an accepted intervention without a rebuilt cache: Full is required.
     pub fn accept_without_cache(&mut self) -> Result<CacheStamp, DispatchError> {
         let next = after_accepted_intervention(self.circuit)?;
@@ -373,6 +412,67 @@ mod tests {
         );
         assert_eq!(result, Err(DispatchError::FullOracleFailed));
         assert_eq!(circuit, 1);
+        assert_eq!(state.circuit(), initial);
+        assert_eq!(state.cache(), Some(initial));
+    }
+
+    #[test]
+    fn sequential_fresh_batch_verifies_every_step_and_rolls_back() {
+        struct NonClone(Vec<bool>);
+        let initial = CacheStamp { circuit_id: 51, generation: 3 };
+        let mut state = SequentialCacheState::new(initial, Some(initial));
+        let mut circuit = vec![false, false, false];
+        let mut cache = NonClone(circuit.clone());
+        let mut checked = 0;
+        let rejected = state.transact_sequential_fresh(
+            &mut circuit, &mut cache, [0_usize, 1],
+            |c, i| { c[i] = true; Ok(()) },
+            |c| Ok(NonClone(c.clone())),
+            |c| { checked += 1; Ok(c.clone()) },
+            |_, k| {
+                let mut value = k.0.clone();
+                if value[1] { value[1] = false; }
+                Ok(value)
+            },
+        );
+        assert_eq!(rejected, Err(DispatchError::FullOracleFailed));
+        assert_eq!(checked, 2);
+        assert_eq!(circuit, vec![false; 3]);
+        assert_eq!(cache.0, circuit);
+        assert_eq!(state.circuit(), initial);
+        let accepted = state.transact_sequential_fresh(
+            &mut circuit, &mut cache, [0_usize, 2],
+            |c, i| { c[i] = true; Ok(()) },
+            |c| Ok(NonClone(c.clone())),
+            |c| Ok(c.clone()),
+            |_, k| Ok(k.0.clone()),
+        ).unwrap();
+        assert_eq!(accepted.generation, 5);
+        assert_eq!(circuit, vec![true, false, true]);
+        assert_eq!(cache.0, circuit);
+        assert_eq!(state.cache(), Some(accepted));
+    }
+
+    #[test]
+    fn sequential_fresh_empty_and_overflow_are_non_mutating() {
+        struct NonClone;
+        let initial = CacheStamp { circuit_id: 52, generation: u64::MAX };
+        let mut state = SequentialCacheState::new(initial, Some(initial));
+        let mut circuit = 0_u8;
+        let mut cache = NonClone;
+        let empty = state.transact_sequential_fresh(
+            &mut circuit, &mut cache, std::iter::empty::<u8>(),
+            |c, _| { *c = 1; Ok(()) },
+            |_| Ok(NonClone), |c| Ok(*c), |_, _| Ok(0_u8),
+        );
+        assert_eq!(empty, Ok(initial));
+        let overflow = state.transact_sequential_fresh(
+            &mut circuit, &mut cache, [1_u8],
+            |c, value| { *c = value; Ok(()) },
+            |_| Ok(NonClone), |c| Ok(*c), |_, _| Ok(1_u8),
+        );
+        assert_eq!(overflow, Err(DispatchError::GenerationOverflow));
+        assert_eq!(circuit, 0);
         assert_eq!(state.circuit(), initial);
         assert_eq!(state.cache(), Some(initial));
     }
