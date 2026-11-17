@@ -67,6 +67,16 @@ pub struct SequentialCacheState {
     cache: Option<CacheStamp>,
 }
 
+/// Group callback responsibilities into one typed contract. This avoids
+/// growing positional argument lists and keeps the four independent
+/// verification stages explicit for callers.
+pub struct SequentialFreshCallbacks<M, B, F, O> {
+    pub mutate: M,
+    pub build_cache: B,
+    pub full_oracle: F,
+    pub cache_oracle: O,
+}
+
 impl SequentialCacheState {
     pub fn new(circuit: CacheStamp, cache: Option<CacheStamp>) -> Self {
         Self {
@@ -157,19 +167,26 @@ impl SequentialCacheState {
     /// a newly constructed cache and an independent Full comparison. A failure
     /// at any step leaves the published circuit, cache and revision unchanged.
     /// Only the final verified cache is published; K need not implement Clone.
-    pub fn transact_sequential_fresh<C: Clone, K, T: Eq, I>(
+    pub fn transact_sequential_fresh<C: Clone, K, T: Eq, I, M, B, F, O>(
         &mut self,
         circuit: &mut C,
         cache: &mut K,
         interventions: I,
-        mut mutate: impl FnMut(&mut C, I::Item) -> Result<(), DispatchError>,
-        mut build_cache: impl FnMut(&C) -> Result<K, DispatchError>,
-        mut full_oracle: impl FnMut(&C) -> Result<T, DispatchError>,
-        mut cache_oracle: impl FnMut(&C, &K) -> Result<T, DispatchError>,
+        callbacks: SequentialFreshCallbacks<M, B, F, O>,
     ) -> Result<CacheStamp, DispatchError>
     where
         I: IntoIterator,
+        M: FnMut(&mut C, I::Item) -> Result<(), DispatchError>,
+        B: FnMut(&C) -> Result<K, DispatchError>,
+        F: FnMut(&C) -> Result<T, DispatchError>,
+        O: FnMut(&C, &K) -> Result<T, DispatchError>,
     {
+        let SequentialFreshCallbacks {
+            mut mutate,
+            mut build_cache,
+            mut full_oracle,
+            mut cache_oracle,
+        } = callbacks;
         let mut staged = circuit.clone();
         let mut next = self.circuit;
         let mut last_cache = None;
@@ -550,21 +567,23 @@ mod tests {
             &mut circuit,
             &mut cache,
             [0_usize, 1],
-            |c, i| {
-                c[i] = true;
-                Ok(())
-            },
-            |c| Ok(NonClone(c.clone())),
-            |c| {
-                checked += 1;
-                Ok(c.clone())
-            },
-            |_, k| {
-                let mut value = k.0.clone();
-                if value[1] {
-                    value[1] = false;
-                }
-                Ok(value)
+            SequentialFreshCallbacks {
+                mutate: |c: &mut Vec<bool>, i| {
+                    c[i] = true;
+                    Ok(())
+                },
+                build_cache: |c| Ok(NonClone(c.clone())),
+                full_oracle: |c| {
+                    checked += 1;
+                    Ok(c.clone())
+                },
+                cache_oracle: |_, k: &NonClone| {
+                    let mut value = k.0.clone();
+                    if value[1] {
+                        value[1] = false;
+                    }
+                    Ok(value)
+                },
             },
         );
         assert_eq!(rejected, Err(DispatchError::FullOracleFailed));
@@ -577,13 +596,15 @@ mod tests {
                 &mut circuit,
                 &mut cache,
                 [0_usize, 2],
-                |c, i| {
-                    c[i] = true;
-                    Ok(())
+                SequentialFreshCallbacks {
+                    mutate: |c: &mut Vec<bool>, i| {
+                        c[i] = true;
+                        Ok(())
+                    },
+                    build_cache: |c| Ok(NonClone(c.clone())),
+                    full_oracle: |c| Ok(c.clone()),
+                    cache_oracle: |_, k: &NonClone| Ok(k.0.clone()),
                 },
-                |c| Ok(NonClone(c.clone())),
-                |c| Ok(c.clone()),
-                |_, k| Ok(k.0.clone()),
             )
             .unwrap();
         assert_eq!(accepted.generation, 5);
@@ -606,26 +627,30 @@ mod tests {
             &mut circuit,
             &mut cache,
             std::iter::empty::<u8>(),
-            |c, _| {
-                *c = 1;
-                Ok(())
+            SequentialFreshCallbacks {
+                mutate: |c: &mut u8, _| {
+                    *c = 1;
+                    Ok(())
+                },
+                build_cache: |_| Ok(NonClone),
+                full_oracle: |c| Ok(*c),
+                cache_oracle: |_, _: &NonClone| Ok(0_u8),
             },
-            |_| Ok(NonClone),
-            |c| Ok(*c),
-            |_, _| Ok(0_u8),
         );
         assert_eq!(empty, Ok(initial));
         let overflow = state.transact_sequential_fresh(
             &mut circuit,
             &mut cache,
             [1_u8],
-            |c, value| {
-                *c = value;
-                Ok(())
+            SequentialFreshCallbacks {
+                mutate: |c: &mut u8, value| {
+                    *c = value;
+                    Ok(())
+                },
+                build_cache: |_| Ok(NonClone),
+                full_oracle: |c| Ok(*c),
+                cache_oracle: |_, _: &NonClone| Ok(1_u8),
             },
-            |_| Ok(NonClone),
-            |c| Ok(*c),
-            |_, _| Ok(1_u8),
         );
         assert_eq!(overflow, Err(DispatchError::GenerationOverflow));
         assert_eq!(circuit, 0);
