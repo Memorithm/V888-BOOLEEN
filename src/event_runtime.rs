@@ -36,6 +36,10 @@ pub struct EventWork {
     pub events_consumed: usize,
     /// Boolean neurons whose state changed.
     pub state_transitions: usize,
+    /// Positive activation fronts: false -> true.
+    pub rising_transitions: usize,
+    /// Negative activation fronts: true -> false.
+    pub falling_transitions: usize,
     /// CSR contacts examined only on a real transition.
     pub contacts_examined: usize,
     /// Threshold comparisons during target rechecks.
@@ -285,6 +289,11 @@ impl<'g> EventRuntime<'g> {
                 }
             }
             work.state_transitions += 1;
+            if desired {
+                work.rising_transitions += 1;
+            } else {
+                work.falling_transitions += 1;
+            }
             work.contacts_examined += contact_count;
             work.wakeups_inserted += inserted;
             work.wakeups_coalesced += coalesced;
@@ -337,6 +346,8 @@ mod tests {
         let on = runtime.run(10).unwrap();
         assert_eq!(on.events_consumed, 3);
         assert_eq!(on.state_transitions, 3);
+        assert_eq!(on.rising_transitions, 3);
+        assert_eq!(on.falling_transitions, 0);
         assert_eq!(on.contacts_examined, 2);
         assert_eq!(on.threshold_checks, 2);
         assert_eq!(runtime.state().active_count(), 3);
@@ -347,6 +358,8 @@ mod tests {
         let off = runtime.run(10).unwrap();
         assert_eq!(off.events_consumed, 3);
         assert_eq!(off.state_transitions, 3);
+        assert_eq!(off.rising_transitions, 0);
+        assert_eq!(off.falling_transitions, 3);
         assert_eq!(runtime.state().active_count(), 0);
         assert_eq!(runtime.incoming_for(30), Ok(0));
     }
