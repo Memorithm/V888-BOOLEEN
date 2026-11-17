@@ -15,7 +15,18 @@ fn main() {
     runtime.schedule_drive(0, 10, true).expect("first drive");
     runtime.schedule_drive(0, 20, true).expect("second drive");
 
-    let sources = runtime.run(2).expect("two source events");
+    // A budget of zero cannot admit the first transition, but no
+    // state change or incoming contribution is lost.
+    let deferred = runtime
+        .run_with_contact_budget(2, 0)
+        .expect("bounded preflight");
+    assert!(deferred.blocked_on_contact_budget);
+    assert_eq!(deferred.work.events_consumed, 0);
+
+    let admitted = runtime
+        .run_with_contact_budget(2, 2)
+        .expect("two source events");
+    let sources = admitted.work;
     assert_eq!(sources.state_transitions, 2);
     assert_eq!(sources.wakeups_inserted, 1);
     assert_eq!(sources.wakeups_coalesced, 1);
