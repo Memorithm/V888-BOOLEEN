@@ -120,7 +120,10 @@ impl<'g> EventRuntime<'g> {
     /// Weighted sum currently contributed by active presynaptic sources.
     /// This is a logical counter, not a voltage, current or energy estimate.
     pub fn incoming_for(&self, neuron_id: u64) -> Result<u128, EventError> {
-        let index = self.graph.index(neuron_id).ok_or(EventError::UnknownNeuron)?;
+        let index = self
+            .graph
+            .index(neuron_id)
+            .ok_or(EventError::UnknownNeuron)?;
         Ok(self.incoming[index])
     }
 
@@ -155,7 +158,10 @@ impl<'g> EventRuntime<'g> {
         if self.last_time.is_some_and(|last| logical_time <= last) {
             return Err(EventError::TimeNotFuture);
         }
-        let index = self.graph.index(neuron_id).ok_or(EventError::UnknownNeuron)?;
+        let index = self
+            .graph
+            .index(neuron_id)
+            .ok_or(EventError::UnknownNeuron)?;
         let key = (logical_time, DRIVE, index);
         if let Some(&old) = self.pending.get(&key) {
             return if old == active {
@@ -176,9 +182,7 @@ impl<'g> EventRuntime<'g> {
     /// On an error, the failing event and its effects remain uncommitted.
     /// Earlier successfully consumed events in the same call stay committed.
     pub fn run(&mut self, max_events: usize) -> Result<EventWork, EventError> {
-        Ok(self
-            .run_with_contact_budget(max_events, usize::MAX)?
-            .work)
+        Ok(self.run_with_contact_budget(max_events, usize::MAX)?.work)
     }
 
     /// Opt-in logical work admission. The first event that would exceed
@@ -252,7 +256,9 @@ impl<'g> EventRuntime<'g> {
                 }
                 let target = self.graph.targets[edge] as usize;
                 let item = deltas.entry(target).or_insert(0);
-                *item = item.checked_add(count).ok_or(EventError::ArithmeticOverflow)?;
+                *item = item
+                    .checked_add(count)
+                    .ok_or(EventError::ArithmeticOverflow)?;
             }
             if !deltas.is_empty() {
                 let following = time.checked_add(1).ok_or(EventError::LogicalTimeOverflow)?;
@@ -281,7 +287,9 @@ impl<'g> EventRuntime<'g> {
         // The event is removed only once all preflight checks have passed.
         let _ = self.pending.pop_first();
         if current != desired {
-            self.state.set(source, desired).expect("validated neuron index");
+            self.state
+                .set(source, desired)
+                .expect("validated neuron index");
             if let Some(following) = next_time {
                 for (target, value) in staged {
                     self.incoming[target] = value;
@@ -414,18 +422,33 @@ mod tests {
     #[test]
     fn invalid_inputs_duplicates_and_no_op_do_not_propagate() {
         let graph = chain();
-        assert!(matches!(EventRuntime::new(&graph, 0, 1), Err(EventError::InvalidThreshold)));
-        assert!(matches!(EventRuntime::new(&graph, 1, 0), Err(EventError::InvalidPendingBudget)));
+        assert!(matches!(
+            EventRuntime::new(&graph, 0, 1),
+            Err(EventError::InvalidThreshold)
+        ));
+        assert!(matches!(
+            EventRuntime::new(&graph, 1, 0),
+            Err(EventError::InvalidPendingBudget)
+        ));
         let mut runtime = EventRuntime::new(&graph, 1, 4).unwrap();
-        assert_eq!(runtime.schedule_drive(0, 999, true), Err(EventError::UnknownNeuron));
+        assert_eq!(
+            runtime.schedule_drive(0, 999, true),
+            Err(EventError::UnknownNeuron)
+        );
         assert_eq!(runtime.schedule_drive(0, 10, false), Ok(true));
         assert_eq!(runtime.schedule_drive(0, 10, false), Ok(false));
-        assert_eq!(runtime.schedule_drive(0, 10, true), Err(EventError::ConflictingDrive));
+        assert_eq!(
+            runtime.schedule_drive(0, 10, true),
+            Err(EventError::ConflictingDrive)
+        );
         let no_op = runtime.run(10).unwrap();
         assert_eq!(no_op.events_consumed, 1);
         assert_eq!(no_op.state_transitions, 0);
         assert_eq!(no_op.contacts_examined, 0);
-        assert_eq!(runtime.schedule_drive(0, 10, true), Err(EventError::TimeNotFuture));
+        assert_eq!(
+            runtime.schedule_drive(0, 10, true),
+            Err(EventError::TimeNotFuture)
+        );
     }
 
     #[test]
@@ -540,7 +563,10 @@ mod tests {
         assert!(!third.blocked_on_contact_budget);
         assert_eq!(bounded.state(), baseline.state());
         assert_eq!(bounded.incoming, baseline.incoming);
-        assert_eq!(bounded.last_processed_time(), baseline.last_processed_time());
+        assert_eq!(
+            bounded.last_processed_time(),
+            baseline.last_processed_time()
+        );
         assert_eq!(bounded.next_event_time(), None);
     }
 
