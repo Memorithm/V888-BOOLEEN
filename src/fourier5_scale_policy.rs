@@ -90,6 +90,27 @@ impl ScaleAwarePolicy {
         self.select(gates, cone_gates)
     }
 
+    /// Require both the immutable circuit identity and the exact mutable
+    /// revision before using an incremental cache. Equal revision numbers
+    /// alone are insufficient when independent circuits start at revision 0.
+    /// The caller must derive circuit_id and cache_circuit_id from the same
+    /// stable, collision-resistant circuit identity scheme; never reuse IDs.
+    #[must_use]
+    pub fn select_for_cache_identity(
+        &self,
+        gates: u64,
+        cone_gates: u64,
+        circuit_id: u128,
+        circuit_generation: u64,
+        cache_circuit_id: Option<u128>,
+        cache_generation: Option<u64>,
+    ) -> Engine {
+        if cache_circuit_id != Some(circuit_id) {
+            return Engine::Full;
+        }
+        self.select_for_generation(gates, cone_gates, circuit_generation, cache_generation)
+    }
+
     /// Route a sequential intervention only if its cache was rebuilt for the
     /// exact post-mutation revision. Overflow is a hard error: a wrapped
     /// revision could otherwise make an obsolete cache appear current.
@@ -334,6 +355,19 @@ mod tests {
         let policy = ScaleAwarePolicy::fit_valid(&valid, 1, 0).unwrap();
         assert_eq!(policy.select_for_generation(1_562_501, 0, 1, Some(1)), Engine::Full);
         assert_eq!(policy.select_for_generation(0, 0, 1, Some(1)), Engine::Full);
+    }
+
+    #[test]
+    fn cache_identity_prevents_cross_circuit_reuse_at_equal_generation() {
+        let valid = [observation(1_562_501, 10, 100, 40, true)];
+        let policy = ScaleAwarePolicy::fit_valid(&valid, 1, 1).unwrap();
+        // Independent oracle: identical revisions do not imply identical circuits.
+        assert_eq!(policy.select_for_generation(1_562_501, 10, 0, Some(0)), Engine::Incremental);
+        assert_eq!(policy.select_for_cache_identity(1_562_501, 10, 7, 0, Some(8), Some(0)), Engine::Full);
+        assert_eq!(policy.select_for_cache_identity(1_562_501, 10, 7, 0, None, Some(0)), Engine::Full);
+        assert_eq!(policy.select_for_cache_identity(1_562_501, 10, 7, 1, Some(7), Some(0)), Engine::Full);
+        assert_eq!(policy.select_for_cache_identity(1_562_501, 10, 7, 1, Some(7), Some(1)), Engine::Incremental);
+        assert_eq!(policy.select_for_cache_identity(128, 0, 7, 1, Some(7), Some(1)), Engine::Full);
     }
 
     #[test]
