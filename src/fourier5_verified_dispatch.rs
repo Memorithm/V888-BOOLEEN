@@ -110,6 +110,29 @@ impl SequentialCacheState {
         self.cache = Some(stamp);
         true
     }
+
+    /// Dispatch using the state-owned circuit/cache stamps, preventing callers
+    /// from accidentally pairing a new circuit revision with an old cache.
+    /// Full remains an independent oracle for every incremental result.
+    pub fn dispatch<T: Eq>(
+        &self,
+        policy: &ScaleAwarePolicy,
+        gates: u64,
+        cone_gates: u64,
+        full: impl FnMut() -> Result<T, DispatchError>,
+        incremental: impl FnMut() -> Result<T, DispatchError>,
+    ) -> Result<(T, Engine), DispatchError> {
+        dispatch_verified(
+            policy,
+            gates,
+            cone_gates,
+            self.circuit,
+            self.cache,
+            full,
+            incremental,
+        )
+    }
+
 }
 
 #[cfg(test)]
@@ -203,6 +226,34 @@ mod tests {
         assert_eq!(saturated.accept_without_cache(), Err(DispatchError::GenerationOverflow));
         assert_eq!(saturated.cache(), Some(terminal));
         assert_eq!(saturated.circuit(), terminal);
+    }
+
+
+    #[test]
+    fn state_owned_dispatch_tracks_sequential_cache_rebuilds() {
+        let initial = CacheStamp { circuit_id: 23, generation: 0 };
+        let mut state = SequentialCacheState::new(initial, Some(initial));
+        let calls = Cell::new(0);
+        assert_eq!(state.dispatch(&policy(), 128, 4,
+            || Ok(9), || { calls.set(calls.get() + 1); Ok(9) }),
+            Ok((9, Engine::Incremental)));
+        assert_eq!(calls.get(), 1);
+
+        let next = state.accept_without_cache().unwrap();
+        assert_eq!(state.dispatch(&policy(), 128, 4,
+            || Ok(10), || { calls.set(calls.get() + 1); Ok(10) }),
+            Ok((10, Engine::Full)));
+        assert_eq!(calls.get(), 1);
+        assert!(!state.publish_rebuilt_cache(initial));
+        assert!(state.publish_rebuilt_cache(next));
+        assert_eq!(state.dispatch(&policy(), 128, 4,
+            || Ok(10), || { calls.set(calls.get() + 1); Ok(11) }),
+            Ok((10, Engine::Full)));
+        assert_eq!(calls.get(), 2);
+        assert_eq!(state.dispatch(&policy(), 128, 4,
+            || Ok(10), || { calls.set(calls.get() + 1); Ok(10) }),
+            Ok((10, Engine::Incremental)));
+        assert_eq!(calls.get(), 3);
     }
 
 }
