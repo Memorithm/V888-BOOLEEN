@@ -1,6 +1,7 @@
 //! Bounded, reproducible synthetic example of the event-driven Boolean runtime.
 use v888_booleen::connectome::Connectome;
 use v888_booleen::event_runtime::EventRuntime;
+use v888_booleen::event_resources::{EventResourceTariffs, EventResourceVector};
 
 fn main() {
     // Two independently driven sources converge on one threshold-2 target.
@@ -35,6 +36,16 @@ fn main() {
     let target = runtime.run(1).expect("one target wakeup");
     assert_eq!(target.threshold_checks, 1);
     assert_eq!(runtime.state().active_count(), 3);
+    let resource_vector = EventResourceVector::from_work(sources)
+        .checked_add(EventResourceVector::from_work(target))
+        .expect("synthetic resource count fits u128");
+    let arbitrary_tariffs = EventResourceTariffs {
+        coefficients: [1; 7],
+    };
+    let proxy = resource_vector
+        .checked_proxy_score(arbitrary_tariffs)
+        .expect("synthetic proxy score fits u128");
+    println!("arbitrary_unit_proxy_score: {proxy}");
     println!("sources: {sources:?}");
     println!("target: {target:?}");
     println!("active: {}", runtime.state().active_count());
