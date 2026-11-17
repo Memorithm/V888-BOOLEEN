@@ -94,6 +94,35 @@ impl SequentialCacheState {
         Ok(next)
     }
 
+    /// Stage a circuit mutation and cache rebuild on private clones. Publish both
+    /// only after an independent Full oracle validates the staged result.
+    /// This is an actual transaction for Clone state, unlike metadata-only
+    /// accept_with_rebuild. No state is published on any failure.
+    pub fn transact_verified<C: Clone, K: Clone, T: Eq>(
+        &mut self,
+        circuit: &mut C,
+        cache: &mut K,
+        mutate: impl FnOnce(&mut C) -> Result<(), DispatchError>,
+        rebuild: impl FnOnce(&C, &mut K) -> Result<(), DispatchError>,
+        full_oracle: impl FnOnce(&C) -> Result<T, DispatchError>,
+        cache_oracle: impl FnOnce(&C, &K) -> Result<T, DispatchError>,
+    ) -> Result<CacheStamp, DispatchError> {
+        let next = after_accepted_intervention(self.circuit)?;
+        let mut staged_circuit = circuit.clone();
+        let mut staged_cache = cache.clone();
+        mutate(&mut staged_circuit)?;
+        rebuild(&staged_circuit, &mut staged_cache)?;
+        let reference = full_oracle(&staged_circuit)?;
+        if cache_oracle(&staged_circuit, &staged_cache)? != reference {
+            return Err(DispatchError::FullOracleFailed);
+        }
+        *circuit = staged_circuit;
+        *cache = staged_cache;
+        self.circuit = next;
+        self.cache = Some(next);
+        Ok(next)
+    }
+
     /// Commit an accepted intervention without a rebuilt cache: Full is required.
     pub fn accept_without_cache(&mut self) -> Result<CacheStamp, DispatchError> {
         let next = after_accepted_intervention(self.circuit)?;
@@ -228,6 +257,46 @@ mod tests {
         assert_eq!(saturated.circuit(), terminal);
     }
 
+
+    #[test]
+    fn transactional_mutation_rolls_back_on_oracle_disagreement() {
+        let initial = CacheStamp { circuit_id: 29, generation: 4 };
+        let mut state = SequentialCacheState::new(initial, Some(initial));
+        let mut circuit = vec![false, true];
+        let mut cache = vec![false, true];
+        let result = state.transact_verified(
+            &mut circuit, &mut cache,
+            |c| { c[0] = true; Ok(()) },
+            |c, k| { *k = c.clone(); k[1] = false; Ok(()) },
+            |c| Ok(c.clone()),
+            |_, k| Ok(k.clone()),
+        );
+        assert_eq!(result, Err(DispatchError::FullOracleFailed));
+        assert_eq!(circuit, vec![false, true]);
+        assert_eq!(cache, vec![false, true]);
+        assert_eq!(state.circuit(), initial);
+        assert_eq!(state.cache(), Some(initial));
+    }
+
+    #[test]
+    fn transactional_mutation_publishes_only_verified_generation() {
+        let initial = CacheStamp { circuit_id: 31, generation: 0 };
+        let mut state = SequentialCacheState::new(initial, Some(initial));
+        let mut circuit = vec![false, false];
+        let mut cache = circuit.clone();
+        let next = state.transact_verified(
+            &mut circuit, &mut cache,
+            |c| { c[1] = true; Ok(()) },
+            |c, k| { *k = c.clone(); Ok(()) },
+            |c| Ok(c.clone()),
+            |_, k| Ok(k.clone()),
+        ).unwrap();
+        assert_eq!(next.generation, 1);
+        assert_eq!(circuit, vec![false, true]);
+        assert_eq!(cache, circuit);
+        assert_eq!(state.cache(), Some(next));
+        assert!(!state.publish_rebuilt_cache(initial));
+    }
 
     #[test]
     fn state_owned_dispatch_tracks_sequential_cache_rebuilds() {
