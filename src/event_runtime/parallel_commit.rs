@@ -493,7 +493,8 @@ mod tests {
             counts: vec![1; 3],
         };
         let report = compare(&graph, 1, &[(0, 10, true), (0, 20, true)], 16, 16, 4);
-        assert_eq!(report.work.events_consumed, 4);
+        // Two drives, two t+1 rechecks, then a t+2 no-op recheck.
+        assert_eq!(report.work.events_consumed, 5);
         assert_eq!(report.work.state_transitions, 3);
     }
 }
