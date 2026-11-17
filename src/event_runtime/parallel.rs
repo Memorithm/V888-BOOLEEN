@@ -26,15 +26,15 @@ pub struct ParallelFrontierWork {
     pub max_group_width: usize,
 }
 
-struct PreparedEvent {
-    key: EventKey,
-    requested: bool,
-    desired: bool,
-    contacts_examined: usize,
-    deltas: Vec<(usize, u128)>,
+pub(super) struct PreparedEvent {
+    pub(super) key: EventKey,
+    pub(super) requested: bool,
+    pub(super) desired: bool,
+    pub(super) contacts_examined: usize,
+    pub(super) deltas: Vec<(usize, u128)>,
 }
 
-fn prepare_one(
+pub(super) fn prepare_one(
     graph: &Connectome,
     state: &BooleanState,
     incoming: &[u128],

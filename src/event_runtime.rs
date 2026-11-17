@@ -14,7 +14,9 @@ use crate::connectome::Connectome;
 use crate::BooleanState;
 
 mod parallel;
+mod parallel_commit;
 pub use parallel::ParallelFrontierWork;
+pub use parallel_commit::DisjointCommitWork;
 
 const DRIVE: u8 = 0;
 const RECHECK: u8 = 1;
