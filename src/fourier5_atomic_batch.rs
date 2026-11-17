@@ -89,7 +89,7 @@ mod tests {
                 *cached = bits.iter().fold(false, |a, b| a ^ b);
                 Ok::<_, &str>(())
             },
-            full,
+            |bits| full(bits),
         );
         assert_eq!(
             report,
@@ -120,7 +120,7 @@ mod tests {
                 *cached = bits[0];
                 Ok::<_, &str>(())
             },
-            full,
+            |bits| full(bits),
         );
         assert_eq!(report.failed_at, Some(1));
         assert_eq!(report.failure, Some(StepOutcome::OracleMismatch));
@@ -145,7 +145,7 @@ mod tests {
                 *cached = bits.iter().filter(|&&b| b).count() % 2 == 1;
                 Ok::<_, &str>(())
             },
-            full,
+            |bits| full(bits),
         );
         assert_eq!(report.committed, 1);
         assert_eq!(report.rejected, 1);
@@ -163,7 +163,7 @@ mod tests {
             std::iter::empty::<usize>(),
             |_, _| Ok::<_, &str>(true),
             |_, _| Ok::<_, &str>(()),
-            full,
+            |bits| full(bits),
         );
         assert_eq!(report.committed, 0);
         assert_eq!(report.failed_at, None);
