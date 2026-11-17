@@ -305,3 +305,6 @@ pub mod fourier5_atomic_batch;
 
 /// Scale- and cone-aware conservative routing, frozen from synthetic VALID pairs.
 pub mod fourier5_scale_policy;
+
+/// VALID-only sequential dispatch including measured cache rebuild costs.
+pub mod fourier5_sequential_cost_policy;
