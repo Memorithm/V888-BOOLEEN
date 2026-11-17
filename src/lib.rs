@@ -23,6 +23,8 @@ pub mod error_gated;
 pub mod fourier5;
 pub mod fourier5_atomic_session;
 pub mod fourier5_context_search;
+pub mod fourier5_conservative_policy;
+pub mod fourier5_scale_policy;
 pub mod fourier5_counterfactual_credit;
 pub mod fourier5_dynamic;
 pub mod fourier5_eligibility;
