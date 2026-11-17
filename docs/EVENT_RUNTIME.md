@@ -42,12 +42,14 @@ convergence.
 
 ## Comptabilité logique vers TDI-28
 
-Le résultat `EventWork` renvoie six compteurs indépendants :
+Le résultat `EventWork` renvoie huit compteurs indépendants :
 
 | Compteur | Signification |
 |---|---|
 | `events_consumed` | Événements retirés, y compris sans effet |
 | `state_transitions` | Changements d'état booléen |
+| `rising_transitions` | Fronts montants `0 → 1` |
+| `falling_transitions` | Fronts descendants `1 → 0` |
 | `contacts_examined` | Lignes CSR lues lors de transitions réelles |
 | `threshold_checks` | Comparaisons à un seuil sur événements de réveil |
 | `wakeups_inserted` | Nouveaux événements de réévaluation |
@@ -55,7 +57,21 @@ Le résultat `EventWork` renvoie six compteurs indépendants :
 
 Ces variables peuvent alimenter le volet A de TDI-28 (vecteur de coûts
 logiques) et comparer des politiques B (calculer, réutiliser ou différer)
-**sans modifier le moteur de référence**. Les compteurs ne comptent pas
+**sans modifier le moteur de référence**.
+
+Le module `event_resources.rs` fournit une algèbre additive de sept axes
+(`ResourceAxis`), avec zéro, somme contrôlée `checked_add` et tarification
+linéaire `checked_proxy_score` en `u128` à coefficients fournis par
+l'appelant. Le total `state_transitions` est exclu des sept axes car il est
+déjà égal à la somme des fronts montants et descendants. Toute multiplication
+ou somme débordante renvoie `None` : pas de saturation silencieuse.
+
+La voie A décrit le travail réellement observé ; la voie B est amorcée par
+`run_with_contact_budget`, qui suspend le premier événement dépassant son
+budget de consultations CSR. Ces deux approches sont **expérimentales** et
+doivent rester comparées sur les mêmes séquences d'événements ; les coefficients
+de score ne correspondent à aucune valeur énergétique mesurée tant qu'une
+calibration instrumentée n'a pas été réalisée. Les compteurs ne comptent pas
 directement les accès mémoire en octets, les messages matériels, les joules
 ni une consommation électrique. Il faut les calibrer et effectuer des
 mesures physiques appariées avant de tirer des conclusions énergétiques.
@@ -66,6 +82,7 @@ mesures physiques appariées avant de tirer des conclusions énergétiques.
 cargo fmt --all -- --check
 cargo clippy --offline --all-targets -- -D warnings
 cargo test --offline event_runtime
+cargo test --offline event_resources
 cargo run --offline --bin v888-event-demo
 ```
 
