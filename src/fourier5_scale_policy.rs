@@ -118,7 +118,9 @@ mod tests {
             observation(65, 4, 100, 1, false),
         ];
         assert_eq!(
-            ScaleAwarePolicy::fit_valid(&mismatch, 2, 0).unwrap().select(64, 4),
+            ScaleAwarePolicy::fit_valid(&mismatch, 2, 0)
+                .unwrap()
+                .select(64, 4),
             Engine::Full
         );
     }
@@ -145,11 +147,8 @@ mod tests {
             ScaleAwarePolicy::fit_valid(&[observation(10, 11, 5, 1, true)], 1, 0),
             Err(PolicyError::InvalidObservation)
         );
-        let policy = ScaleAwarePolicy::fit_valid(
-            &[observation(64, 4, 100, 95, true)],
-            1,
-            6,
-        ).unwrap();
+        let policy =
+            ScaleAwarePolicy::fit_valid(&[observation(64, 4, 100, 95, true)], 1, 6).unwrap();
         assert_eq!(policy.select(64, 4), Engine::Full);
     }
 }
