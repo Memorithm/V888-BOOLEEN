@@ -55,7 +55,12 @@ where
     }
     *state = next_state;
     *cache = next_cache;
-    BatchReport { committed, rejected, failed_at: None, failure: None }
+    BatchReport {
+        committed,
+        rejected,
+        failed_at: None,
+        failure: None,
+    }
 }
 
 #[cfg(test)]
@@ -73,12 +78,28 @@ mod tests {
         let mut state = vec![false; 4];
         let mut cache = false;
         let report = apply_atomic_batch(
-            &mut state, &mut cache, [0usize, 1, 0],
-            |bits, i| { bits[i] = !bits[i]; Ok::<_, &str>(true) },
-            |bits, cached| { *cached = bits.iter().fold(false, |a, b| a ^ b); Ok::<_, &str>(()) },
+            &mut state,
+            &mut cache,
+            [0usize, 1, 0],
+            |bits, i| {
+                bits[i] = !bits[i];
+                Ok::<_, &str>(true)
+            },
+            |bits, cached| {
+                *cached = bits.iter().fold(false, |a, b| a ^ b);
+                Ok::<_, &str>(())
+            },
             full,
         );
-        assert_eq!(report, BatchReport { committed: 3, rejected: 0, failed_at: None, failure: None });
+        assert_eq!(
+            report,
+            BatchReport {
+                committed: 3,
+                rejected: 0,
+                failed_at: None,
+                failure: None
+            }
+        );
         assert_eq!(state, vec![false, true, false, false]);
         assert!(cache);
     }
@@ -88,9 +109,17 @@ mod tests {
         let mut state = vec![false; 3];
         let mut cache = false;
         let report = apply_atomic_batch(
-            &mut state, &mut cache, [0usize, 1],
-            |bits, i| { bits[i] = true; Ok::<_, &str>(true) },
-            |bits, cached| { *cached = bits[0]; Ok::<_, &str>(()) },
+            &mut state,
+            &mut cache,
+            [0usize, 1],
+            |bits, i| {
+                bits[i] = true;
+                Ok::<_, &str>(true)
+            },
+            |bits, cached| {
+                *cached = bits[0];
+                Ok::<_, &str>(())
+            },
             full,
         );
         assert_eq!(report.failed_at, Some(1));
@@ -105,9 +134,17 @@ mod tests {
         let mut state = vec![false; 2];
         let mut cache = false;
         let report = apply_atomic_batch(
-            &mut state, &mut cache, [0usize, 1],
-            |bits, i| { bits[i] = true; Ok::<_, &str>(i == 1) },
-            |bits, cached| { *cached = bits.iter().filter(|&&b| b).count() % 2 == 1; Ok::<_, &str>(()) },
+            &mut state,
+            &mut cache,
+            [0usize, 1],
+            |bits, i| {
+                bits[i] = true;
+                Ok::<_, &str>(i == 1)
+            },
+            |bits, cached| {
+                *cached = bits.iter().filter(|&&b| b).count() % 2 == 1;
+                Ok::<_, &str>(())
+            },
             full,
         );
         assert_eq!(report.committed, 1);
@@ -121,7 +158,9 @@ mod tests {
         let mut state = vec![true];
         let mut cache = true;
         let report = apply_atomic_batch(
-            &mut state, &mut cache, std::iter::empty::<usize>(),
+            &mut state,
+            &mut cache,
+            std::iter::empty::<usize>(),
             |_, _| Ok::<_, &str>(true),
             |_, _| Ok::<_, &str>(()),
             full,
