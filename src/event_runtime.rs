@@ -110,6 +110,24 @@ impl<'g> EventRuntime<'g> {
         Ok(self.incoming[index])
     }
 
+    /// Explicit full reference audit, never used on the hot event path.
+    /// Recomputes weighted incoming sums independently from active source
+    /// bits; the dense oracle buffer is deliberately confined to this audit.
+    pub fn audit_incoming(&self) -> Result<bool, EventError> {
+        let mut expected = vec![0_u128; self.graph.ids.len()];
+        for source in self.state.active_indices() {
+            let first = self.graph.offsets[source] as usize;
+            let last = self.graph.offsets[source + 1] as usize;
+            for edge in first..last {
+                let target = self.graph.targets[edge] as usize;
+                expected[target] = expected[target]
+                    .checked_add(u128::from(self.graph.counts[edge]))
+                    .ok_or(EventError::ArithmeticOverflow)?;
+            }
+        }
+        Ok(expected == self.incoming)
+    }
+
     /// Schedule a caller-controlled Boolean assignment, identified by the
     /// original graph neuron ID. Repeated identical drives are idempotent;
     /// conflicting drives at one time are rejected without mutation.
@@ -348,6 +366,30 @@ mod tests {
         assert_eq!(no_op.state_transitions, 0);
         assert_eq!(no_op.contacts_examined, 0);
         assert_eq!(runtime.schedule_drive(0, 10, true), Err(EventError::TimeNotFuture));
+    }
+
+    #[test]
+    fn independent_oracle_matches_every_partial_cyclic_transition() {
+        let graph = Connectome {
+            ids: vec![10, 20],
+            offsets: vec![0, 1, 2],
+            targets: vec![1, 0],
+            counts: vec![1, 1],
+        };
+        let mut runtime = EventRuntime::new(&graph, 1, 4).unwrap();
+        runtime.schedule_drive(0, 10, true).unwrap();
+        for _ in 0..3 {
+            assert_eq!(runtime.run(1).unwrap().events_consumed, 1);
+            assert_eq!(runtime.audit_incoming(), Ok(true));
+        }
+        assert_eq!(runtime.state().active_count(), 2);
+        runtime.schedule_drive(3, 10, false).unwrap();
+        for _ in 0..3 {
+            assert_eq!(runtime.run(1).unwrap().events_consumed, 1);
+            assert_eq!(runtime.audit_incoming(), Ok(true));
+        }
+        assert_eq!(runtime.state().active_count(), 0);
+        assert_eq!(runtime.pending_count(), 0);
     }
 
     #[test]
