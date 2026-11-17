@@ -79,6 +79,75 @@ impl SequentialCostPolicy {
     }
 }
 
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SequentialHoldoutCell {
+    pub observations: u64,
+    pub incremental_selected: u64,
+    pub output_mismatches: u64,
+    pub decision_mismatches: u64,
+    pub latency_regressions: u64,
+    pub total_full_ns: u128,
+    pub total_selected_ns: u128,
+}
+
+/// Audit-only result. TEST/OOD must not update the frozen VALID policy.
+#[derive(Clone, Debug)]
+pub struct SequentialHoldoutAudit {
+    pub cells: [SequentialHoldoutCell; CELLS],
+}
+
+impl SequentialCostPolicy {
+    /// Evaluate a frozen predecision on disjoint TEST/OOD paired observations.
+    /// Selected cost includes exact cache refresh. Full is the independent oracle.
+    /// Never re-fit or enable a bucket from holdout outcomes.
+    pub fn audit_holdout(
+        &self,
+        rows: &[SequentialCost],
+        cache_current: bool,
+    ) -> Result<SequentialHoldoutAudit, SequentialPolicyError> {
+        let mut cells = [SequentialHoldoutCell::default(); CELLS];
+        for row in rows {
+            let index = bucket(row.gates, row.cone_gates)
+                .ok_or(SequentialPolicyError::InvalidObservation)?;
+            if row.full_ns == 0 || row.incremental_ns == 0 {
+                return Err(SequentialPolicyError::InvalidObservation);
+            }
+            let incremental_total = row.incremental_ns.checked_add(row.cache_update_ns)
+                .ok_or(SequentialPolicyError::Overflow)?;
+            let selected_incremental =
+                self.select(row.gates, row.cone_gates, cache_current) == Engine::Incremental;
+            let cell = &mut cells[index];
+            cell.observations = cell.observations.checked_add(1)
+                .ok_or(SequentialPolicyError::Overflow)?;
+            cell.total_full_ns = cell.total_full_ns.checked_add(u128::from(row.full_ns))
+                .ok_or(SequentialPolicyError::Overflow)?;
+            let selected_ns = if selected_incremental {
+                cell.incremental_selected = cell.incremental_selected.checked_add(1)
+                    .ok_or(SequentialPolicyError::Overflow)?;
+                if !row.same_output {
+                    cell.output_mismatches = cell.output_mismatches.checked_add(1)
+                        .ok_or(SequentialPolicyError::Overflow)?;
+                }
+                if !row.same_decision {
+                    cell.decision_mismatches = cell.decision_mismatches.checked_add(1)
+                        .ok_or(SequentialPolicyError::Overflow)?;
+                }
+                if incremental_total >= row.full_ns {
+                    cell.latency_regressions = cell.latency_regressions.checked_add(1)
+                        .ok_or(SequentialPolicyError::Overflow)?;
+                }
+                incremental_total
+            } else {
+                row.full_ns
+            };
+            cell.total_selected_ns = cell.total_selected_ns.checked_add(u128::from(selected_ns))
+                .ok_or(SequentialPolicyError::Overflow)?;
+        }
+        Ok(SequentialHoldoutAudit { cells })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -90,6 +159,35 @@ mod tests {
             gates, cone_gates: 4, full_ns, incremental_ns, cache_update_ns,
             same_output: true, same_decision: true,
         }
+    }
+
+
+    #[test]
+    fn holdout_preserves_large_scale_negative_results_without_refitting() {
+        let valid = [sample(128, 100, 10, 5), sample(1_562_501, 100, 10, 5)];
+        let policy = SequentialCostPolicy::fit_valid(&valid, 1, 0).unwrap();
+        let mut regression = sample(1_562_501, 100, 120, 10);
+        regression.same_decision = false;
+        let audit = policy.audit_holdout(&[sample(128, 100, 10, 5), regression], true).unwrap();
+        let small = bucket(128, 4).unwrap();
+        let large = bucket(1_562_501, 4).unwrap();
+        assert_eq!(audit.cells[small].latency_regressions, 0);
+        assert_eq!(audit.cells[large].latency_regressions, 1);
+        assert_eq!(audit.cells[large].decision_mismatches, 1);
+        assert_eq!(audit.cells[large].total_selected_ns, 130);
+        assert_eq!(policy.select(1_562_501, 4, true), Engine::Incremental);
+        let fallback = policy.audit_holdout(&[regression], false).unwrap();
+        assert_eq!(fallback.cells[large].incremental_selected, 0);
+        assert_eq!(fallback.cells[large].total_selected_ns, 100);
+    }
+
+    #[test]
+    fn holdout_rejects_overflow_and_invalid_observations() {
+        let policy = SequentialCostPolicy::fit_valid(&[sample(128, 100, 10, 5)], 1, 0).unwrap();
+        assert!(matches!(policy.audit_holdout(&[sample(0, 100, 10, 5)], true),
+            Err(SequentialPolicyError::InvalidObservation)));
+        assert!(matches!(policy.audit_holdout(&[sample(128, 100, u64::MAX, 1)], true),
+            Err(SequentialPolicyError::Overflow)));
     }
 
     #[test]
