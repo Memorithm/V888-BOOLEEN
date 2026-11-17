@@ -48,6 +48,8 @@ pub fn apply_atomic<C: Clone, K: Clone, E>(
 mod tests {
     use super::*;
 
+    type TestOperation = Box<dyn FnMut(&mut Vec<bool>) -> Result<bool, &'static str>>;
+
     // Independent full-recomputation oracle: cache equals the sum of all bits.
     fn full(c: &[bool]) -> usize {
         c.iter().filter(|&&bit| bit).count()
@@ -317,7 +319,7 @@ mod batch_tests {
             cache: 0usize,
             revision: 4,
         };
-        let mut operations: Vec<Box<dyn FnMut(&mut Vec<bool>) -> Result<bool, &'static str>>> = vec![
+        let mut operations: Vec<TestOperation> = vec![
             Box::new(|bits| {
                 bits[1] = true;
                 Ok(true)
@@ -340,7 +342,7 @@ mod batch_tests {
         assert_eq!(count, 2);
         assert_eq!(builds, 1);
         assert_eq!(session.revision, 6);
-        assert_eq!(session.circuit[2], false);
+        assert!(!session.circuit[2]);
         assert_eq!(session.cache, oracle(&session.circuit));
     }
 
@@ -352,7 +354,7 @@ mod batch_tests {
             revision: 2,
         };
         let original = session.clone();
-        let mut operations: Vec<Box<dyn FnMut(&mut Vec<bool>) -> Result<bool, &'static str>>> = vec![
+        let mut operations: Vec<TestOperation> = vec![
             Box::new(|bits| {
                 bits[0] = true;
                 Ok(true)
@@ -468,7 +470,7 @@ mod observed_batch_tests {
             cache: 0usize,
             revision: 10,
         };
-        let mut operations: Vec<Box<dyn FnMut(&mut Vec<bool>) -> Result<bool, &'static str>>> = vec![
+        let mut operations: Vec<TestOperation> = vec![
             Box::new(|bits| {
                 bits[0] = true;
                 Ok(true)
@@ -509,7 +511,7 @@ mod observed_batch_tests {
             revision: 4,
         };
         let original = session.clone();
-        let mut operations: Vec<Box<dyn FnMut(&mut Vec<bool>) -> Result<bool, &'static str>>> = vec![
+        let mut operations: Vec<TestOperation> = vec![
             Box::new(|bits| {
                 bits[0] = true;
                 Ok(true)
