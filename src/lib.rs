@@ -290,9 +290,6 @@ pub mod write_budget;
 
 pub mod fourier5_verified_replay;
 
-/// Conservative VALID-frozen engine selection for synthetic wide circuits.
-pub mod fourier5_conservative_policy;
-
 /// Held-out sequential performance and decision-regression audit.
 pub mod fourier5_sequential_holdout;
 
@@ -304,9 +301,6 @@ pub mod fourier5_transactional_oracle;
 
 /// Atomic multi-step sequential commits with independent Full oracle checks.
 pub mod fourier5_atomic_batch;
-
-/// Scale- and cone-aware conservative routing, frozen from synthetic VALID pairs.
-pub mod fourier5_scale_policy;
 
 /// VALID-only sequential dispatch including measured cache rebuild costs.
 pub mod fourier5_sequential_cost_policy;
