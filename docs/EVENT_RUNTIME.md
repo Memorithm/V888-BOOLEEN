@@ -19,6 +19,12 @@ CSR, son sens orienté, ses multiplicités et ses identifiants V888.
 - Un changement de source n'examine que ses contacts sortants, et une
   réévaluation sans changement d'état ne propage rien. Il n'existe ni
   horloge synchrone globale à chaque neurone ni scan dense du connectome.
+- L'API `run_with_contact_budget(max_events, max_contacts)` limite
+  également les lignes CSR examinées sur une tranche. Un événement qui
+  franchirait ce plafond reste entièrement en file, avec indicateur
+  `blocked_on_contact_budget`. Le caller peut reprendre avec un plafond
+  accru sans changer l'ordre causal ; les événements sans transition
+  peuvent être consommés avec budget de contacts nul.
 - La file est bornée par `max_pending` et le travail par `run(max_events)`.
   Dépasser le budget de file, dépasser le temps logique `u64` ou produire
   un compteur hors `u128` bloque **l'événement concerné avant mutation**.
@@ -66,7 +72,7 @@ cargo run --offline --bin v888-event-demo
 Les tests couvrent la chaîne d'activation et de désactivation, la
 convergence de plusieurs stimuli, le seuil, l'ordre indépendant de
 l'insertion, la file saturée atomiquement, les événements sans effet,
-les poids nuls, les entrées invalides, un oracle CSR indépendant après chaque transition d'un cycle, deux contacts de multiplicité maximale et le dépassement atomique du temps logique.
+les poids nuls, les entrées invalides, un oracle CSR indépendant après chaque transition d'un cycle, deux contacts de multiplicité maximale, le dépassement atomique du temps logique, la suspension sur budget de contacts et l'équivalence de la reprise face à une exécution non bornée.
 
 La qualification des PR s'effectue sur le SHA exact via
 [Memorithm/RemoteOps](https://github.com/Memorithm/RemoteOps)
