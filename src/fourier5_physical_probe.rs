@@ -240,3 +240,99 @@ mod preserving_outcome_tests {
         assert_eq!(result.after.unwrap().kib, 20);
     }
 }
+
+
+/// Two process-wide Linux memory indicators sampled from the same status read.
+/// VmRSS is instantaneous; VmHWM is the historical maximum. Neither isolates
+/// allocations by an individual intervention.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MemorySnapshot {
+    pub current_rss: PeakRss,
+    pub peak_rss: PeakRss,
+}
+
+/// Parse both RSS fields atomically from one status document. A missing,
+/// duplicate, malformed or overflowing field fails the entire snapshot.
+pub fn parse_memory_snapshot(status: &str) -> Result<MemorySnapshot, ParseError> {
+    let peak_rss = parse_vmhwm(status)?;
+    let mut current = None;
+    for line in status.lines() {
+        let Some(rest) = line.strip_prefix("VmRSS:") else {
+            continue;
+        };
+        if current.is_some() {
+            return Err(ParseError::Duplicate);
+        }
+        let mut fields = rest.split_whitespace();
+        let number = fields.next().ok_or(ParseError::Malformed)?;
+        let unit = fields.next().ok_or(ParseError::Malformed)?;
+        if unit != "kB" || fields.next().is_some() || !number.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(ParseError::Malformed);
+        }
+        current = Some(PeakRss {
+            kib: number.parse::<u64>().map_err(|_| ParseError::Overflow)?,
+        });
+    }
+    let current_rss = current.ok_or(ParseError::Missing)?;
+    if current_rss.kib > peak_rss.kib {
+        return Err(ParseError::Malformed);
+    }
+    Ok(MemorySnapshot { current_rss, peak_rss })
+}
+
+/// Read current and peak RSS from a single /proc/self/status snapshot.
+#[cfg(target_os = "linux")]
+pub fn process_memory_snapshot() -> io::Result<MemorySnapshot> {
+    let status = std::fs::read_to_string("/proc/self/status")?;
+    parse_memory_snapshot(&status)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{e:?}")))
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn process_memory_snapshot() -> io::Result<MemorySnapshot> {
+    Err(io::Error::new(io::ErrorKind::Unsupported, "Linux /proc required"))
+}
+
+#[cfg(test)]
+mod memory_snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn distinguishes_current_and_historical_memory() {
+        let snapshot = parse_memory_snapshot("VmRSS: 120 kB\nVmHWM: 900 kB\n").unwrap();
+        assert_eq!(snapshot.current_rss.kib, 120);
+        assert_eq!(snapshot.peak_rss.kib, 900);
+    }
+
+    #[test]
+    fn rejects_missing_duplicate_and_impossible_current_rss() {
+        assert_eq!(parse_memory_snapshot("VmHWM: 5 kB\n"), Err(ParseError::Missing));
+        assert_eq!(
+            parse_memory_snapshot("VmRSS: 2 kB\nVmRSS: 3 kB\nVmHWM: 5 kB\n"),
+            Err(ParseError::Duplicate)
+        );
+        assert_eq!(
+            parse_memory_snapshot("VmRSS: 6 kB\nVmHWM: 5 kB\n"),
+            Err(ParseError::Malformed)
+        );
+    }
+
+    #[test]
+    fn rejects_overflow_and_ambiguous_units() {
+        assert_eq!(
+            parse_memory_snapshot("VmRSS: 18446744073709551616 kB\nVmHWM: 5 kB\n"),
+            Err(ParseError::Overflow)
+        );
+        assert_eq!(
+            parse_memory_snapshot("VmRSS: 4 MB\nVmHWM: 5 kB\n"),
+            Err(ParseError::Malformed)
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_snapshot_respects_peak_invariant() {
+        let sample = process_memory_snapshot().unwrap();
+        assert!(sample.current_rss.kib <= sample.peak_rss.kib);
+    }
+}
