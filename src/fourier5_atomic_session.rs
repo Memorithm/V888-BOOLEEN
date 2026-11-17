@@ -45,10 +45,12 @@ pub fn apply_atomic<C: Clone, K: Clone, E>(
 }
 
 #[cfg(test)]
+type TestOperation = Box<dyn FnMut(&mut Vec<bool>) -> Result<bool, &'static str>>;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
-    type TestOperation = Box<dyn FnMut(&mut Vec<bool>) -> Result<bool, &'static str>>;
 
     // Independent full-recomputation oracle: cache equals the sum of all bits.
     fn full(c: &[bool]) -> usize {
