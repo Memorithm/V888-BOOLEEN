@@ -336,3 +336,132 @@ mod memory_snapshot_tests {
         assert!(sample.current_rss.kib <= sample.peak_rss.kib);
     }
 }
+
+
+/// One sequential step with process-wide memory sampled around the complete
+/// operation, including any cache refresh performed by the callback.
+/// A failed post-sample is retained alongside the committed operation outcome.
+#[derive(Debug)]
+pub struct SequentialStep<T, E> {
+    pub index: usize,
+    pub elapsed: Duration,
+    pub before: MemorySnapshot,
+    pub after: io::Result<MemorySnapshot>,
+    pub outcome: Result<T, E>,
+}
+
+/// Execute operations in order, exactly once each, without losing outcomes on
+/// post-sampling failures. A pre-sample failure stops before the next mutation.
+/// No rollback, oracle equivalence, or cache correctness is implied.
+pub fn sample_sequential<T, E, I, F>(
+    operations: I,
+    mut operation: F,
+) -> io::Result<Vec<SequentialStep<T, E>>>
+where
+    I: IntoIterator,
+    F: FnMut(I::Item) -> Result<T, E>,
+{
+    sample_sequential_with(operations, process_memory_snapshot, &mut operation)
+}
+
+fn sample_sequential_with<T, E, I, F, S>(
+    operations: I,
+    mut sample: S,
+    operation: &mut F,
+) -> io::Result<Vec<SequentialStep<T, E>>>
+where
+    I: IntoIterator,
+    F: FnMut(I::Item) -> Result<T, E>,
+    S: FnMut() -> io::Result<MemorySnapshot>,
+{
+    let mut steps = Vec::new();
+    for (index, input) in operations.into_iter().enumerate() {
+        let before = sample()?;
+        let (elapsed, outcome) = time_intervention(|| operation(input));
+        let after = sample();
+        steps.push(SequentialStep {
+            index,
+            elapsed,
+            before,
+            after,
+            outcome,
+        });
+    }
+    Ok(steps)
+}
+
+#[cfg(test)]
+mod sequential_execution_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    fn snapshot(current: u64, peak: u64) -> MemorySnapshot {
+        MemorySnapshot {
+            current_rss: PeakRss { kib: current },
+            peak_rss: PeakRss { kib: peak },
+        }
+    }
+
+    #[test]
+    fn heterogeneous_steps_execute_once_and_in_order() {
+        let mut seen = Vec::new();
+        let steps = sample_sequential_with(
+            [3_i32, -2, 7],
+            || Ok(snapshot(12, 20)),
+            &mut |input| {
+                seen.push(input);
+                if input < 0 { Err(input) } else { Ok(input * 2) }
+            },
+        ).unwrap();
+        assert_eq!(seen, vec![3, -2, 7]);
+        assert_eq!(steps.len(), 3);
+        assert_eq!(steps[0].outcome, Ok(6));
+        assert_eq!(steps[1].outcome, Err(-2));
+        assert_eq!(steps[2].outcome, Ok(14));
+        assert_eq!(steps.iter().map(|s| s.index).collect::<Vec<_>>(), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn failed_post_sample_preserves_outcome_and_continues() {
+        let reads = Cell::new(0);
+        let steps = sample_sequential_with(
+            [1_u8, 2],
+            || {
+                reads.set(reads.get() + 1);
+                if reads.get() == 2 {
+                    Err(io::Error::other("post"))
+                } else {
+                    Ok(snapshot(8, 16))
+                }
+            },
+            &mut |n| Ok::<_, ()>(n),
+        ).unwrap();
+        assert!(steps[0].after.is_err());
+        assert_eq!(steps[0].outcome, Ok(1));
+        assert_eq!(steps[1].outcome, Ok(2));
+        assert!(steps[1].after.is_ok());
+    }
+
+    #[test]
+    fn failed_pre_sample_prevents_next_mutation() {
+        let reads = Cell::new(0);
+        let mutations = Cell::new(0);
+        let result = sample_sequential_with(
+            [1, 2],
+            || {
+                reads.set(reads.get() + 1);
+                if reads.get() == 3 {
+                    Err(io::Error::other("pre"))
+                } else {
+                    Ok(snapshot(8, 16))
+                }
+            },
+            &mut |_| {
+                mutations.set(mutations.get() + 1);
+                Ok::<_, ()>(())
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(mutations.get(), 1);
+    }
+}
