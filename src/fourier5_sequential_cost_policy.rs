@@ -225,3 +225,87 @@ mod tests {
             Err(SequentialPolicyError::Overflow)));
     }
 }
+
+
+impl SequentialCostPolicy {
+    /// Audit a heterogeneous ordered intervention stream. Cache freshness is
+    /// sampled for EACH intervention, never inferred from the first or last.
+    /// The frozen VALID policy is not mutated by TEST/OOD observations.
+    pub fn audit_holdout_sequence(
+        &self,
+        steps: &[(SequentialCost, bool)],
+    ) -> Result<SequentialHoldoutAudit, SequentialPolicyError> {
+        let mut cells = [SequentialHoldoutCell::default(); CELLS];
+        for &(row, cache_current) in steps {
+            // Reuse the single-observation oracle accounting so both audit
+            // entry points have identical validity and overflow semantics.
+            let one = self.audit_holdout(&[row], cache_current)?;
+            let index = bucket(row.gates, row.cone_gates)
+                .ok_or(SequentialPolicyError::InvalidObservation)?;
+            let dst = &mut cells[index];
+            let src = &one.cells[index];
+            dst.observations = dst.observations.checked_add(src.observations)
+                .ok_or(SequentialPolicyError::Overflow)?;
+            dst.incremental_selected = dst.incremental_selected.checked_add(src.incremental_selected)
+                .ok_or(SequentialPolicyError::Overflow)?;
+            dst.output_mismatches = dst.output_mismatches.checked_add(src.output_mismatches)
+                .ok_or(SequentialPolicyError::Overflow)?;
+            dst.decision_mismatches = dst.decision_mismatches.checked_add(src.decision_mismatches)
+                .ok_or(SequentialPolicyError::Overflow)?;
+            dst.latency_regressions = dst.latency_regressions.checked_add(src.latency_regressions)
+                .ok_or(SequentialPolicyError::Overflow)?;
+            dst.total_full_ns = dst.total_full_ns.checked_add(src.total_full_ns)
+                .ok_or(SequentialPolicyError::Overflow)?;
+            dst.total_selected_ns = dst.total_selected_ns.checked_add(src.total_selected_ns)
+                .ok_or(SequentialPolicyError::Overflow)?;
+        }
+        Ok(SequentialHoldoutAudit { cells })
+    }
+}
+
+#[cfg(test)]
+mod heterogeneous_sequence_tests {
+    use super::*;
+
+    #[test]
+    fn per_intervention_cache_freshness_prevents_false_incremental_selection() {
+        let valid = [SequentialCost {
+            gates: 128, cone_gates: 4, full_ns: 100,
+            incremental_ns: 10, cache_update_ns: 5,
+            same_output: true, same_decision: true,
+        }];
+        let policy = SequentialCostPolicy::fit_valid(&valid, 1, 0).unwrap();
+        let mut divergent = valid[0];
+        divergent.same_output = false;
+        divergent.same_decision = false;
+        divergent.incremental_ns = 120;
+        let steps = [(valid[0], true), (divergent, false), (divergent, true)];
+        let audit = policy.audit_holdout_sequence(&steps).unwrap();
+        let cell = audit.cells[bucket(128, 4).unwrap()];
+        assert_eq!(cell.observations, 3);
+        assert_eq!(cell.incremental_selected, 2);
+        assert_eq!(cell.output_mismatches, 1);
+        assert_eq!(cell.decision_mismatches, 1);
+        assert_eq!(cell.latency_regressions, 1);
+        assert_eq!(cell.total_full_ns, 300);
+        assert_eq!(cell.total_selected_ns, 240);
+        assert_eq!(policy.select(128, 4, true), Engine::Incremental);
+    }
+
+    #[test]
+    fn sequence_rejects_invalid_step_without_modifying_policy() {
+        let row = SequentialCost {
+            gates: 128, cone_gates: 4, full_ns: 100,
+            incremental_ns: 10, cache_update_ns: 5,
+            same_output: true, same_decision: true,
+        };
+        let policy = SequentialCostPolicy::fit_valid(&[row], 1, 0).unwrap();
+        let mut invalid = row;
+        invalid.gates = 0;
+        assert_eq!(
+            policy.audit_holdout_sequence(&[(row, true), (invalid, false)]).unwrap_err(),
+            SequentialPolicyError::InvalidObservation
+        );
+        assert_eq!(policy.select(128, 4, true), Engine::Incremental);
+    }
+}
