@@ -46,6 +46,7 @@ pub mod fourier5_sequential_phases;
 pub mod fourier5_sequential_profile;
 pub mod fourier5_shared_context;
 pub mod fourier5_task_memory;
+pub mod fourier5_verified_dispatch;
 pub mod fourier5_wide;
 pub mod fourier5_wide_learning;
 pub mod full_synapse;
