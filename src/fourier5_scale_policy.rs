@@ -81,6 +81,56 @@ impl ScaleAwarePolicy {
     }
 }
 
+
+/// Immutable evaluation of a frozen routing policy on disjoint TEST/OOD pairs.
+/// This is an audit, never an input to calibration or automatic policy changes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HoldoutAudit {
+    pub total: u64,
+    pub routed_incremental: u64,
+    pub output_mismatches: u64,
+    pub decision_mismatches: u64,
+    pub latency_regressions: u64,
+    pub full_ns: u128,
+    pub selected_ns: u128,
+}
+
+impl ScaleAwarePolicy {
+    /// Evaluate selected-engine outcomes against paired Full observations.
+    /// Fail on malformed rows or arithmetic overflow rather than dropping data.
+    pub fn audit_holdout(&self, rows: &[PairedObservation]) -> Result<HoldoutAudit, PolicyError> {
+        let mut audit = HoldoutAudit::default();
+        for row in rows {
+            if row.gates == 0
+                || row.cone_gates > row.gates
+                || row.full_ns == 0
+                || row.incremental_ns == 0
+            {
+                return Err(PolicyError::InvalidObservation);
+            }
+            audit.total = audit.total.checked_add(1).ok_or(PolicyError::Overflow)?;
+            audit.full_ns = audit.full_ns.checked_add(u128::from(row.full_ns)).ok_or(PolicyError::Overflow)?;
+            let selected = if self.select(row.gates, row.cone_gates) == Engine::Incremental {
+                audit.routed_incremental = audit.routed_incremental.checked_add(1).ok_or(PolicyError::Overflow)?;
+                if !row.same_output {
+                    audit.output_mismatches = audit.output_mismatches.checked_add(1).ok_or(PolicyError::Overflow)?;
+                }
+                if !row.same_decision {
+                    audit.decision_mismatches = audit.decision_mismatches.checked_add(1).ok_or(PolicyError::Overflow)?;
+                }
+                if row.incremental_ns >= row.full_ns {
+                    audit.latency_regressions = audit.latency_regressions.checked_add(1).ok_or(PolicyError::Overflow)?;
+                }
+                row.incremental_ns
+            } else {
+                row.full_ns
+            };
+            audit.selected_ns = audit.selected_ns.checked_add(u128::from(selected)).ok_or(PolicyError::Overflow)?;
+        }
+        Ok(audit)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,6 +202,33 @@ mod tests {
         assert_eq!(policy.select(64, 4), Engine::Incremental);
         assert_eq!(policy.select(0, 0), Engine::Full);
         assert_eq!(policy.select(64, 65), Engine::Full);
+    }
+
+
+    #[test]
+    fn holdout_audit_exposes_negative_results_without_retraining() {
+        let valid = [observation(1_562_501, 10, 100, 40, true)];
+        let policy = ScaleAwarePolicy::fit_valid(&valid, 1, 1).unwrap();
+        let frozen = policy.clone();
+        let mut bad = observation(1_562_501, 10, 100, 130, false);
+        bad.same_decision = true;
+        let holdout = [bad, observation(128, 0, 50, 1, false)];
+        let report = policy.audit_holdout(&holdout).unwrap();
+        assert_eq!(report.total, 2);
+        assert_eq!(report.routed_incremental, 1);
+        assert_eq!(report.output_mismatches, 1);
+        assert_eq!(report.decision_mismatches, 0);
+        assert_eq!(report.latency_regressions, 1);
+        assert_eq!(report.full_ns, 150);
+        assert_eq!(report.selected_ns, 180);
+        assert_eq!(policy, frozen);
+    }
+
+    #[test]
+    fn holdout_audit_rejects_invalid_pairs() {
+        let policy = ScaleAwarePolicy::fit_valid(&[observation(64, 1, 100, 10, true)], 1, 0).unwrap();
+        assert_eq!(policy.audit_holdout(&[]).unwrap(), HoldoutAudit::default());
+        assert_eq!(policy.audit_holdout(&[observation(0, 0, 1, 1, true)]), Err(PolicyError::InvalidObservation));
     }
 
     #[test]
