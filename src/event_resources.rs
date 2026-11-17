@@ -130,10 +130,7 @@ mod tests {
         let thrice_left = twice.checked_add(work);
         let thrice_right = work.checked_add(twice);
         assert_eq!(thrice_left, thrice_right);
-        assert_eq!(
-            twice.amount(ResourceAxis::ContactsExamined),
-            10
-        );
+        assert_eq!(twice.amount(ResourceAxis::ContactsExamined), 10);
     }
 
     #[test]
