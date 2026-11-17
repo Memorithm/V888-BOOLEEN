@@ -72,6 +72,24 @@ impl ScaleAwarePolicy {
         }
     }
 
+    /// Fail closed when an incremental cache does not describe the exact
+    /// current circuit generation. A stale cache must never be dispatched.
+    /// Generations are caller-maintained monotonic revision identifiers;
+    /// callers must increment the revision after every accepted mutation.
+    #[must_use]
+    pub fn select_for_generation(
+        &self,
+        gates: u64,
+        cone_gates: u64,
+        circuit_generation: u64,
+        cache_generation: Option<u64>,
+    ) -> Engine {
+        if cache_generation != Some(circuit_generation) {
+            return Engine::Full;
+        }
+        self.select(gates, cone_gates)
+    }
+
     #[must_use]
     pub fn validation_samples(&self, gates: u64, cone_gates: u64) -> u64 {
         if gates == 0 || cone_gates > gates {
@@ -229,6 +247,25 @@ mod tests {
         let policy = ScaleAwarePolicy::fit_valid(&[observation(64, 1, 100, 10, true)], 1, 0).unwrap();
         assert_eq!(policy.audit_holdout(&[]).unwrap(), HoldoutAudit::default());
         assert_eq!(policy.audit_holdout(&[observation(0, 0, 1, 1, true)]), Err(PolicyError::InvalidObservation));
+    }
+
+    #[test]
+    fn stale_or_missing_cache_generation_forces_full() {
+        let valid = [observation(1_562_501, 10, 100, 40, true)];
+        let policy = ScaleAwarePolicy::fit_valid(&valid, 1, 1).unwrap();
+        assert_eq!(policy.select(1_562_501, 10), Engine::Incremental);
+        assert_eq!(policy.select_for_generation(1_562_501, 10, 7, Some(7)), Engine::Incremental);
+        assert_eq!(policy.select_for_generation(1_562_501, 10, 8, Some(7)), Engine::Full);
+        assert_eq!(policy.select_for_generation(1_562_501, 10, 7, None), Engine::Full);
+        assert_eq!(policy.select_for_generation(1_562_501, 10, 7, Some(8)), Engine::Full);
+    }
+
+    #[test]
+    fn matching_generation_does_not_override_unknown_cells() {
+        let valid = [observation(128, 0, 100, 20, true)];
+        let policy = ScaleAwarePolicy::fit_valid(&valid, 1, 0).unwrap();
+        assert_eq!(policy.select_for_generation(1_562_501, 0, 1, Some(1)), Engine::Full);
+        assert_eq!(policy.select_for_generation(0, 0, 1, Some(1)), Engine::Full);
     }
 
     #[test]
