@@ -14,8 +14,8 @@
 use std::collections::BTreeSet;
 use std::thread;
 
-use super::parallel::{PreparedEvent, prepare_one};
-use super::{DRIVE, EventError, EventKey, EventRuntime, EventWork, RECHECK};
+use super::parallel::{prepare_one, PreparedEvent};
+use super::{EventError, EventKey, EventRuntime, EventWork, DRIVE, RECHECK};
 
 const MAX_COMMIT_THREADS: usize = 32;
 const EVENTS_PER_THREAD: usize = 16;
@@ -146,7 +146,8 @@ impl<'g> EventRuntime<'g> {
                 let removed = self.pending.remove(&key);
                 debug_assert_eq!(removed, Some(stage.event.requested));
                 let source = key.2;
-                let changed = self.state.get(source).expect("validated source") != stage.event.desired;
+                let changed =
+                    self.state.get(source).expect("validated source") != stage.event.desired;
                 if changed {
                     self.state
                         .set(source, stage.event.desired)
@@ -216,10 +217,7 @@ impl<'g> EventRuntime<'g> {
 
     /// Returns None when exact sequential preflight would encounter an error.
     /// Disjoint target ownership ensures snapshots stay valid across events.
-    fn preflight_disjoint_commits(
-        &self,
-        events: Vec<PreparedEvent>,
-    ) -> Option<Vec<StagedCommit>> {
+    fn preflight_disjoint_commits(&self, events: Vec<PreparedEvent>) -> Option<Vec<StagedCommit>> {
         let mut projected_len = self.pending.len();
         let mut stages = Vec::with_capacity(events.len());
         for event in events {
@@ -338,7 +336,10 @@ mod tests {
         assert_eq!(tested.state(), reference.state());
         assert_eq!(tested.incoming, reference.incoming);
         assert_eq!(tested.pending, reference.pending);
-        assert_eq!(tested.last_processed_time(), reference.last_processed_time());
+        assert_eq!(
+            tested.last_processed_time(),
+            reference.last_processed_time()
+        );
         assert_eq!(tested.audit_incoming(), Ok(true));
         actual
     }
@@ -373,7 +374,14 @@ mod tests {
             targets: vec![3, 3, 4],
             counts: vec![1; 3],
         };
-        let report = compare(&graph, 2, &[(0, 10, true), (0, 20, true), (0, 30, true)], 12, 12, 3);
+        let report = compare(
+            &graph,
+            2,
+            &[(0, 10, true), (0, 20, true), (0, 30, true)],
+            12,
+            12,
+            3,
+        );
         assert_eq!(report.work.events_consumed, 5);
         assert_eq!(report.work.wakeups_inserted, 2);
         assert_eq!(report.work.wakeups_coalesced, 1);
@@ -411,7 +419,10 @@ mod tests {
             runtime.run_disjoint_parallel_commits(10, 0),
             Err(EventError::InvalidWorkerCount)
         ));
-        assert_eq!(runtime.run_disjoint_parallel_commits(0, 4).unwrap().work, EventWork::default());
+        assert_eq!(
+            runtime.run_disjoint_parallel_commits(0, 4).unwrap().work,
+            EventWork::default()
+        );
         assert_eq!(runtime.pending_count(), 1);
         assert_eq!(runtime.state().active_count(), 0);
     }
@@ -431,11 +442,17 @@ mod tests {
             runtime.schedule_drive(0, 20, true).unwrap();
         }
         assert_eq!(reference.run(5), Err(EventError::PendingBudgetExceeded));
-        assert_eq!(tested.run_disjoint_parallel_commits(5, 4), Err(EventError::PendingBudgetExceeded));
+        assert_eq!(
+            tested.run_disjoint_parallel_commits(5, 4),
+            Err(EventError::PendingBudgetExceeded)
+        );
         assert_eq!(tested.state(), reference.state());
         assert_eq!(tested.incoming, reference.incoming);
         assert_eq!(tested.pending, reference.pending);
-        assert_eq!(tested.last_processed_time(), reference.last_processed_time());
+        assert_eq!(
+            tested.last_processed_time(),
+            reference.last_processed_time()
+        );
         assert_eq!(tested.state().active_count(), 1);
     }
 
@@ -449,7 +466,10 @@ mod tests {
             runtime.schedule_drive(u64::MAX, 11, true).unwrap();
         }
         assert_eq!(reference.run(5), Err(EventError::LogicalTimeOverflow));
-        assert_eq!(tested.run_disjoint_parallel_commits(5, 4), Err(EventError::LogicalTimeOverflow));
+        assert_eq!(
+            tested.run_disjoint_parallel_commits(5, 4),
+            Err(EventError::LogicalTimeOverflow)
+        );
         assert_eq!(tested.state(), reference.state());
         assert_eq!(tested.incoming, reference.incoming);
         assert_eq!(tested.pending, reference.pending);
