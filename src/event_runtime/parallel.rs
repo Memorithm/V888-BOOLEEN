@@ -337,6 +337,48 @@ mod tests {
     }
 
     #[test]
+    fn independent_rechecks_are_prepared_in_the_same_parallel_group() {
+        let graph = Connectome {
+            ids: vec![10, 20, 30, 40],
+            offsets: vec![0, 1, 1, 2, 2],
+            targets: vec![1, 3],
+            counts: vec![1, 1],
+        };
+        let stats = compare(&graph, 1, &[(0, 10, true), (0, 30, true)], 16, 16, 4);
+        assert_eq!(stats.work.state_transitions, 4);
+        assert_eq!(stats.parallel_groups, 2);
+        assert_eq!(stats.prepared_events, 4);
+        assert_eq!(stats.work.threshold_checks, 2);
+    }
+
+    #[test]
+    fn a_later_failing_event_preserves_earlier_successful_event() {
+        let graph = Connectome {
+            ids: vec![10, 20, 30, 40, 50],
+            offsets: vec![0, 0, 3, 3, 3, 3],
+            targets: vec![2, 3, 4],
+            counts: vec![1, 1, 1],
+        };
+        let mut serial = EventRuntime::new(&graph, 1, 2).unwrap();
+        let mut parallel = EventRuntime::new(&graph, 1, 2).unwrap();
+        for runtime in [&mut serial, &mut parallel] {
+            runtime.schedule_drive(0, 10, true).unwrap();
+            runtime.schedule_drive(0, 20, true).unwrap();
+        }
+        assert_eq!(serial.run(2), Err(EventError::PendingBudgetExceeded));
+        assert!(matches!(
+            parallel.run_parallel_frontiers(2, 2),
+            Err(EventError::PendingBudgetExceeded)
+        ));
+        assert_eq!(serial.state().active_count(), 1);
+        assert_eq!(serial.pending, parallel.pending);
+        assert_eq!(serial.incoming, parallel.incoming);
+        assert_eq!(serial.state(), parallel.state());
+        assert_eq!(serial.last_processed_time(), Some(0));
+        assert_eq!(parallel.last_processed_time(), Some(0));
+    }
+
+    #[test]
     fn rechecks_never_read_stale_same_time_incoming_contributions() {
         // t=1 rechecks for nodes 1 and 2. Processing node 1 updates
         // incoming[2] immediately, so node 2 must observe the update at t=1.
