@@ -4,13 +4,13 @@
 use crate::fourier5_conservative_policy::{Engine, PairedObservation, PolicyError};
 
 const CONES: usize = 16;
-const SIZES: usize = 8;
+const SIZES: usize = u64::BITS as usize;
 const CELLS: usize = CONES * SIZES;
 
-/// Logarithmic circuit-size class, saturating above 2^7 gates.
-/// Small and large circuits with equal cone ratios never share evidence.
+/// Exact base-2 size bucket over the full nonzero u64 range.
+/// A large circuit must not inherit calibration from a much smaller circuit.
 fn size_class(gates: u64) -> usize {
-    (63 - gates.leading_zeros() as usize).min(SIZES - 1)
+    (u64::BITS - 1 - gates.leading_zeros()) as usize
 }
 
 fn cell(gates: u64, cone: u64) -> usize {
@@ -103,6 +103,25 @@ mod tests {
         assert_eq!(policy.select(64, 4), Engine::Incremental);
         assert_eq!(policy.select(4096, 256), Engine::Full);
         assert_eq!(policy.validation_samples(4096, 256), 0);
+    }
+
+    #[test]
+    fn large_scale_buckets_do_not_inherit_tiny_valid_evidence() {
+        // Previously every size >=128 shared the saturated final bucket.
+        let valid = [observation(128, 0, 100, 10, true)];
+        let policy = ScaleAwarePolicy::fit_valid(&valid, 1, 0).unwrap();
+        assert_eq!(policy.select(128, 0), Engine::Incremental);
+        assert_eq!(policy.select(1_562_501, 0), Engine::Full);
+        assert_eq!(policy.validation_samples(1_562_501, 0), 0);
+        assert_eq!(policy.select(u64::MAX, 0), Engine::Full);
+    }
+
+    #[test]
+    fn large_scale_own_valid_evidence_can_enable_incremental() {
+        let valid = [observation(1_562_501, 10, 100, 50, true)];
+        let policy = ScaleAwarePolicy::fit_valid(&valid, 1, 1).unwrap();
+        assert_eq!(policy.select(1_562_501, 10), Engine::Incremental);
+        assert_eq!(policy.select(128, 0), Engine::Full);
     }
 
     #[test]
