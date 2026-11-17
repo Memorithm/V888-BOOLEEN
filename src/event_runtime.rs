@@ -393,6 +393,43 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_contacts_preserve_full_u128_multiplicity() {
+        let graph = Connectome {
+            ids: vec![10, 20],
+            offsets: vec![0, 2, 2],
+            targets: vec![1, 1],
+            counts: vec![u64::MAX, u64::MAX],
+        };
+        let threshold = u128::from(u64::MAX) * 2;
+        let mut runtime = EventRuntime::new(&graph, threshold, 4).unwrap();
+        runtime.schedule_drive(0, 10, true).unwrap();
+        let first = runtime.run(2).unwrap();
+        assert_eq!(first.wakeups_inserted, 1);
+        assert_eq!(first.contacts_examined, 2);
+        assert_eq!(runtime.incoming_for(20), Ok(threshold));
+        assert_eq!(runtime.state().active_count(), 2);
+        assert_eq!(runtime.audit_incoming(), Ok(true));
+        runtime.schedule_drive(2, 10, false).unwrap();
+        runtime.run(2).unwrap();
+        assert_eq!(runtime.incoming_for(20), Ok(0));
+        assert_eq!(runtime.audit_incoming(), Ok(true));
+        assert_eq!(runtime.state().active_count(), 0);
+    }
+
+    #[test]
+    fn timestamp_overflow_preserves_pending_event_and_state() {
+        let graph = chain();
+        let mut runtime = EventRuntime::new(&graph, 1, 4).unwrap();
+        runtime.schedule_drive(u64::MAX, 10, true).unwrap();
+        assert_eq!(runtime.run(1), Err(EventError::LogicalTimeOverflow));
+        assert_eq!(runtime.pending_count(), 1);
+        assert_eq!(runtime.next_event_time(), Some(u64::MAX));
+        assert_eq!(runtime.last_processed_time(), None);
+        assert_eq!(runtime.state().active_count(), 0);
+        assert_eq!(runtime.incoming_for(20), Ok(0));
+    }
+
+    #[test]
     fn zero_contact_weights_do_not_wake_targets() {
         let mut graph = chain();
         graph.counts[0] = 0;
