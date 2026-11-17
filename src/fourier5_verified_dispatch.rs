@@ -55,6 +55,63 @@ pub fn after_accepted_intervention(stamp: CacheStamp) -> Result<CacheStamp, Disp
     Ok(CacheStamp { generation, ..stamp })
 }
 
+
+/// Owns the cache revision for sequential synthetic interventions. A cache is
+/// published only after its rebuild succeeds for the next circuit generation.
+/// The caller must apply the corresponding circuit mutation transactionally.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SequentialCacheState {
+    circuit: CacheStamp,
+    cache: Option<CacheStamp>,
+}
+
+impl SequentialCacheState {
+    pub fn new(circuit: CacheStamp, cache: Option<CacheStamp>) -> Self {
+        Self {
+            circuit,
+            cache: cache.filter(|stamp| *stamp == circuit),
+        }
+    }
+
+    pub fn circuit(&self) -> CacheStamp {
+        self.circuit
+    }
+
+    pub fn cache(&self) -> Option<CacheStamp> {
+        self.cache
+    }
+
+    /// Commit the revision only after a successful cache rebuild.
+    /// On error the previous state is unchanged.
+    pub fn accept_with_rebuild(
+        &mut self,
+        rebuild: impl FnOnce(CacheStamp) -> Result<(), DispatchError>,
+    ) -> Result<CacheStamp, DispatchError> {
+        let next = after_accepted_intervention(self.circuit)?;
+        rebuild(next)?;
+        self.circuit = next;
+        self.cache = Some(next);
+        Ok(next)
+    }
+
+    /// Commit an accepted intervention without a rebuilt cache: Full is required.
+    pub fn accept_without_cache(&mut self) -> Result<CacheStamp, DispatchError> {
+        let next = after_accepted_intervention(self.circuit)?;
+        self.circuit = next;
+        self.cache = None;
+        Ok(next)
+    }
+
+    /// Reject a rebuild from a different circuit or generation.
+    pub fn publish_rebuilt_cache(&mut self, stamp: CacheStamp) -> bool {
+        if stamp != self.circuit {
+            return false;
+        }
+        self.cache = Some(stamp);
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,4 +168,41 @@ mod tests {
             || Err(DispatchError::FullOracleFailed), || Ok(1)),
             Err(DispatchError::FullOracleFailed));
     }
+
+    #[test]
+    fn sequential_rebuild_commits_only_on_success() {
+        let initial = CacheStamp { circuit_id: 17, generation: 5 };
+        let mut state = SequentialCacheState::new(initial, Some(initial));
+        assert_eq!(
+            state.accept_with_rebuild(|_| Err(DispatchError::FullOracleFailed)),
+            Err(DispatchError::FullOracleFailed)
+        );
+        assert_eq!(state.circuit(), initial);
+        assert_eq!(state.cache(), Some(initial));
+        let next = state.accept_with_rebuild(|stamp| {
+            assert_eq!(stamp.generation, 6);
+            Ok(())
+        }).unwrap();
+        assert_eq!(state.circuit(), next);
+        assert_eq!(state.cache(), Some(next));
+        assert!(!state.publish_rebuilt_cache(initial));
+        assert_eq!(state.cache(), Some(next));
+    }
+
+    #[test]
+    fn sequential_cache_invalidation_and_overflow_are_fail_closed() {
+        let initial = CacheStamp { circuit_id: 19, generation: 9 };
+        let mut state = SequentialCacheState::new(initial, Some(initial));
+        let next = state.accept_without_cache().unwrap();
+        assert_eq!(state.cache(), None);
+        assert!(!state.publish_rebuilt_cache(initial));
+        assert!(state.publish_rebuilt_cache(next));
+        assert_eq!(state.cache(), Some(next));
+        let terminal = CacheStamp { generation: u64::MAX, ..initial };
+        let mut saturated = SequentialCacheState::new(terminal, Some(terminal));
+        assert_eq!(saturated.accept_without_cache(), Err(DispatchError::GenerationOverflow));
+        assert_eq!(saturated.cache(), Some(terminal));
+        assert_eq!(saturated.circuit(), terminal);
+    }
+
 }
