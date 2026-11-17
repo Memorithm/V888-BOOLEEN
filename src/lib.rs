@@ -296,3 +296,6 @@ pub mod fourier5_trace_provenance;
 
 /// Transactional sequential cache commits checked against an independent Full oracle.
 pub mod fourier5_transactional_oracle;
+
+/// Atomic multi-step sequential commits with independent Full oracle checks.
+pub mod fourier5_atomic_batch;
