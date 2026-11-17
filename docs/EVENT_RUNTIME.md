@@ -66,7 +66,7 @@ cargo run --offline --bin v888-event-demo
 Les tests couvrent la chaîne d'activation et de désactivation, la
 convergence de plusieurs stimuli, le seuil, l'ordre indépendant de
 l'insertion, la file saturée atomiquement, les événements sans effet,
-les poids nuls et les entrées invalides.
+les poids nuls, les entrées invalides et un oracle CSR indépendant après chaque transition d'un cycle.
 
 La qualification des PR s'effectue sur le SHA exact via
 [Memorithm/RemoteOps](https://github.com/Memorithm/RemoteOps)
