@@ -135,7 +135,7 @@ impl<'g> EventRuntime<'g> {
         if self.pending.len() >= self.max_pending {
             return Err(EventError::PendingBudgetExceeded);
         }
-        self.pending.insert(key, active);
+        let _ = self.pending.insert(key, active);
         Ok(true)
     }
 
@@ -210,13 +210,13 @@ impl<'g> EventRuntime<'g> {
         }
 
         // The event is removed only once all preflight checks have passed.
-        self.pending.pop_first();
+        let _ = self.pending.pop_first();
         if current != desired {
             self.state.set(source, desired).expect("validated neuron index");
             if let Some(following) = next_time {
                 for (target, value) in staged {
                     self.incoming[target] = value;
-                    self.pending.insert((following, RECHECK, target), false);
+                    let _ = self.pending.insert((following, RECHECK, target), false);
                 }
             }
             work.state_transitions += 1;
