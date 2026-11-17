@@ -130,6 +130,31 @@ pub struct HoldoutAudit {
 }
 
 impl ScaleAwarePolicy {
+    /// Preserve held-out failures per scale/cone cell instead of allowing
+    /// a fast category to conceal a slow or incorrect category in totals.
+    /// Cell indices use the same frozen VALID routing keys; this never fits
+    /// or modifies the policy. Empty cells remain zeroed.
+    pub fn audit_holdout_cells(
+        &self,
+        rows: &[PairedObservation],
+    ) -> Result<Vec<HoldoutAudit>, PolicyError> {
+        let mut cells = vec![HoldoutAudit::default(); CELLS];
+        for row in rows {
+            // Reuse the exact single-observation oracle/validation accounting.
+            // Do not silently discard invalid rows or counter overflow.
+            let single = self.audit_holdout(std::slice::from_ref(row))?;
+            let bucket = &mut cells[cell(row.gates, row.cone_gates)];
+            bucket.total = bucket.total.checked_add(single.total).ok_or(PolicyError::Overflow)?;
+            bucket.routed_incremental = bucket.routed_incremental.checked_add(single.routed_incremental).ok_or(PolicyError::Overflow)?;
+            bucket.output_mismatches = bucket.output_mismatches.checked_add(single.output_mismatches).ok_or(PolicyError::Overflow)?;
+            bucket.decision_mismatches = bucket.decision_mismatches.checked_add(single.decision_mismatches).ok_or(PolicyError::Overflow)?;
+            bucket.latency_regressions = bucket.latency_regressions.checked_add(single.latency_regressions).ok_or(PolicyError::Overflow)?;
+            bucket.full_ns = bucket.full_ns.checked_add(single.full_ns).ok_or(PolicyError::Overflow)?;
+            bucket.selected_ns = bucket.selected_ns.checked_add(single.selected_ns).ok_or(PolicyError::Overflow)?;
+        }
+        Ok(cells)
+    }
+
     /// Evaluate selected-engine outcomes against paired Full observations.
     /// Fail on malformed rows or arithmetic overflow rather than dropping data.
     pub fn audit_holdout(&self, rows: &[PairedObservation]) -> Result<HoldoutAudit, PolicyError> {
@@ -256,6 +281,33 @@ mod tests {
         assert_eq!(report.full_ns, 150);
         assert_eq!(report.selected_ns, 180);
         assert_eq!(policy, frozen);
+    }
+
+    #[test]
+    fn heldout_cell_audit_does_not_mask_negative_large_scale_results() {
+        let valid = [
+            observation(128, 0, 100, 10, true),
+            observation(1_562_501, 10, 100, 10, true),
+        ];
+        let policy = ScaleAwarePolicy::fit_valid(&valid, 1, 0).unwrap();
+        let frozen = policy.clone();
+        let rows = [
+            observation(128, 0, 1000, 1, true),
+            observation(1_562_501, 10, 100, 150, false),
+        ];
+        let cells = policy.audit_holdout_cells(&rows).unwrap();
+        let small = &cells[cell(128, 0)];
+        let large = &cells[cell(1_562_501, 10)];
+        assert_eq!(small.latency_regressions, 0);
+        assert_eq!(large.latency_regressions, 1);
+        assert_eq!(large.output_mismatches, 1);
+        assert_eq!(large.selected_ns, 150);
+        assert_eq!(policy, frozen);
+        assert_eq!(cells.iter().map(|a| a.total).sum::<u64>(), 2);
+        assert_eq!(
+            policy.audit_holdout_cells(&[observation(0, 0, 1, 1, true)]),
+            Err(PolicyError::InvalidObservation)
+        );
     }
 
     #[test]
