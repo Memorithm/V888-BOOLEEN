@@ -154,9 +154,15 @@ mod tests {
         let base = record(true, 5, 20, 10);
         let mut bad = base;
         bad.incremental_output ^= 1;
+        // A single corrupt output is an oracle mismatch.
+        assert_eq!(
+            SequenceTotals::verify(&[bad]),
+            Err(SequenceError::OracleMismatch)
+        );
+        // A stale follow-up revision fails closed before output comparison.
         assert_eq!(
             SequenceTotals::verify(&[base, bad]),
-            Err(SequenceError::OracleMismatch)
+            Err(SequenceError::RevisionMismatch)
         );
         bad = base;
         bad.incremental_decision = false;

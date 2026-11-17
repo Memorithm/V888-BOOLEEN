@@ -20,6 +20,8 @@ pub mod cue_similarity;
 pub mod eligibility_trace;
 pub mod engine;
 pub mod error_gated;
+pub mod event_resources;
+pub mod event_runtime;
 pub mod fourier5;
 pub mod fourier5_atomic_session;
 pub mod fourier5_context_search;

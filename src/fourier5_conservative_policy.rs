@@ -199,7 +199,8 @@ mod tests {
         );
         assert_eq!(
             FrozenPolicy::fit_valid_no_regression(&rows, 2, 0)
-                .unwrap().select(100, 2),
+                .unwrap()
+                .select(100, 2),
             Engine::Full
         );
     }
@@ -219,7 +220,8 @@ mod tests {
         let rows = [row(2, 100, 1, true), row(3, 100, 1, false)];
         assert_eq!(
             FrozenPolicy::fit_valid_no_regression(&rows, 2, 0)
-                .unwrap().select(100, 2),
+                .unwrap()
+                .select(100, 2),
             Engine::Full
         );
         assert_eq!(
@@ -231,5 +233,4 @@ mod tests {
             Err(PolicyError::InvalidObservation)
         );
     }
-
 }
