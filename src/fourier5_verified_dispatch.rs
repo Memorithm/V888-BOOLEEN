@@ -577,7 +577,7 @@ mod tests {
                     checked += 1;
                     Ok(c.clone())
                 },
-                cache_oracle: |_, k: &NonClone| {
+                cache_oracle: |_: &Vec<bool>, k: &NonClone| {
                     let mut value = k.0.clone();
                     if value[1] {
                         value[1] = false;
@@ -603,7 +603,7 @@ mod tests {
                     },
                     build_cache: |c: &Vec<bool>| Ok(NonClone(c.clone())),
                     full_oracle: |c: &Vec<bool>| Ok(c.clone()),
-                    cache_oracle: |_, k: &NonClone| Ok(k.0.clone()),
+                    cache_oracle: |_: &Vec<bool>, k: &NonClone| Ok(k.0.clone()),
                 },
             )
             .unwrap();
@@ -632,9 +632,9 @@ mod tests {
                     *c = 1;
                     Ok(())
                 },
-                build_cache: |_| Ok(NonClone),
+                build_cache: |_: &u8| Ok(NonClone),
                 full_oracle: |c: &u8| Ok(*c),
-                cache_oracle: |_, _: &NonClone| Ok(0_u8),
+                cache_oracle: |_: &u8, _: &NonClone| Ok(0_u8),
             },
         );
         assert_eq!(empty, Ok(initial));
@@ -647,9 +647,9 @@ mod tests {
                     *c = value;
                     Ok(())
                 },
-                build_cache: |_| Ok(NonClone),
+                build_cache: |_: &u8| Ok(NonClone),
                 full_oracle: |c: &u8| Ok(*c),
-                cache_oracle: |_, _: &NonClone| Ok(1_u8),
+                cache_oracle: |_: &u8, _: &NonClone| Ok(1_u8),
             },
         );
         assert_eq!(overflow, Err(DispatchError::GenerationOverflow));
