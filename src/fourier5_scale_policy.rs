@@ -136,7 +136,6 @@ impl ScaleAwarePolicy {
     }
 }
 
-
 /// Immutable evaluation of a frozen routing policy on disjoint TEST/OOD pairs.
 /// This is an audit, never an input to calibration or automatic policy changes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -165,13 +164,34 @@ impl ScaleAwarePolicy {
             // Do not silently discard invalid rows or counter overflow.
             let single = self.audit_holdout(std::slice::from_ref(row))?;
             let bucket = &mut cells[cell(row.gates, row.cone_gates)];
-            bucket.total = bucket.total.checked_add(single.total).ok_or(PolicyError::Overflow)?;
-            bucket.routed_incremental = bucket.routed_incremental.checked_add(single.routed_incremental).ok_or(PolicyError::Overflow)?;
-            bucket.output_mismatches = bucket.output_mismatches.checked_add(single.output_mismatches).ok_or(PolicyError::Overflow)?;
-            bucket.decision_mismatches = bucket.decision_mismatches.checked_add(single.decision_mismatches).ok_or(PolicyError::Overflow)?;
-            bucket.latency_regressions = bucket.latency_regressions.checked_add(single.latency_regressions).ok_or(PolicyError::Overflow)?;
-            bucket.full_ns = bucket.full_ns.checked_add(single.full_ns).ok_or(PolicyError::Overflow)?;
-            bucket.selected_ns = bucket.selected_ns.checked_add(single.selected_ns).ok_or(PolicyError::Overflow)?;
+            bucket.total = bucket
+                .total
+                .checked_add(single.total)
+                .ok_or(PolicyError::Overflow)?;
+            bucket.routed_incremental = bucket
+                .routed_incremental
+                .checked_add(single.routed_incremental)
+                .ok_or(PolicyError::Overflow)?;
+            bucket.output_mismatches = bucket
+                .output_mismatches
+                .checked_add(single.output_mismatches)
+                .ok_or(PolicyError::Overflow)?;
+            bucket.decision_mismatches = bucket
+                .decision_mismatches
+                .checked_add(single.decision_mismatches)
+                .ok_or(PolicyError::Overflow)?;
+            bucket.latency_regressions = bucket
+                .latency_regressions
+                .checked_add(single.latency_regressions)
+                .ok_or(PolicyError::Overflow)?;
+            bucket.full_ns = bucket
+                .full_ns
+                .checked_add(single.full_ns)
+                .ok_or(PolicyError::Overflow)?;
+            bucket.selected_ns = bucket
+                .selected_ns
+                .checked_add(single.selected_ns)
+                .ok_or(PolicyError::Overflow)?;
         }
         Ok(cells)
     }
@@ -189,23 +209,41 @@ impl ScaleAwarePolicy {
                 return Err(PolicyError::InvalidObservation);
             }
             audit.total = audit.total.checked_add(1).ok_or(PolicyError::Overflow)?;
-            audit.full_ns = audit.full_ns.checked_add(u128::from(row.full_ns)).ok_or(PolicyError::Overflow)?;
+            audit.full_ns = audit
+                .full_ns
+                .checked_add(u128::from(row.full_ns))
+                .ok_or(PolicyError::Overflow)?;
             let selected = if self.select(row.gates, row.cone_gates) == Engine::Incremental {
-                audit.routed_incremental = audit.routed_incremental.checked_add(1).ok_or(PolicyError::Overflow)?;
+                audit.routed_incremental = audit
+                    .routed_incremental
+                    .checked_add(1)
+                    .ok_or(PolicyError::Overflow)?;
                 if !row.same_output {
-                    audit.output_mismatches = audit.output_mismatches.checked_add(1).ok_or(PolicyError::Overflow)?;
+                    audit.output_mismatches = audit
+                        .output_mismatches
+                        .checked_add(1)
+                        .ok_or(PolicyError::Overflow)?;
                 }
                 if !row.same_decision {
-                    audit.decision_mismatches = audit.decision_mismatches.checked_add(1).ok_or(PolicyError::Overflow)?;
+                    audit.decision_mismatches = audit
+                        .decision_mismatches
+                        .checked_add(1)
+                        .ok_or(PolicyError::Overflow)?;
                 }
                 if row.incremental_ns >= row.full_ns {
-                    audit.latency_regressions = audit.latency_regressions.checked_add(1).ok_or(PolicyError::Overflow)?;
+                    audit.latency_regressions = audit
+                        .latency_regressions
+                        .checked_add(1)
+                        .ok_or(PolicyError::Overflow)?;
                 }
                 row.incremental_ns
             } else {
                 row.full_ns
             };
-            audit.selected_ns = audit.selected_ns.checked_add(u128::from(selected)).ok_or(PolicyError::Overflow)?;
+            audit.selected_ns = audit
+                .selected_ns
+                .checked_add(u128::from(selected))
+                .ok_or(PolicyError::Overflow)?;
         }
         Ok(audit)
     }
@@ -286,7 +324,6 @@ mod tests {
         assert_eq!(policy.select(64, 65), Engine::Full);
     }
 
-
     #[test]
     fn holdout_audit_exposes_negative_results_without_retraining() {
         let valid = [observation(1_562_501, 10, 100, 40, true)];
@@ -335,9 +372,13 @@ mod tests {
 
     #[test]
     fn holdout_audit_rejects_invalid_pairs() {
-        let policy = ScaleAwarePolicy::fit_valid(&[observation(64, 1, 100, 10, true)], 1, 0).unwrap();
+        let policy =
+            ScaleAwarePolicy::fit_valid(&[observation(64, 1, 100, 10, true)], 1, 0).unwrap();
         assert_eq!(policy.audit_holdout(&[]).unwrap(), HoldoutAudit::default());
-        assert_eq!(policy.audit_holdout(&[observation(0, 0, 1, 1, true)]), Err(PolicyError::InvalidObservation));
+        assert_eq!(
+            policy.audit_holdout(&[observation(0, 0, 1, 1, true)]),
+            Err(PolicyError::InvalidObservation)
+        );
     }
 
     #[test]
@@ -345,17 +386,32 @@ mod tests {
         let valid = [observation(1_562_501, 10, 100, 40, true)];
         let policy = ScaleAwarePolicy::fit_valid(&valid, 1, 1).unwrap();
         assert_eq!(policy.select(1_562_501, 10), Engine::Incremental);
-        assert_eq!(policy.select_for_generation(1_562_501, 10, 7, Some(7)), Engine::Incremental);
-        assert_eq!(policy.select_for_generation(1_562_501, 10, 8, Some(7)), Engine::Full);
-        assert_eq!(policy.select_for_generation(1_562_501, 10, 7, None), Engine::Full);
-        assert_eq!(policy.select_for_generation(1_562_501, 10, 7, Some(8)), Engine::Full);
+        assert_eq!(
+            policy.select_for_generation(1_562_501, 10, 7, Some(7)),
+            Engine::Incremental
+        );
+        assert_eq!(
+            policy.select_for_generation(1_562_501, 10, 8, Some(7)),
+            Engine::Full
+        );
+        assert_eq!(
+            policy.select_for_generation(1_562_501, 10, 7, None),
+            Engine::Full
+        );
+        assert_eq!(
+            policy.select_for_generation(1_562_501, 10, 7, Some(8)),
+            Engine::Full
+        );
     }
 
     #[test]
     fn matching_generation_does_not_override_unknown_cells() {
         let valid = [observation(128, 0, 100, 20, true)];
         let policy = ScaleAwarePolicy::fit_valid(&valid, 1, 0).unwrap();
-        assert_eq!(policy.select_for_generation(1_562_501, 0, 1, Some(1)), Engine::Full);
+        assert_eq!(
+            policy.select_for_generation(1_562_501, 0, 1, Some(1)),
+            Engine::Full
+        );
         assert_eq!(policy.select_for_generation(0, 0, 1, Some(1)), Engine::Full);
     }
 
@@ -364,19 +420,43 @@ mod tests {
         let valid = [observation(1_562_501, 10, 100, 40, true)];
         let policy = ScaleAwarePolicy::fit_valid(&valid, 1, 1).unwrap();
         // Independent oracle: identical revisions do not imply identical circuits.
-        assert_eq!(policy.select_for_generation(1_562_501, 10, 0, Some(0)), Engine::Incremental);
-        assert_eq!(policy.select_for_cache_identity(1_562_501, 10, 7, 0, Some(8), Some(0)), Engine::Full);
-        assert_eq!(policy.select_for_cache_identity(1_562_501, 10, 7, 0, None, Some(0)), Engine::Full);
-        assert_eq!(policy.select_for_cache_identity(1_562_501, 10, 7, 1, Some(7), Some(0)), Engine::Full);
-        assert_eq!(policy.select_for_cache_identity(1_562_501, 10, 7, 1, Some(7), Some(1)), Engine::Incremental);
-        assert_eq!(policy.select_for_cache_identity(128, 0, 7, 1, Some(7), Some(1)), Engine::Full);
+        assert_eq!(
+            policy.select_for_generation(1_562_501, 10, 0, Some(0)),
+            Engine::Incremental
+        );
+        assert_eq!(
+            policy.select_for_cache_identity(1_562_501, 10, 7, 0, Some(8), Some(0)),
+            Engine::Full
+        );
+        assert_eq!(
+            policy.select_for_cache_identity(1_562_501, 10, 7, 0, None, Some(0)),
+            Engine::Full
+        );
+        assert_eq!(
+            policy.select_for_cache_identity(1_562_501, 10, 7, 1, Some(7), Some(0)),
+            Engine::Full
+        );
+        assert_eq!(
+            policy.select_for_cache_identity(1_562_501, 10, 7, 1, Some(7), Some(1)),
+            Engine::Incremental
+        );
+        assert_eq!(
+            policy.select_for_cache_identity(128, 0, 7, 1, Some(7), Some(1)),
+            Engine::Full
+        );
     }
 
     #[test]
     fn sequential_revisions_advance_without_wraparound() {
         assert_eq!(ScaleAwarePolicy::next_generation(0), Ok(1));
-        assert_eq!(ScaleAwarePolicy::next_generation(u64::MAX - 1), Ok(u64::MAX));
-        assert_eq!(ScaleAwarePolicy::next_generation(u64::MAX), Err(PolicyError::Overflow));
+        assert_eq!(
+            ScaleAwarePolicy::next_generation(u64::MAX - 1),
+            Ok(u64::MAX)
+        );
+        assert_eq!(
+            ScaleAwarePolicy::next_generation(u64::MAX),
+            Err(PolicyError::Overflow)
+        );
     }
 
     #[test]
