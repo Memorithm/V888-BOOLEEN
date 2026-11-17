@@ -136,7 +136,7 @@ impl<'g> EventRuntime<'g> {
                 result.serial_events += 1;
                 continue;
             };
-            let targets_written = stages.iter().map(|stage| stage.updates.len()).sum();
+            let targets_written: usize = stages.iter().map(|stage| stage.updates.len()).sum();
             let writer_threads = self.apply_disjoint_counter_writes(&stages, threads);
 
             // All staging errors have already been checked; these mutations
