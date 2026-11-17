@@ -325,3 +325,47 @@ mod heterogeneous_sequence_tests {
         assert_eq!(policy.select(128, 4, true), Engine::Incremental);
     }
 }
+
+#[cfg(test)]
+mod streaming_equivalence_tests {
+    use super::*;
+
+    #[test]
+    fn heterogeneous_stream_matches_independent_single_step_oracle() {
+        let baseline = SequentialCost {
+            gates: 128, cone_gates: 4, full_ns: 100,
+            incremental_ns: 10, cache_update_ns: 5,
+            same_output: true, same_decision: true,
+        };
+        let policy = SequentialCostPolicy::fit_valid(&[baseline], 1, 0).unwrap();
+        let mut regression = baseline;
+        regression.incremental_ns = 140;
+        regression.same_output = false;
+        regression.same_decision = false;
+        let mut other = baseline;
+        other.gates = 1_562_501;
+        let steps = [
+            (baseline, true), (regression, true), (baseline, false),
+            (other, true), (regression, false), (baseline, true),
+        ];
+        let streamed = policy.audit_holdout_sequence(&steps).unwrap();
+        let mut expected = [SequentialHoldoutCell::default(); CELLS];
+        for (row, fresh) in steps {
+            // Independent reference path: audit exactly one observation at a time.
+            let one = policy.audit_holdout(&[row], fresh).unwrap();
+            let index = bucket(row.gates, row.cone_gates).unwrap();
+            let source = one.cells[index];
+            let target = &mut expected[index];
+            target.observations += source.observations;
+            target.incremental_selected += source.incremental_selected;
+            target.output_mismatches += source.output_mismatches;
+            target.decision_mismatches += source.decision_mismatches;
+            target.latency_regressions += source.latency_regressions;
+            target.total_full_ns += source.total_full_ns;
+            target.total_selected_ns += source.total_selected_ns;
+        }
+        assert_eq!(streamed.cells, expected);
+        assert_eq!(streamed.cells[bucket(128, 4).unwrap()].output_mismatches, 1);
+        assert_eq!(streamed.cells[bucket(1_562_501, 4).unwrap()].incremental_selected, 0);
+    }
+}
