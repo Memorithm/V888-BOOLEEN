@@ -465,3 +465,151 @@ mod sequential_execution_tests {
         assert_eq!(mutations.get(), 1);
     }
 }
+
+
+/// Preserves every completed step if sampling fails before a later operation.
+/// Unlike `sample_sequential`, the partial trace is returned on pre-sample
+/// failure, so a caller can reconcile already committed state without guessing.
+#[derive(Debug)]
+pub struct SequentialRun<T, E> {
+    pub completed: Vec<SequentialStep<T, E>>,
+    pub stopped_before: Option<usize>,
+    pub sampling_error: Option<io::Error>,
+}
+
+impl<T, E> SequentialRun<T, E> {
+    #[must_use]
+    pub fn is_complete(&self) -> bool {
+        self.sampling_error.is_none()
+    }
+}
+
+/// Execute sequential operations while retaining completed results on an
+/// unsuccessful pre-sample. Post-sample failures remain attached to the step.
+/// This does not validate cache coherence; callers must use a Full oracle.
+pub fn sample_sequential_recoverable<T, E, I, F>(
+    operations: I,
+    mut operation: F,
+) -> SequentialRun<T, E>
+where
+    I: IntoIterator,
+    F: FnMut(I::Item) -> Result<T, E>,
+{
+    sample_sequential_recoverable_with(operations, process_memory_snapshot, &mut operation)
+}
+
+fn sample_sequential_recoverable_with<T, E, I, F, S>(
+    operations: I,
+    mut sample: S,
+    operation: &mut F,
+) -> SequentialRun<T, E>
+where
+    I: IntoIterator,
+    F: FnMut(I::Item) -> Result<T, E>,
+    S: FnMut() -> io::Result<MemorySnapshot>,
+{
+    let mut completed = Vec::new();
+    for (index, input) in operations.into_iter().enumerate() {
+        let before = match sample() {
+            Ok(value) => value,
+            Err(error) => {
+                return SequentialRun {
+                    completed,
+                    stopped_before: Some(index),
+                    sampling_error: Some(error),
+                };
+            }
+        };
+        let (elapsed, outcome) = time_intervention(|| operation(input));
+        let after = sample();
+        completed.push(SequentialStep {
+            index,
+            elapsed,
+            before,
+            after,
+            outcome,
+        });
+    }
+    SequentialRun {
+        completed,
+        stopped_before: None,
+        sampling_error: None,
+    }
+}
+
+#[cfg(test)]
+mod recoverable_sequence_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    fn snap() -> MemorySnapshot {
+        MemorySnapshot {
+            current_rss: PeakRss { kib: 8 },
+            peak_rss: PeakRss { kib: 16 },
+        }
+    }
+
+    #[test]
+    fn preserves_completed_mutations_when_next_pre_sample_fails() {
+        let reads = Cell::new(0);
+        let calls = Cell::new(0);
+        let run = sample_sequential_recoverable_with(
+            [10, 20, 30],
+            || {
+                reads.set(reads.get() + 1);
+                if reads.get() == 5 {
+                    Err(io::Error::other("pre"))
+                } else {
+                    Ok(snap())
+                }
+            },
+            &mut |n| {
+                calls.set(calls.get() + 1);
+                Ok::<_, ()>(n)
+            },
+        );
+        assert!(!run.is_complete());
+        assert_eq!(run.stopped_before, Some(2));
+        assert_eq!(calls.get(), 2);
+        assert_eq!(run.completed.len(), 2);
+        assert_eq!(run.completed[0].outcome, Ok(10));
+        assert_eq!(run.completed[1].outcome, Ok(20));
+    }
+
+    #[test]
+    fn post_sample_failure_is_not_a_rollback_or_stop() {
+        let reads = Cell::new(0);
+        let run = sample_sequential_recoverable_with(
+            [1, 2],
+            || {
+                reads.set(reads.get() + 1);
+                if reads.get() == 2 {
+                    Err(io::Error::other("post"))
+                } else {
+                    Ok(snap())
+                }
+            },
+            &mut |n| Ok::<_, ()>(n),
+        );
+        assert!(run.is_complete());
+        assert_eq!(run.completed.len(), 2);
+        assert!(run.completed[0].after.is_err());
+        assert_eq!(run.completed[1].outcome, Ok(2));
+    }
+
+    #[test]
+    fn first_pre_sample_failure_executes_nothing() {
+        let calls = Cell::new(0);
+        let run = sample_sequential_recoverable_with(
+            [1],
+            || Err(io::Error::other("pre")),
+            &mut |_| {
+                calls.set(calls.get() + 1);
+                Ok::<_, ()>(())
+            },
+        );
+        assert_eq!(calls.get(), 0);
+        assert_eq!(run.stopped_before, Some(0));
+        assert!(run.completed.is_empty());
+    }
+}
