@@ -41,9 +41,11 @@ pub struct SequentialCostPolicy {
 impl SequentialCostPolicy {
     /// Every VALID observation in a bucket must beat Full after cache update.
     /// No aggregate mean may hide an individual regression.
-    pub fn fit_valid(rows: &[SequentialCost], min_samples: u64, margin_ns: u64)
-        -> Result<Self, SequentialPolicyError>
-    {
+    pub fn fit_valid(
+        rows: &[SequentialCost],
+        min_samples: u64,
+        margin_ns: u64,
+    ) -> Result<Self, SequentialPolicyError> {
         if rows.is_empty() || min_samples == 0 {
             return Err(SequentialPolicyError::EmptyValidation);
         }
@@ -55,11 +57,15 @@ impl SequentialCostPolicy {
             if row.full_ns == 0 || row.incremental_ns == 0 {
                 return Err(SequentialPolicyError::InvalidObservation);
             }
-            count[index] = count[index].checked_add(1)
+            count[index] = count[index]
+                .checked_add(1)
                 .ok_or(SequentialPolicyError::Overflow)?;
-            let total = row.incremental_ns.checked_add(row.cache_update_ns)
+            let total = row
+                .incremental_ns
+                .checked_add(row.cache_update_ns)
                 .ok_or(SequentialPolicyError::Overflow)?;
-            eligible[index] &= row.same_output && row.same_decision
+            eligible[index] &= row.same_output
+                && row.same_decision
                 && total < row.full_ns
                 && row.full_ns - total >= margin_ns;
         }
@@ -78,7 +84,6 @@ impl SequentialCostPolicy {
         }
     }
 }
-
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SequentialHoldoutCell {
@@ -113,35 +118,51 @@ impl SequentialCostPolicy {
             if row.full_ns == 0 || row.incremental_ns == 0 {
                 return Err(SequentialPolicyError::InvalidObservation);
             }
-            let incremental_total = row.incremental_ns.checked_add(row.cache_update_ns)
+            let incremental_total = row
+                .incremental_ns
+                .checked_add(row.cache_update_ns)
                 .ok_or(SequentialPolicyError::Overflow)?;
             let selected_incremental =
                 self.select(row.gates, row.cone_gates, cache_current) == Engine::Incremental;
             let cell = &mut cells[index];
-            cell.observations = cell.observations.checked_add(1)
+            cell.observations = cell
+                .observations
+                .checked_add(1)
                 .ok_or(SequentialPolicyError::Overflow)?;
-            cell.total_full_ns = cell.total_full_ns.checked_add(u128::from(row.full_ns))
+            cell.total_full_ns = cell
+                .total_full_ns
+                .checked_add(u128::from(row.full_ns))
                 .ok_or(SequentialPolicyError::Overflow)?;
             let selected_ns = if selected_incremental {
-                cell.incremental_selected = cell.incremental_selected.checked_add(1)
+                cell.incremental_selected = cell
+                    .incremental_selected
+                    .checked_add(1)
                     .ok_or(SequentialPolicyError::Overflow)?;
                 if !row.same_output {
-                    cell.output_mismatches = cell.output_mismatches.checked_add(1)
+                    cell.output_mismatches = cell
+                        .output_mismatches
+                        .checked_add(1)
                         .ok_or(SequentialPolicyError::Overflow)?;
                 }
                 if !row.same_decision {
-                    cell.decision_mismatches = cell.decision_mismatches.checked_add(1)
+                    cell.decision_mismatches = cell
+                        .decision_mismatches
+                        .checked_add(1)
                         .ok_or(SequentialPolicyError::Overflow)?;
                 }
                 if incremental_total >= row.full_ns {
-                    cell.latency_regressions = cell.latency_regressions.checked_add(1)
+                    cell.latency_regressions = cell
+                        .latency_regressions
+                        .checked_add(1)
                         .ok_or(SequentialPolicyError::Overflow)?;
                 }
                 incremental_total
             } else {
                 row.full_ns
             };
-            cell.total_selected_ns = cell.total_selected_ns.checked_add(u128::from(selected_ns))
+            cell.total_selected_ns = cell
+                .total_selected_ns
+                .checked_add(u128::from(selected_ns))
                 .ok_or(SequentialPolicyError::Overflow)?;
         }
         Ok(SequentialHoldoutAudit { cells })
@@ -152,15 +173,22 @@ impl SequentialCostPolicy {
 mod tests {
     use super::*;
 
-    fn sample(gates: u64, full_ns: u64, incremental_ns: u64, cache_update_ns: u64)
-        -> SequentialCost
-    {
+    fn sample(
+        gates: u64,
+        full_ns: u64,
+        incremental_ns: u64,
+        cache_update_ns: u64,
+    ) -> SequentialCost {
         SequentialCost {
-            gates, cone_gates: 4, full_ns, incremental_ns, cache_update_ns,
-            same_output: true, same_decision: true,
+            gates,
+            cone_gates: 4,
+            full_ns,
+            incremental_ns,
+            cache_update_ns,
+            same_output: true,
+            same_decision: true,
         }
     }
-
 
     #[test]
     fn holdout_preserves_large_scale_negative_results_without_refitting() {
@@ -168,7 +196,9 @@ mod tests {
         let policy = SequentialCostPolicy::fit_valid(&valid, 1, 0).unwrap();
         let mut regression = sample(1_562_501, 100, 120, 10);
         regression.same_decision = false;
-        let audit = policy.audit_holdout(&[sample(128, 100, 10, 5), regression], true).unwrap();
+        let audit = policy
+            .audit_holdout(&[sample(128, 100, 10, 5), regression], true)
+            .unwrap();
         let small = bucket(128, 4).unwrap();
         let large = bucket(1_562_501, 4).unwrap();
         assert_eq!(audit.cells[small].latency_regressions, 0);
@@ -184,23 +214,25 @@ mod tests {
     #[test]
     fn holdout_rejects_overflow_and_invalid_observations() {
         let policy = SequentialCostPolicy::fit_valid(&[sample(128, 100, 10, 5)], 1, 0).unwrap();
-        assert!(matches!(policy.audit_holdout(&[sample(0, 100, 10, 5)], true),
-            Err(SequentialPolicyError::InvalidObservation)));
-        assert!(matches!(policy.audit_holdout(&[sample(128, 100, u64::MAX, 1)], true),
-            Err(SequentialPolicyError::Overflow)));
+        assert!(matches!(
+            policy.audit_holdout(&[sample(0, 100, 10, 5)], true),
+            Err(SequentialPolicyError::InvalidObservation)
+        ));
+        assert!(matches!(
+            policy.audit_holdout(&[sample(128, 100, u64::MAX, 1)], true),
+            Err(SequentialPolicyError::Overflow)
+        ));
     }
 
     #[test]
     fn rebuild_cost_can_reverse_apparent_speedup() {
-        let p = SequentialCostPolicy::fit_valid(
-            &[sample(128, 100, 10, 95)], 1, 0).unwrap();
+        let p = SequentialCostPolicy::fit_valid(&[sample(128, 100, 10, 95)], 1, 0).unwrap();
         assert_eq!(p.select(128, 4, true), Engine::Full);
     }
 
     #[test]
     fn separate_large_scale_and_stale_cache() {
-        let p = SequentialCostPolicy::fit_valid(
-            &[sample(128, 100, 10, 5)], 1, 0).unwrap();
+        let p = SequentialCostPolicy::fit_valid(&[sample(128, 100, 10, 5)], 1, 0).unwrap();
         assert_eq!(p.select(128, 4, true), Engine::Incremental);
         assert_eq!(p.select(128, 4, false), Engine::Full);
         assert_eq!(p.select(1_562_501, 4, true), Engine::Full);
@@ -210,22 +242,22 @@ mod tests {
     fn single_regression_or_decision_mismatch_disables_bucket() {
         let mut wrong = sample(128, 100, 10, 5);
         wrong.same_decision = false;
-        let p = SequentialCostPolicy::fit_valid(
-            &[sample(128, 100, 10, 5), wrong], 2, 0).unwrap();
+        let p = SequentialCostPolicy::fit_valid(&[sample(128, 100, 10, 5), wrong], 2, 0).unwrap();
         assert_eq!(p.select(128, 4, true), Engine::Full);
     }
 
     #[test]
     fn invalid_and_overflow_fail_closed() {
-        assert!(matches!(SequentialCostPolicy::fit_valid(
-            &[sample(0, 100, 10, 5)], 1, 0),
-            Err(SequentialPolicyError::InvalidObservation)));
-        assert!(matches!(SequentialCostPolicy::fit_valid(
-            &[sample(128, 100, u64::MAX, 1)], 1, 0),
-            Err(SequentialPolicyError::Overflow)));
+        assert!(matches!(
+            SequentialCostPolicy::fit_valid(&[sample(0, 100, 10, 5)], 1, 0),
+            Err(SequentialPolicyError::InvalidObservation)
+        ));
+        assert!(matches!(
+            SequentialCostPolicy::fit_valid(&[sample(128, 100, u64::MAX, 1)], 1, 0),
+            Err(SequentialPolicyError::Overflow)
+        ));
     }
 }
-
 
 impl SequentialCostPolicy {
     /// Audit a heterogeneous ordered intervention stream. Cache freshness is
@@ -244,35 +276,51 @@ impl SequentialCostPolicy {
             if row.full_ns == 0 || row.incremental_ns == 0 {
                 return Err(SequentialPolicyError::InvalidObservation);
             }
-            let incremental_total = row.incremental_ns.checked_add(row.cache_update_ns)
+            let incremental_total = row
+                .incremental_ns
+                .checked_add(row.cache_update_ns)
                 .ok_or(SequentialPolicyError::Overflow)?;
-            let selected = self.select(row.gates, row.cone_gates, cache_current)
-                == Engine::Incremental;
+            let selected =
+                self.select(row.gates, row.cone_gates, cache_current) == Engine::Incremental;
             let dst = &mut cells[index];
-            dst.observations = dst.observations.checked_add(1)
+            dst.observations = dst
+                .observations
+                .checked_add(1)
                 .ok_or(SequentialPolicyError::Overflow)?;
-            dst.total_full_ns = dst.total_full_ns.checked_add(u128::from(row.full_ns))
+            dst.total_full_ns = dst
+                .total_full_ns
+                .checked_add(u128::from(row.full_ns))
                 .ok_or(SequentialPolicyError::Overflow)?;
             let selected_ns = if selected {
-                dst.incremental_selected = dst.incremental_selected.checked_add(1)
+                dst.incremental_selected = dst
+                    .incremental_selected
+                    .checked_add(1)
                     .ok_or(SequentialPolicyError::Overflow)?;
                 if !row.same_output {
-                    dst.output_mismatches = dst.output_mismatches.checked_add(1)
+                    dst.output_mismatches = dst
+                        .output_mismatches
+                        .checked_add(1)
                         .ok_or(SequentialPolicyError::Overflow)?;
                 }
                 if !row.same_decision {
-                    dst.decision_mismatches = dst.decision_mismatches.checked_add(1)
+                    dst.decision_mismatches = dst
+                        .decision_mismatches
+                        .checked_add(1)
                         .ok_or(SequentialPolicyError::Overflow)?;
                 }
                 if incremental_total >= row.full_ns {
-                    dst.latency_regressions = dst.latency_regressions.checked_add(1)
+                    dst.latency_regressions = dst
+                        .latency_regressions
+                        .checked_add(1)
                         .ok_or(SequentialPolicyError::Overflow)?;
                 }
                 incremental_total
             } else {
                 row.full_ns
             };
-            dst.total_selected_ns = dst.total_selected_ns.checked_add(u128::from(selected_ns))
+            dst.total_selected_ns = dst
+                .total_selected_ns
+                .checked_add(u128::from(selected_ns))
                 .ok_or(SequentialPolicyError::Overflow)?;
         }
         Ok(SequentialHoldoutAudit { cells })
@@ -286,9 +334,13 @@ mod heterogeneous_sequence_tests {
     #[test]
     fn per_intervention_cache_freshness_prevents_false_incremental_selection() {
         let valid = [SequentialCost {
-            gates: 128, cone_gates: 4, full_ns: 100,
-            incremental_ns: 10, cache_update_ns: 5,
-            same_output: true, same_decision: true,
+            gates: 128,
+            cone_gates: 4,
+            full_ns: 100,
+            incremental_ns: 10,
+            cache_update_ns: 5,
+            same_output: true,
+            same_decision: true,
         }];
         let policy = SequentialCostPolicy::fit_valid(&valid, 1, 0).unwrap();
         let mut divergent = valid[0];
@@ -311,15 +363,21 @@ mod heterogeneous_sequence_tests {
     #[test]
     fn sequence_rejects_invalid_step_without_modifying_policy() {
         let row = SequentialCost {
-            gates: 128, cone_gates: 4, full_ns: 100,
-            incremental_ns: 10, cache_update_ns: 5,
-            same_output: true, same_decision: true,
+            gates: 128,
+            cone_gates: 4,
+            full_ns: 100,
+            incremental_ns: 10,
+            cache_update_ns: 5,
+            same_output: true,
+            same_decision: true,
         };
         let policy = SequentialCostPolicy::fit_valid(&[row], 1, 0).unwrap();
         let mut invalid = row;
         invalid.gates = 0;
         assert_eq!(
-            policy.audit_holdout_sequence(&[(row, true), (invalid, false)]).unwrap_err(),
+            policy
+                .audit_holdout_sequence(&[(row, true), (invalid, false)])
+                .unwrap_err(),
             SequentialPolicyError::InvalidObservation
         );
         assert_eq!(policy.select(128, 4, true), Engine::Incremental);
@@ -333,9 +391,13 @@ mod streaming_equivalence_tests {
     #[test]
     fn heterogeneous_stream_matches_independent_single_step_oracle() {
         let baseline = SequentialCost {
-            gates: 128, cone_gates: 4, full_ns: 100,
-            incremental_ns: 10, cache_update_ns: 5,
-            same_output: true, same_decision: true,
+            gates: 128,
+            cone_gates: 4,
+            full_ns: 100,
+            incremental_ns: 10,
+            cache_update_ns: 5,
+            same_output: true,
+            same_decision: true,
         };
         let policy = SequentialCostPolicy::fit_valid(&[baseline], 1, 0).unwrap();
         let mut regression = baseline;
@@ -345,8 +407,12 @@ mod streaming_equivalence_tests {
         let mut other = baseline;
         other.gates = 1_562_501;
         let steps = [
-            (baseline, true), (regression, true), (baseline, false),
-            (other, true), (regression, false), (baseline, true),
+            (baseline, true),
+            (regression, true),
+            (baseline, false),
+            (other, true),
+            (regression, false),
+            (baseline, true),
         ];
         let streamed = policy.audit_holdout_sequence(&steps).unwrap();
         let mut expected = [SequentialHoldoutCell::default(); CELLS];
@@ -366,6 +432,9 @@ mod streaming_equivalence_tests {
         }
         assert_eq!(streamed.cells, expected);
         assert_eq!(streamed.cells[bucket(128, 4).unwrap()].output_mismatches, 1);
-        assert_eq!(streamed.cells[bucket(1_562_501, 4).unwrap()].incremental_selected, 0);
+        assert_eq!(
+            streamed.cells[bucket(1_562_501, 4).unwrap()].incremental_selected,
+            0
+        );
     }
 }
