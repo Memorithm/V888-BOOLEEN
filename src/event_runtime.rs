@@ -46,6 +46,16 @@ pub struct EventWork {
     pub wakeups_coalesced: usize,
 }
 
+/// Results of one explicitly resource-bounded execution slice.
+/// A blocked event is not consumed or mutated; the caller may resume with a
+/// larger contact budget. The budget counts examined CSR contact rows, not
+/// energy or all CPU/memory operations.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BudgetedWork {
+    pub work: EventWork,
+    pub blocked_on_contact_budget: bool,
+}
+
 /// One owner of the mutable state; callers may inject timestamped drives.
 /// Queue order is (logical time, drive-before-recheck, neuron index).
 /// There is no wall-clock wait, OS thread pool, or network message transport.
@@ -162,14 +172,51 @@ impl<'g> EventRuntime<'g> {
     /// On an error, the failing event and its effects remain uncommitted.
     /// Earlier successfully consumed events in the same call stay committed.
     pub fn run(&mut self, max_events: usize) -> Result<EventWork, EventError> {
+        Ok(self
+            .run_with_contact_budget(max_events, usize::MAX)?
+            .work)
+    }
+
+    /// Opt-in logical work admission. The first event that would exceed
+    /// `max_contacts` remains queued and is never partially committed.
+    /// Events are not reordered or dropped, preserving causal determinism.
+    /// Rechecks with no change may run with zero contact budget.
+    ///
+    /// A recurring event whose fanout exceeds the supplied per-slice
+    /// allowance cannot make progress until the caller increases the budget.
+    /// The budget is a count of CSR rows, NOT a calibrated energy constraint.
+    pub fn run_with_contact_budget(
+        &mut self,
+        max_events: usize,
+        max_contacts: usize,
+    ) -> Result<BudgetedWork, EventError> {
         let mut work = EventWork::default();
+        let mut blocked_on_contact_budget = false;
         for _ in 0..max_events {
-            if self.pending.is_empty() {
+            let Some((&(_, phase, source), &requested)) = self.pending.first_key_value() else {
+                break;
+            };
+            let current = self.state.get(source).expect("validated neuron index");
+            let desired = if phase == DRIVE {
+                requested
+            } else {
+                self.incoming[source] >= self.threshold
+            };
+            let required_contacts = if current == desired {
+                0
+            } else {
+                (self.graph.offsets[source + 1] - self.graph.offsets[source]) as usize
+            };
+            if required_contacts > max_contacts.saturating_sub(work.contacts_examined) {
+                blocked_on_contact_budget = true;
                 break;
             }
             self.consume_one(&mut work)?;
         }
-        Ok(work)
+        Ok(BudgetedWork {
+            work,
+            blocked_on_contact_budget,
+        })
     }
 
     fn consume_one(&mut self, work: &mut EventWork) -> Result<(), EventError> {
@@ -427,6 +474,76 @@ mod tests {
         assert_eq!(runtime.last_processed_time(), None);
         assert_eq!(runtime.state().active_count(), 0);
         assert_eq!(runtime.incoming_for(20), Ok(0));
+    }
+
+    #[test]
+    fn contact_budget_blocks_atomically_then_allows_resume() {
+        let graph = fork();
+        let mut runtime = EventRuntime::new(&graph, 1, 4).unwrap();
+        runtime.schedule_drive(0, 10, true).unwrap();
+        let blocked = runtime.run_with_contact_budget(10, 1).unwrap();
+        assert!(blocked.blocked_on_contact_budget);
+        assert_eq!(blocked.work.events_consumed, 0);
+        assert_eq!(runtime.pending_count(), 1);
+        assert_eq!(runtime.state().active_count(), 0);
+        assert_eq!(runtime.incoming_for(20), Ok(0));
+
+        let resumed = runtime.run_with_contact_budget(1, 2).unwrap();
+        assert!(!resumed.blocked_on_contact_budget);
+        assert_eq!(resumed.work.events_consumed, 1);
+        assert_eq!(resumed.work.contacts_examined, 2);
+        assert_eq!(runtime.pending_count(), 2);
+        let zero_contact = runtime.run_with_contact_budget(10, 0).unwrap();
+        assert!(!zero_contact.blocked_on_contact_budget);
+        assert_eq!(zero_contact.work.events_consumed, 2);
+        assert_eq!(zero_contact.work.contacts_examined, 0);
+        assert_eq!(runtime.state().active_count(), 3);
+        assert_eq!(runtime.audit_incoming(), Ok(true));
+    }
+
+    #[test]
+    fn bounded_slices_equal_unbounded_chain_and_preserve_order() {
+        let graph = chain();
+        let mut bounded = EventRuntime::new(&graph, 1, 8).unwrap();
+        let mut baseline = EventRuntime::new(&graph, 1, 8).unwrap();
+        for runtime in [&mut bounded, &mut baseline] {
+            runtime.schedule_drive(0, 10, true).unwrap();
+        }
+        let expected = baseline.run(10).unwrap();
+        assert_eq!(expected.events_consumed, 3);
+
+        let first = bounded.run_with_contact_budget(1, 1).unwrap();
+        assert_eq!(first.work.events_consumed, 1);
+        assert_eq!(first.work.contacts_examined, 1);
+        let blocked = bounded.run_with_contact_budget(10, 0).unwrap();
+        assert!(blocked.blocked_on_contact_budget);
+        assert_eq!(blocked.work.events_consumed, 0);
+        assert_eq!(bounded.next_event_time(), Some(1));
+        let second = bounded.run_with_contact_budget(1, 1).unwrap();
+        assert_eq!(second.work.events_consumed, 1);
+        assert_eq!(second.work.contacts_examined, 1);
+        let third = bounded.run_with_contact_budget(10, 0).unwrap();
+        assert_eq!(third.work.events_consumed, 1);
+        assert!(!third.blocked_on_contact_budget);
+        assert_eq!(bounded.state(), baseline.state());
+        assert_eq!(bounded.incoming, baseline.incoming);
+        assert_eq!(bounded.last_processed_time(), baseline.last_processed_time());
+        assert_eq!(bounded.next_event_time(), None);
+    }
+
+    #[test]
+    fn zero_event_budget_is_noop_and_zero_contact_noop_drive_proceeds() {
+        let graph = chain();
+        let mut runtime = EventRuntime::new(&graph, 1, 4).unwrap();
+        runtime.schedule_drive(0, 10, false).unwrap();
+        let zero_events = runtime.run_with_contact_budget(0, 0).unwrap();
+        assert_eq!(zero_events.work.events_consumed, 0);
+        assert!(!zero_events.blocked_on_contact_budget);
+        assert_eq!(runtime.pending_count(), 1);
+        let one = runtime.run_with_contact_budget(1, 0).unwrap();
+        assert_eq!(one.work.events_consumed, 1);
+        assert_eq!(one.work.contacts_examined, 0);
+        assert_eq!(runtime.pending_count(), 0);
     }
 
     #[test]
