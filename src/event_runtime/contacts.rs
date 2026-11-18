@@ -239,6 +239,122 @@ mod tests {
     }
 
     #[test]
+    fn retained_pair_budget_and_cache_replacement_are_exact() {
+        // Two independent sources, one repeated destination each.
+        let graph = Connectome {
+            ids: vec![10, 20, 30, 40],
+            offsets: vec![0, 128, 256, 256, 256],
+            targets: (0..128)
+                .map(|_| 2)
+                .chain((0..128).map(|_| 3))
+                .collect(),
+            counts: vec![2; 256],
+        };
+        graph.validate().unwrap();
+        let (none, zero) = build_contact_cache(&graph, 0).unwrap();
+        assert!(none.is_none());
+        assert_eq!(zero, ContactCacheReport::default());
+
+        let (one, limited) = build_contact_cache(&graph, 1).unwrap();
+        assert_eq!(limited.cached_pairs, 1);
+        assert_eq!(limited.cached_sources, 1);
+        assert_eq!(limited.covered_contact_rows, 128);
+        assert_eq!(one.as_ref().unwrap().get(&0).unwrap(), &vec![(2, 256)]);
+        assert_eq!(
+            outgoing_with_cache(&graph, one.as_ref(), 1),
+            aggregate_outgoing(&graph, 1)
+        );
+
+        let (full, report) = build_contact_cache(&graph, 2).unwrap();
+        assert_eq!(report.cached_pairs, 2);
+        assert_eq!(report.cached_sources, 2);
+        assert_eq!(report.covered_contact_rows, 256);
+        assert_eq!(full.as_ref().unwrap().get(&1).unwrap(), &vec![(3, 256)]);
+    }
+
+    #[test]
+    fn cache_preserves_serial_and_both_true_parallel_paths() {
+        use super::super::EventRuntime;
+
+        // Dense independent sources exercise the actual scoped-thread paths:
+        // 8 x 8192 CSR rows but only 8 cached (source,target) pairs.
+        let graph = Connectome {
+            ids: (10..26).collect(),
+            offsets: (0..=8)
+                .map(|source| source * 8192)
+                .chain(std::iter::repeat_n(65_536, 8))
+                .collect(),
+            targets: (0..8)
+                .flat_map(|source| std::iter::repeat_n(8 + source, 8192))
+                .collect(),
+            counts: vec![1; 65_536],
+        };
+        graph.validate().unwrap();
+        let mut reference = EventRuntime::new(&graph, 1, 64).unwrap();
+        let mut cached_serial = EventRuntime::new(&graph, 1, 64).unwrap();
+        let mut cached_frontier = EventRuntime::new(&graph, 1, 64).unwrap();
+        let mut cached_disjoint = EventRuntime::new(&graph, 1, 64).unwrap();
+
+        for engine in [&mut cached_serial, &mut cached_frontier, &mut cached_disjoint] {
+            let report = engine.prepare_contact_cache(8).unwrap();
+            assert_eq!(report.cached_sources, 8);
+            assert_eq!(report.cached_pairs, 8);
+            assert_eq!(report.covered_contact_rows, 65_536);
+        }
+        for engine in [&mut reference, &mut cached_serial, &mut cached_frontier, &mut cached_disjoint] {
+            for id in 10..18 {
+                engine.schedule_drive(0, id, true).unwrap();
+                engine.schedule_drive(3, id, false).unwrap();
+            }
+        }
+        let expected = reference.run(64).unwrap();
+        let serial = cached_serial.run(64).unwrap();
+        let frontier = cached_frontier.run_parallel_frontiers(64, 4).unwrap();
+        let disjoint = cached_disjoint.run_disjoint_parallel_commits(64, 4).unwrap();
+        assert_eq!(serial, expected);
+        assert_eq!(frontier.work, expected);
+        assert_eq!(disjoint.work, expected);
+        assert!(frontier.parallel_groups >= 1);
+        assert!(disjoint.disjoint_groups >= 1);
+        assert!(disjoint.target_writer_threads >= 2);
+        for engine in [&cached_serial, &cached_frontier, &cached_disjoint] {
+            assert_eq!(engine.state(), reference.state());
+            assert_eq!(engine.pending, reference.pending);
+            assert_eq!(engine.incoming, reference.incoming);
+            assert_eq!(engine.last_processed_time(), reference.last_processed_time());
+            assert_eq!(engine.audit_incoming(), Ok(true));
+        }
+    }
+
+    #[test]
+    fn cached_preflight_queue_error_remains_atomic() {
+        use super::super::EventRuntime;
+        let graph = Connectome {
+            ids: vec![10, 20, 30],
+            offsets: vec![0, 128, 128, 128],
+            targets: (0..64).map(|_| 1).chain((0..64).map(|_| 2)).collect(),
+            counts: vec![1; 128],
+        };
+        let mut reference = EventRuntime::new(&graph, 1, 1).unwrap();
+        let mut cached = EventRuntime::new(&graph, 1, 1).unwrap();
+        assert_eq!(cached.prepare_contact_cache(2).unwrap().cached_pairs, 2);
+        for engine in [&mut reference, &mut cached] {
+            engine.schedule_drive(0, 10, true).unwrap();
+        }
+        assert_eq!(reference.run(1), Err(EventError::PendingBudgetExceeded));
+        assert_eq!(cached.run(1), Err(EventError::PendingBudgetExceeded));
+        assert_eq!(cached.state(), reference.state());
+        assert_eq!(cached.pending, reference.pending);
+        assert_eq!(cached.incoming, reference.incoming);
+        assert_eq!(cached.last_processed_time(), None);
+
+        // Clearing precomputed rows does not change the pending event.
+        cached.clear_contact_cache();
+        assert_eq!(cached.run(1), Err(EventError::PendingBudgetExceeded));
+        assert_eq!(cached.pending, reference.pending);
+    }
+
+    #[test]
     fn zero_weight_middle_of_a_run_never_inserts_a_spurious_target() {
         let graph = graph(vec![1, 0, 1, 2], vec![3, 0, 4, 0]);
         assert_eq!(aggregate_outgoing(&graph, 0), Ok(vec![(1, 7)]));
