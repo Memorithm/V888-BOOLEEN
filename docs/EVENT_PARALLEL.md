@@ -21,7 +21,7 @@ sans dépendance NVIDIA, Tokio ou moteur matriciel FP.
 - Une erreur sur un événement conserve l'atomicité de cet événement ;
   les événements antérieurs déjà acceptés restent commis.
 - Le nombre de threads de préparation est plafonné à 32 et chaque lot
-  contient au plus 16 événements par thread. Ce sont des bornes de
+  contient au plus 32 événements par thread. Ce sont des bornes de
   préparation, pas une garantie de mémoire résidente indépendante de
   la taille des fanouts CSR.
 - `requested_workers=1` reproduit exactement `run(max_events)` sans
@@ -49,12 +49,14 @@ du commit en série pour préserver l'ordre des additions et soustractions.
 Les mesures pilotes du 18 novembre 2026 ont montré que la création de
 threads pouvait coûter plus cher que la propagation de quelques contacts.
 La préparation parallèle est désormais **refusée** si le graphe total
-contient moins de 4 096 lignes CSR, ou si le préfixe causal candidat
-comporte moins de quatre événements ou de 4 096 lignes de contacts
+contient moins de 65 536 lignes CSR, ou si le préfixe causal candidat
+comporte moins de quatre événements ou de 65 536 lignes de contacts
 susceptibles d'être lues sur des transitions. Le préfixe est alors
 consommé séquentiellement, sans relancer inutilement sa planification.
-Le seuil est une **hypothèse conservatrice**, non un optimum prouvé ni
-une calibration énergétique. Les contraintes causales et le budget de
+Le seuil de 65 536 contacts est une **hypothèse conservatrice** issue de
+la campagne pilote du 18 novembre 2026 : 16 384 lignes CSR étaient
+encore défavorables au parallélisme dans le cas `wide-disjoint`.
+Ce n'est ni un optimum prouvé ni une calibration énergétique. Les contraintes causales et le budget de
 contacts restent inchangés.
 
 ## Comptabilité et limites
