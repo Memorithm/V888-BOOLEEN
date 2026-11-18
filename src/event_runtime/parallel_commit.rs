@@ -461,8 +461,14 @@ mod tests {
                 engine.schedule_drive(0, id, true).unwrap();
             }
         }
-        assert_eq!(reference.disjoint_drive_prefix(8), (vec![((0, DRIVE, 0), true)], 1));
-        assert_eq!(cached.disjoint_drive_prefix(8), (vec![((0, DRIVE, 0), true)], 1));
+        assert_eq!(
+            reference.disjoint_drive_prefix(8),
+            (vec![((0, DRIVE, 0), true)], 1)
+        );
+        assert_eq!(
+            cached.disjoint_drive_prefix(8),
+            (vec![((0, DRIVE, 0), true)], 1)
+        );
         let expected = reference.run(64).unwrap();
         let actual = cached.run_disjoint_parallel_commits(64, 4).unwrap();
         assert_eq!(actual.work, expected);
@@ -507,7 +513,14 @@ mod tests {
             counts: vec![1; 65_536],
         };
         graph.validate().unwrap();
-        let result = compare(&graph, 1, &[(0, 10, true), (0, 11, true)], node_count, 2_048, 4);
+        let result = compare(
+            &graph,
+            1,
+            &[(0, 10, true), (0, 11, true)],
+            node_count,
+            2_048,
+            4,
+        );
         assert_eq!(result.disjoint_groups, 1);
         assert_eq!(result.grouped_events, 2);
         assert_eq!(result.target_counters_written, target_count);
