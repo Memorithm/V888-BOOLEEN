@@ -461,6 +461,30 @@ mod tests {
     }
 
     #[test]
+    fn idle_drive_does_not_count_as_parallel_writer() {
+        // One large source changes, but the other DRIVE is a no-op.
+        // Group length alone must never allocate two writer threads.
+        let graph = Connectome {
+            ids: vec![10, 20, 30],
+            offsets: vec![0, 65_536, 65_536, 65_536],
+            targets: vec![2; 65_536],
+            counts: vec![1; 65_536],
+        };
+        let result = compare(
+            &graph,
+            1,
+            &[(0, 10, true), (0, 20, false)],
+            8,
+            8,
+            4,
+        );
+        assert_eq!(result.disjoint_groups, 0);
+        assert_eq!(result.target_writer_threads, 0);
+        assert_eq!(result.serial_events, result.work.events_consumed);
+        assert_eq!(result.work.state_transitions, 2);
+    }
+
+    #[test]
     fn worker_count_one_delegates_to_exact_serial_engine() {
         let graph = eight_disjoint_sources();
         let drives = [(0, 10, true), (0, 11, true)];
