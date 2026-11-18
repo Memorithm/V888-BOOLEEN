@@ -6,7 +6,9 @@ même seuil et la même séquence causale**.
 
 - `serial` : `EventRuntime::run` ;
 - `frontier` : `EventRuntime::run_parallel_frontiers` ;
-- `disjoint` : `EventRuntime::run_disjoint_parallel_commits`.
+- `disjoint` : `EventRuntime::run_disjoint_parallel_commits` (seuils conservateurs) ;
+- `adaptive` : `EventRuntime::run_disjoint_parallel_commits_with_profile`
+  (admission mesurée opt-in).
 
 Quatre topologies contrôles sont disponibles :
 
@@ -18,12 +20,12 @@ Quatre topologies contrôles sont disponibles :
   Cette topologie augmente les contacts traversés, pas le nombre de
   neurones ou de destinations distinctes.
 - `heavy-disjoint` : même schéma mais **512 lignes CSR par source**,
-  afin de vérifier la voie parallèle réelle après admission du seuil
-  conservateur de 65 536 lignes CSR.
+  afin de vérifier la voie parallèle réelle et la sélection fondée
+  sur le coût observé, initialement amorcée par le seuil de 65 536 unités.
 
 Les N sources sont activées à t=0 et désactivées à t=3. Tous les
 `RECHECK` programmés par les transitions sont exécutés avant la
-fin de la mesure. Les trois modes sont comparés **bit à bit** avec le
+fin de la mesure. Les quatre modes sont comparés **bit à bit** avec le
 résultat du témoin séquentiel (états, compteurs `u128`, file d'attente,
 horodatage final et huit compteurs `EventWork`). Chaque sortie impose
 `exact_parity=true`, sinon le programme échoue.
@@ -36,12 +38,12 @@ Construire une fois le binaire optimisé :
 cargo build --offline --release --bin v888-event-bench
 ```
 
-Exécuter chacun des six cas dans un **processus distinct**, afin de
+Exécuter chaque combinaison dans un **processus distinct**, afin de
 remettre à zéro la mémoire maximale (`VmHWM`) entre deux modes :
 
 ```bash
 for shape in disjoint convergent wide-disjoint heavy-disjoint; do
-  for mode in serial frontier disjoint; do
+  for mode in serial frontier disjoint adaptive; do
     ./target/release/v888-event-bench \
       --shape="$shape" --mode="$mode" \
       --sources=256 --repetitions=8 --workers=4
@@ -61,6 +63,11 @@ La sortie machine `V888_EVENT_BENCH` comprend :
 - nombre exact d'événements, transitions, contacts explorés ;
 - durée de chaque mode agrégée par min/médiane/max/total (nanosecondes) ;
 - nombre cumulé de threads auteurs pour `disjoint` ;
+- `calibration_serial_groups` et `calibration_parallel_groups` : nombres
+  de groupes dont la durée réelle a alimenté le profil de coût du mode
+  `adaptive`. Le profil est réutilisé entre le warmup et les répétitions
+  du même processus ; il est réinitialisé dans chaque nouveau processus. Ces comptes
+  ne prouvent pas un gain de vitesse.
 - mémoire résidente courante `VmRSS` et maximum **du processus entier**
   `VmHWM`, en KiB, si `/proc/self/status` est disponible ;
 - ticks CPU du processus (`/proc/self/stat`), sans conversion implicite
