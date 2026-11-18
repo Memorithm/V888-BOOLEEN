@@ -7,6 +7,24 @@ use std::io::{self, BufRead, Read};
 // Reject oversized CSV records before allocating unbounded input memory.
 const MAX_RECORD_BYTES: u64 = 4096;
 
+
+// Physical process peak RSS on Linux, independent of input-reported vm_hwm_kib.
+// A missing /proc or malformed status is reported as unavailable, never as zero.
+fn parse_process_vm_hwm(status: &str) -> Option<u64> {
+    let line = status.lines().find(|line| line.starts_with("VmHWM:"))?;
+    let mut parts = line["VmHWM:".len()..].split_whitespace();
+    let kib = parts.next()?.parse::<u64>().ok()?;
+    if parts.next()? != "kB" || parts.next().is_some() {
+        return None;
+    }
+    Some(kib)
+}
+
+fn physical_process_vm_hwm_kib() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    parse_process_vm_hwm(&status)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Observation {
     split: String,
@@ -109,7 +127,7 @@ fn main() {
                 let throughput = if t.selected == 0 { 0 } else { u128::from(t.count).saturating_mul(1_000_000_000) / t.selected };
                 println!("{name},{},{},{},{},{},{},{},{},{},{},{},{},{}", t.count, t.mismatch, t.full, t.selected, t.incremental, t.refresh, t.epoch_transitions, throughput, t.max_hwm, t.geometry_transitions, t.min_cone.unwrap_or(0), t.max_cone, t.max_refresh_ns);
             }
-            eprintln!("NOTE: oracle_safe_lower_bound_ns and oracle_bound_ops_per_second are retrospective optimistic bounds using oracle outcomes, NOT measured wall-clock throughput, deployable latency or trained policy. incremental_ns and refresh_ns are input-reported sums, not physical measurements made by this program.");
+            match physical_process_vm_hwm_kib() {\n                Some(kib) => eprintln!("PHYSICAL_AUDITOR_PROCESS_VM_HWM_KIB={kib}"),\n                None => eprintln!("PHYSICAL_AUDITOR_PROCESS_VM_HWM_KIB=unavailable"),\n            }\n            eprintln!("NOTE: oracle_safe_lower_bound_ns and oracle_bound_ops_per_second are retrospective optimistic bounds using oracle outcomes, NOT measured wall-clock throughput, deployable latency or trained policy. incremental_ns and refresh_ns are input-reported sums, not physical measurements made by this program.");
         }
         Err(e) => { eprintln!("audit rejected: {e}"); std::process::exit(2); }
     }
