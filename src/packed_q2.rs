@@ -114,6 +114,26 @@ impl PackedQ2 {
         Ok(sum)
     }
 
+    /// Exact GF(4) inner product: XOR-reduction of per-lane field products.
+    ///
+    /// Both components are accumulated as POPCOUNT parity over 64 lanes.
+    /// The return code represents 0, 1, x, or 1+x in GF(2)[x]/(x²+x+1),
+    /// never an integer dot product or multiplication modulo four.
+    pub fn gf4_dot(&self, other: &Self) -> Result<u8, Q2Error> {
+        self.same_length(other)?;
+        let mut sum = 0_u8;
+        for i in 0..self.low.len() {
+            let p00 = self.low[i] & other.low[i];
+            let p01 = self.low[i] & other.high[i];
+            let p10 = self.high[i] & other.low[i];
+            let p11 = self.high[i] & other.high[i];
+            let low_parity = ((p00 ^ p11).count_ones() & 1) as u8;
+            let high_parity = ((p01 ^ p10 ^ p11).count_ones() & 1) as u8;
+            sum ^= low_parity | (high_parity << 1);
+        }
+        Ok(sum)
+    }
+
     /// GF(4) addition in polynomial basis: componentwise XOR.
     pub fn gf4_add(&self, other: &Self) -> Result<Self, Q2Error> {
         self.same_length(other)?;
@@ -173,6 +193,7 @@ mod tests {
         assert_eq!(q.dot_signed(&short), Err(Q2Error::LengthMismatch));
         assert_eq!(q.gf4_add(&short), Err(Q2Error::LengthMismatch));
         assert_eq!(q.gf4_mul(&short), Err(Q2Error::LengthMismatch));
+        assert_eq!(q.gf4_dot(&short), Err(Q2Error::LengthMismatch));
     }
 
     #[test]
@@ -191,6 +212,11 @@ mod tests {
                     .map(|(&p, &q)| signed(p) * signed(q)).sum();
                 assert_eq!(x.dot_unsigned(&y), Ok(expected_unsigned));
                 assert_eq!(x.dot_signed(&y), Ok(expected_signed));
+                let expected_gf4_dot = a
+                    .iter()
+                    .zip(&b)
+                    .fold(0_u8, |acc, (&p, &q)| acc ^ gf4_ref(p, q));
+                assert_eq!(x.gf4_dot(&y), Ok(expected_gf4_dot));
                 let add = x.gf4_add(&y).unwrap();
                 let mul = x.gf4_mul(&y).unwrap();
                 for i in 0..len {
@@ -205,6 +231,7 @@ mod tests {
                 let x = PackedQ2::from_levels(&[a]).unwrap();
                 let y = PackedQ2::from_levels(&[b]).unwrap();
                 assert_eq!(x.gf4_mul(&y).unwrap().get(0), Ok(gf4_ref(a, b)));
+                assert_eq!(x.gf4_dot(&y), Ok(gf4_ref(a, b)));
             }
         }
         assert_eq!(gf4_ref(2, 2), 3);
