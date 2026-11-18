@@ -44,6 +44,19 @@ Les sommes synaptiques locales sont préparées avec des `BTreeMap`.
 Les sommes d'entrée finales sont, elles, calculées et contrôlées lors
 du commit en série pour préserver l'ordre des additions et soustractions.
 
+## Admission adaptative du travail
+
+Les mesures pilotes du 18 novembre 2026 ont montré que la création de
+threads pouvait coûter plus cher que la propagation de quelques contacts.
+La préparation parallèle est désormais **refusée** si le graphe total
+contient moins de 4 096 lignes CSR, ou si le préfixe causal candidat
+comporte moins de quatre événements ou de 4 096 lignes de contacts
+susceptibles d'être lues sur des transitions. Le préfixe est alors
+consommé séquentiellement, sans relancer inutilement sa planification.
+Le seuil est une **hypothèse conservatrice**, non un optimum prouvé ni
+une calibration énergétique. Les contraintes causales et le budget de
+contacts restent inchangés.
+
 ## Comptabilité et limites
 
 `ParallelFrontierWork` contient le même `EventWork` que l'exécution
