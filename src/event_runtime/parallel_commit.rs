@@ -1040,10 +1040,18 @@ mod tests {
         let cache_report = cached.prepare_contact_cache(32).unwrap();
         assert_eq!(cache_report.cached_sources, 2);
         assert_eq!(cache_report.cached_pairs, 8);
+        let mut reference = EventRuntime::new(&compressed_graph, 1, 32).unwrap();
+        reference.schedule_drive(0, 10, true).unwrap();
         cached.schedule_drive(0, 10, true).unwrap();
-        cached
+        let expected = reference.run(16).unwrap();
+        let actual = cached
             .run_disjoint_parallel_commits_with_profile(16, 4, &mut profile)
             .unwrap();
+        assert_eq!(actual.work, expected);
+        assert_eq!(cached.state(), reference.state());
+        assert_eq!(cached.incoming, reference.incoming);
+        assert_eq!(cached.pending, reference.pending);
+        assert_eq!(cached.last_time, reference.last_time);
         assert_eq!(profile.observation_counts(), (0, 0));
         assert!(profile.scope.unwrap().cache_enabled);
         assert_eq!(cached.audit_incoming(), Ok(true));
