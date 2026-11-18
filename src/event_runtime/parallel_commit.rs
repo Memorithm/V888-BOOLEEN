@@ -14,6 +14,7 @@
 use std::collections::BTreeSet;
 use std::thread;
 
+use super::admission::MeasuredDisjointCosts;
 use super::contacts::effective_outgoing_work;
 use super::parallel::{prepare_one, PreparedEvent};
 use super::{EventError, EventKey, EventRuntime, EventWork, DRIVE, RECHECK};
@@ -70,6 +71,40 @@ impl<'g> EventRuntime<'g> {
         max_events: usize,
         requested_threads: usize,
     ) -> Result<DisjointCommitWork, EventError> {
+        self.run_disjoint_parallel_commits_with_optional_costs(max_events, requested_threads, None)
+    }
+
+    /// Opt-in topology-aware admission using externally measured costs.
+    ///
+    /// Invalid or worker-mismatched profiles fail before mutating the engine.
+    /// Groups outside the measured topology envelope are executed serially.
+    /// The original default thresholds remain unchanged when this method is
+    /// not selected. A profile changes the execution route, never the result.
+    pub fn run_disjoint_parallel_commits_with_costs(
+        &mut self,
+        max_events: usize,
+        requested_threads: usize,
+        costs: MeasuredDisjointCosts,
+    ) -> Result<DisjointCommitWork, EventError> {
+        if requested_threads == 0 {
+            return Err(EventError::InvalidWorkerCount);
+        }
+        if !costs.valid() || costs.workers != requested_threads.min(MAX_COMMIT_THREADS) {
+            return Err(EventError::InvalidCostProfile);
+        }
+        self.run_disjoint_parallel_commits_with_optional_costs(
+            max_events,
+            requested_threads,
+            Some(costs),
+        )
+    }
+
+    fn run_disjoint_parallel_commits_with_optional_costs(
+        &mut self,
+        max_events: usize,
+        requested_threads: usize,
+        costs: Option<MeasuredDisjointCosts>,
+    ) -> Result<DisjointCommitWork, EventError> {
         if requested_threads == 0 {
             return Err(EventError::InvalidWorkerCount);
         }
@@ -81,7 +116,7 @@ impl<'g> EventRuntime<'g> {
         }
         // Work this small cannot amortize the two scoped thread passes.
         // Direct delegation avoids repeated graph scans and temporary buffers.
-        if self.graph.targets.len() < MIN_PARALLEL_CONTACTS {
+        if costs.is_none() && self.graph.targets.len() < MIN_PARALLEL_CONTACTS {
             let work = self.run(max_events)?;
             return Ok(DisjointCommitWork {
                 serial_events: work.events_consumed,
@@ -118,10 +153,13 @@ impl<'g> EventRuntime<'g> {
             // not merely two queued drives (other drives can be no-ops).
             // Compressed cached rows have already paid their CSR scan cost.
             // Do not launch two thread passes for only a handful of pairs.
-            if changing_sources < 2
-                || work_to_prepare < MIN_PARALLEL_CONTACTS
-                || distinct_targets < MIN_PARALLEL_TARGETS
-            {
+            let admit = if let Some(profile) = costs {
+                profile.admits(changing_sources, work_to_prepare, distinct_targets, threads)
+            } else {
+                work_to_prepare >= MIN_PARALLEL_CONTACTS
+                    && distinct_targets >= MIN_PARALLEL_TARGETS
+            };
+            if changing_sources < 2 || !admit {
                 // A rejected prefix can be consumed in canonical order.
                 // Do not replan the same tiny group after each event.
                 for _ in 0..group.len() {
