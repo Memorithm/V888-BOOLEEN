@@ -5,7 +5,9 @@
 //! including wakeup deduplication, per-event failure atomicity and counters.
 //! This is NOT a claim of parallel commits or physical energy savings.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
+
+use super::contacts::aggregate_outgoing;
 use std::thread;
 
 use super::{EventError, EventKey, EventRuntime, EventWork, DRIVE, RECHECK};
@@ -52,30 +54,19 @@ pub(super) fn prepare_one(
     } else {
         incoming[source] >= threshold
     };
-    let mut deltas = BTreeMap::<usize, u128>::new();
-    let mut contacts_examined = 0;
-    if desired != current {
+    let (contacts_examined, deltas) = if desired == current {
+        (0, Vec::new())
+    } else {
         let first = graph.offsets[source] as usize;
         let last = graph.offsets[source + 1] as usize;
-        contacts_examined = last - first;
-        for edge in first..last {
-            let count = u128::from(graph.counts[edge]);
-            if count == 0 {
-                continue;
-            }
-            let target = graph.targets[edge] as usize;
-            let item = deltas.entry(target).or_insert(0);
-            *item = item
-                .checked_add(count)
-                .ok_or(EventError::ArithmeticOverflow)?;
-        }
-    }
+        (last - first, aggregate_outgoing(graph, source)?)
+    };
     Ok(PreparedEvent {
         key,
         requested,
         desired,
         contacts_examined,
-        deltas: deltas.into_iter().collect(),
+        deltas,
     })
 }
 
