@@ -41,11 +41,12 @@ fn parse(line: &str) -> Result<Observation, String> {
 }
 
 #[derive(Default)]
-struct Totals { count: u64, mismatch: u64, full: u128, selected: u128, max_hwm: u64 }
+struct Totals { count: u64, mismatch: u64, full: u128, selected: u128, incremental: u128, refresh: u128, epoch_transitions: u64, max_hwm: u64 }
 
 fn audit<R: BufRead>(reader: R) -> Result<[Totals; 4], String> {
     let mut totals: [Totals; 4] = std::array::from_fn(|_| Totals::default());
     let mut previous = None;
+    let mut previous_epoch_by_split: [Option<u64>; 4] = [None; 4];
     for (line_number, line) in reader.lines().enumerate() {
         let line = line.map_err(|e| e.to_string())?;
         if line_number == 0 && line.starts_with("split,") { continue; }
@@ -58,6 +59,14 @@ fn audit<R: BufRead>(reader: R) -> Result<[Totals; 4], String> {
         let idx = match o.split.as_str() { "TRAIN" => 0, "VALID" => 1, "TEST" => 2, _ => 3 };
         let t = &mut totals[idx];
         t.count = t.count.checked_add(1).ok_or("count overflow")?;
+        if let Some(old_epoch) = previous_epoch_by_split[idx] {
+            if old_epoch != o.epoch {
+                t.epoch_transitions = t.epoch_transitions.checked_add(1).ok_or("epoch transition overflow")?;
+            }
+        }
+        previous_epoch_by_split[idx] = Some(o.epoch);
+        t.incremental = t.incremental.checked_add(u128::from(o.incremental_ns)).ok_or("incremental timing overflow")?;
+        t.refresh = t.refresh.checked_add(u128::from(o.refresh_ns)).ok_or("refresh timing overflow")?;
         t.mismatch = t.mismatch.checked_add(u64::from(!o.equal)).ok_or("mismatch overflow")?;
         t.full = t.full.checked_add(u128::from(o.full_ns)).ok_or("full timing overflow")?;
         // Conservative retrospective accounting: a mismatch is charged Full.
@@ -75,11 +84,12 @@ fn audit<R: BufRead>(reader: R) -> Result<[Totals; 4], String> {
 fn main() {
     match audit(io::stdin().lock()) {
         Ok(totals) => {
-            println!("split,count,mismatches,full_ns,oracle_safe_lower_bound_ns,vm_hwm_kib");
+            println!("split,count,mismatches,full_ns,oracle_safe_lower_bound_ns,incremental_ns,refresh_ns,epoch_transitions,oracle_bound_ops_per_second,vm_hwm_kib");
             for (name, t) in ["TRAIN", "VALID", "TEST", "OOD"].iter().zip(totals.iter()) {
-                println!("{name},{},{},{},{},{}", t.count, t.mismatch, t.full, t.selected, t.max_hwm);
+                let throughput = if t.selected == 0 { 0 } else { u128::from(t.count).saturating_mul(1_000_000_000) / t.selected };
+                println!("{name},{},{},{},{},{},{},{},{},{}", t.count, t.mismatch, t.full, t.selected, t.incremental, t.refresh, t.epoch_transitions, throughput, t.max_hwm);
             }
-            eprintln!("NOTE: oracle_safe_lower_bound_ns is retrospective and uses oracle outcomes; NOT deployable latency or trained policy.");
+            eprintln!("NOTE: oracle_safe_lower_bound_ns and oracle_bound_ops_per_second are retrospective optimistic bounds using oracle outcomes, NOT measured wall-clock throughput, deployable latency or trained policy. incremental_ns and refresh_ns are input-reported sums, not physical measurements made by this program.");
         }
         Err(e) => { eprintln!("audit rejected: {e}"); std::process::exit(2); }
     }
@@ -112,6 +122,14 @@ mod tests {
         let t = audit(csv.as_bytes()).unwrap();
         assert_eq!((t[0].count, t[1].count), (1, 1));
         assert!(audit(format!("{HEADER}TRAIN,2,0,10,1,100,10,0,0,0,1,1,10\nVALID,1,0,10,1,100,10,0,0,0,1,1,10\n").as_bytes()).is_err());
+    }
+    #[test]
+    fn reports_split_local_epoch_transitions_and_input_costs() {
+        let csv = format!("{HEADER}TRAIN,1,0,100,2,100,10,20,1,1,1,1,10\nVALID,2,1,100,2,100,12,3,1,1,1,1,20\nTRAIN,3,1,100,2,100,14,4,1,1,1,1,30\nTRAIN,4,1,100,2,100,16,5,1,1,1,1,40\n");
+        let t = audit(csv.as_bytes()).unwrap();
+        assert_eq!((t[0].count, t[0].epoch_transitions, t[0].incremental, t[0].refresh), (3, 1, 40, 29));
+        assert_eq!((t[1].count, t[1].epoch_transitions, t[1].incremental, t[1].refresh), (1, 0, 12, 3));
+        assert_eq!(t[0].max_hwm, 40);
     }
     #[test]
     fn stale_epoch_and_bad_geometry_are_rejected() {
