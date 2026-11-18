@@ -14,6 +14,7 @@
 use std::collections::BTreeSet;
 use std::thread;
 
+use super::contacts::effective_outgoing_work;
 use super::parallel::{prepare_one, PreparedEvent};
 use super::{EventError, EventKey, EventRuntime, EventWork, DRIVE, RECHECK};
 
@@ -98,21 +99,23 @@ impl<'g> EventRuntime<'g> {
                 result.serial_events += 1;
                 continue;
             }
-            let mut contacts = 0usize;
+            let mut work_to_prepare = 0usize;
             let mut changing_sources = 0usize;
             for &((_, _, source), requested) in &group {
                 if self.state.get(source).expect("validated neuron index") != requested {
-                    let fanout =
-                        (self.graph.offsets[source + 1] - self.graph.offsets[source]) as usize;
-                    if fanout > 0 {
+                    let remaining =
+                        effective_outgoing_work(self.graph, self.contact_cache.as_ref(), source);
+                    if remaining > 0 {
                         changing_sources += 1;
-                        contacts = contacts.saturating_add(fanout);
+                        work_to_prepare = work_to_prepare.saturating_add(remaining);
                     }
                 }
             }
             // Threaded writes require at least two independent producers,
             // not merely two queued drives (other drives can be no-ops).
-            if changing_sources < 2 || contacts < MIN_PARALLEL_CONTACTS {
+            // Compressed cached rows have already paid their CSR scan cost.
+            // Do not launch two thread passes for only a handful of pairs.
+            if changing_sources < 2 || work_to_prepare < MIN_PARALLEL_CONTACTS {
                 // A rejected prefix can be consumed in canonical order.
                 // Do not replan the same tiny group after each event.
                 for _ in 0..group.len() {
