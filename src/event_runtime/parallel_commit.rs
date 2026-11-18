@@ -43,6 +43,10 @@ pub struct DisjointCommitWork {
     pub serial_events: usize,
     /// Maximum number of events in one disjoint group.
     pub max_group_width: usize,
+    /// Candidate prefixes accepted by the opt-in cost model before preflight.
+    pub cost_profile_accepted: usize,
+    /// Candidate prefixes rejected by the opt-in cost model.
+    pub cost_profile_rejected: usize,
 }
 
 struct StagedCommit {
@@ -159,6 +163,13 @@ impl<'g> EventRuntime<'g> {
                 work_to_prepare >= MIN_PARALLEL_CONTACTS
                     && distinct_targets >= MIN_PARALLEL_TARGETS
             };
+            if costs.is_some() {
+                if changing_sources >= 2 && admit {
+                    result.cost_profile_accepted += 1;
+                } else {
+                    result.cost_profile_rejected += 1;
+                }
+            }
             if changing_sources < 2 || !admit {
                 // A rejected prefix can be consumed in canonical order.
                 // Do not replan the same tiny group after each event.
@@ -776,6 +787,8 @@ mod tests {
             .unwrap();
         assert_eq!(actual.work, expected);
         assert_eq!(actual.disjoint_groups, 1);
+        assert_eq!(actual.cost_profile_accepted, 1);
+        assert_eq!(actual.cost_profile_rejected, 0);
         assert_eq!(actual.target_writer_threads, 2);
         assert_eq!(actual.target_counters_written, 8);
         assert_eq!(measured.state(), baseline.state());
@@ -802,6 +815,8 @@ mod tests {
             .unwrap();
         assert_eq!(report.work, expected);
         assert_eq!(report.disjoint_groups, 0);
+        assert_eq!(report.cost_profile_accepted, 0);
+        assert_eq!(report.cost_profile_rejected, 1);
         assert_eq!(report.target_writer_threads, 0);
         assert_eq!(expensive.incoming, baseline.incoming);
         assert_eq!(expensive.pending, baseline.pending);
