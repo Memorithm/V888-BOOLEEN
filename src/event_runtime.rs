@@ -8,6 +8,7 @@
 //! This is a deterministic computational hypothesis, NOT a biological model.
 //! Logical work counters are not measurements of energy or physical time.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use crate::connectome::Connectome;
@@ -17,7 +18,8 @@ mod contacts;
 mod parallel;
 mod parallel_commit;
 
-use contacts::aggregate_outgoing;
+pub use contacts::ContactCacheReport;
+use contacts::{aggregate_outgoing, build_contact_cache, ContactCache};
 pub use parallel::ParallelFrontierWork;
 pub use parallel_commit::DisjointCommitWork;
 
@@ -80,6 +82,7 @@ pub struct EventRuntime<'g> {
     pending: BTreeMap<EventKey, bool>,
     max_pending: usize,
     last_time: Option<u64>,
+    contact_cache: Option<ContactCache>,
 }
 
 impl<'g> EventRuntime<'g> {
@@ -103,7 +106,30 @@ impl<'g> EventRuntime<'g> {
             pending: BTreeMap::new(),
             max_pending,
             last_time: None,
+            contact_cache: None,
         })
+    }
+
+    /// Build an optional immutable compressed contact cache **outside** the
+    /// event hot path, with a bound on retained weighted destination pairs.
+    /// This cache never changes neuron states, queue order or logical work.
+    /// A zero budget drops the cache. Existing cache is replaced only after
+    /// the entire new cache has been constructed successfully.
+    ///
+    /// Build time and allocations must be included in end-to-end comparisons
+    /// to establish the minimum number of activations needed to amortize it.
+    pub fn prepare_contact_cache(
+        &mut self,
+        max_pairs: usize,
+    ) -> Result<ContactCacheReport, EventError> {
+        let (replacement, report) = build_contact_cache(self.graph, max_pairs)?;
+        self.contact_cache = replacement;
+        Ok(report)
+    }
+
+    /// Remove compressed reductions without affecting pending work.
+    pub fn clear_contact_cache(&mut self) {
+        self.contact_cache = None;
     }
 
     #[must_use]
@@ -257,10 +283,15 @@ impl<'g> EventRuntime<'g> {
             let first = self.graph.offsets[source] as usize;
             let last = self.graph.offsets[source + 1] as usize;
             contact_count = last - first;
-            let deltas = aggregate_outgoing(self.graph, source)?;
+            let deltas: Cow<'_, [(usize, u128)]> =
+                if let Some(entries) = self.contact_cache.as_ref().and_then(|c| c.get(&source)) {
+                    Cow::Borrowed(entries)
+                } else {
+                    Cow::Owned(aggregate_outgoing(self.graph, source)?)
+                };
             if !deltas.is_empty() {
                 let following = time.checked_add(1).ok_or(EventError::LogicalTimeOverflow)?;
-                for (target, delta) in deltas {
+                for &(target, delta) in deltas.iter() {
                     let old = self.incoming[target];
                     let new = if desired {
                         old.checked_add(delta)

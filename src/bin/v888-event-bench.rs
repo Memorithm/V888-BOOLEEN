@@ -11,7 +11,7 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use v888_booleen::connectome::Connectome;
-use v888_booleen::event_runtime::{EventRuntime, EventWork};
+use v888_booleen::event_runtime::{ContactCacheReport, EventRuntime, EventWork};
 use v888_booleen::BooleanState;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,6 +84,7 @@ struct Config {
     sources: usize,
     repetitions: usize,
     workers: usize,
+    cache: bool,
 }
 
 impl Default for Config {
@@ -94,6 +95,7 @@ impl Default for Config {
             sources: 64,
             repetitions: 3,
             workers: 4,
+            cache: false,
         }
     }
 }
@@ -105,7 +107,7 @@ impl Config {
             if argument == "--help" {
                 return Err(String::from(
                     "usage: --mode=serial|frontier|disjoint --shape=disjoint|convergent|wide-disjoint|heavy-disjoint \
-                     --sources=8..4096 --repetitions=1..64 --workers=1..4",
+                     --sources=8..4096 --repetitions=1..64 --workers=1..4 --cache=on|off",
                 ));
             }
             let (name, value) = argument
@@ -135,6 +137,13 @@ impl Config {
                     config.workers = value
                         .parse()
                         .map_err(|_| format!("invalid workers {value}"))?;
+                }
+                "cache" => {
+                    config.cache = match value {
+                        "on" => true,
+                        "off" => false,
+                        _ => return Err(format!("invalid cache mode {value}")),
+                    };
                 }
                 _ => return Err(format!("unsupported option {name}")),
             }
@@ -201,12 +210,25 @@ struct Sample {
     outcome: Outcome,
     /// Number of actual writer threads used, for the disjoint mode.
     writers: usize,
+    cache_report: ContactCacheReport,
+    cache_build_ns: u128,
 }
 
-fn execute(graph: &Connectome, shape: Shape, mode: Mode, workers: usize) -> Sample {
+fn execute(graph: &Connectome, shape: Shape, mode: Mode, workers: usize, cache: bool) -> Sample {
     let sources = graph.ids.len() / 2;
     let mut runtime =
         EventRuntime::new(graph, shape.threshold(), 4 * sources + 16).expect("valid bounded graph");
+    // Cache creation is outside the timed event loop. Report its cost
+    // separately so amortization is not hidden in any throughput claim.
+    let cache_started = Instant::now();
+    let cache_report = if cache {
+        runtime
+            .prepare_contact_cache(sources)
+            .expect("bounded synthetic cache creation")
+    } else {
+        ContactCacheReport::default()
+    };
+    let cache_build_ns = cache_started.elapsed().as_nanos();
     for &id in &graph.ids[..sources] {
         runtime.schedule_drive(0, id, true).expect("first drive");
         runtime.schedule_drive(3, id, false).expect("second drive");
@@ -250,6 +272,8 @@ fn execute(graph: &Connectome, shape: Shape, mode: Mode, workers: usize) -> Samp
         elapsed,
         outcome,
         writers,
+        cache_report,
+        cache_build_ns,
     }
 }
 
@@ -272,20 +296,38 @@ fn proc_cpu_ticks() -> Option<u64> {
 
 fn report(config: Config) {
     let graph = graph(config.sources, config.shape);
-    let reference = execute(&graph, config.shape, Mode::Serial, 1).outcome;
+    let reference = execute(&graph, config.shape, Mode::Serial, 1, false).outcome;
     assert!(reference.complete_audit);
     assert_eq!(reference.pending, 0);
     // Warm up exactly the chosen execution mode; exclude warmup from timing.
-    let warmup = execute(&graph, config.shape, config.mode, config.workers);
+    let warmup = execute(
+        &graph,
+        config.shape,
+        config.mode,
+        config.workers,
+        config.cache,
+    );
     assert_eq!(warmup.outcome, reference);
     let ticks_before = proc_cpu_ticks();
     let mut durations = Vec::new();
     let mut writers = 0_usize;
+    let mut cache_build_total_ns = 0_u128;
+    let mut retained_pairs = 0_usize;
+    let mut covered_rows = 0_usize;
     for _ in 0..config.repetitions {
-        let sample = execute(&graph, config.shape, config.mode, config.workers);
+        let sample = execute(
+            &graph,
+            config.shape,
+            config.mode,
+            config.workers,
+            config.cache,
+        );
         assert_eq!(sample.outcome, reference, "scheduler parity failure");
         durations.push(sample.elapsed.as_nanos());
         writers = writers.saturating_add(sample.writers);
+        cache_build_total_ns += sample.cache_build_ns;
+        retained_pairs = sample.cache_report.cached_pairs;
+        covered_rows = sample.cache_report.covered_contact_rows;
     }
     let ticks_after = proc_cpu_ticks();
     durations.sort_unstable();
@@ -299,16 +341,17 @@ fn report(config: Config) {
         .and_then(|(before, after)| after.checked_sub(before))
         .map_or_else(|| "unavailable".to_string(), |value| value.to_string());
     println!(
-        "V888_EVENT_BENCH mode={} shape={} sources={} repetitions={} workers={} \
+        "V888_EVENT_BENCH mode={} shape={} sources={} repetitions={} workers={} cache={} \
          scope=event_run_only min_ns={} median_ns={} max_ns={} total_ns={} \
          events_per_run={} transitions_per_run={} contacts_per_run={} \
-         writer_threads_total={} peak_rss_kib={} current_rss_kib={} \
+         writer_threads_total={} cache_pairs={} cache_covered_rows={} cache_build_total_ns={} peak_rss_kib={} current_rss_kib={} \
          cpu_ticks_process={} exact_parity=true host_energy_attribution=false",
         config.mode.label(),
         config.shape.label(),
         config.sources,
         config.repetitions,
         config.workers,
+        if config.cache { "on" } else { "off" },
         durations[0],
         durations[(durations.len() - 1) / 2],
         durations[durations.len() - 1],
@@ -317,6 +360,9 @@ fn report(config: Config) {
         reference.work.state_transitions,
         reference.work.contacts_examined,
         writers,
+        retained_pairs,
+        covered_rows,
+        cache_build_total_ns,
         peak_rss,
         current_rss,
         ticks,
@@ -346,13 +392,21 @@ mod tests {
             Shape::HeavyDisjoint,
         ] {
             let graph = graph(16, shape);
-            let baseline = execute(&graph, shape, Mode::Serial, 1).outcome;
+            let baseline = execute(&graph, shape, Mode::Serial, 1, false).outcome;
             for mode in [Mode::Serial, Mode::Frontier, Mode::Disjoint] {
-                let sample = execute(&graph, shape, mode, 4);
-                assert_eq!(sample.outcome, baseline);
-                assert!(sample.outcome.complete_audit);
-                assert_eq!(sample.outcome.pending, 0);
-                assert_eq!(sample.outcome.state.active_count(), 0);
+                for cache in [false, true] {
+                    let sample = execute(&graph, shape, mode, 4, cache);
+                    assert_eq!(sample.outcome, baseline);
+                    assert!(sample.outcome.complete_audit);
+                    assert_eq!(sample.outcome.pending, 0);
+                    assert_eq!(sample.outcome.state.active_count(), 0);
+                    if cache && matches!(shape, Shape::WideDisjoint | Shape::HeavyDisjoint) {
+                        assert_eq!(sample.cache_report.cached_sources, 16);
+                        assert_eq!(sample.cache_report.cached_pairs, 16);
+                    } else {
+                        assert_eq!(sample.cache_report.cached_pairs, 0);
+                    }
+                }
             }
         }
     }
@@ -392,6 +446,7 @@ mod tests {
         assert!(Config::parse(["--repetitions=65".to_string()]).is_err());
         assert!(Config::parse(["--mode=unknown".to_string()]).is_err());
         assert!(Config::parse(["--typo=12".to_string()]).is_err());
+        assert!(Config::parse(["--cache=invalid".to_string()]).is_err());
         let config = Config::parse([
             "--mode=disjoint".to_string(),
             "--shape=convergent".to_string(),
@@ -399,6 +454,10 @@ mod tests {
         .expect("valid selected modes");
         assert_eq!(config.mode, Mode::Disjoint);
         assert_eq!(config.shape, Shape::Convergent);
+        let cached = Config::parse(["--cache=on".to_string()]).unwrap();
+        assert!(cached.cache);
+        let uncached = Config::parse(["--cache=off".to_string()]).unwrap();
+        assert!(!uncached.cache);
     }
 
     #[test]

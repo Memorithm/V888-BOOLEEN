@@ -56,6 +56,7 @@ après admission explicite dans son groupe de runners.
 - [Préparation parallèle des frontières causales](docs/EVENT_PARALLEL.md)
 - [Commits parallèles des compteurs sans conflit](docs/EVENT_DISJOINT_COMMIT.md)
 - [Banc de mesures appariées des ordonnanceurs asynchrones](docs/EVENT_BENCH.md)
+- [Cache facultatif des contributions synaptiques CSR](docs/EVENT_CONTACT_CACHE.md)
 - [Agrégation exacte des destinations en runs CSR](docs/EVENT_CSR_RUNS.md)
 
 ## Droits
