@@ -63,6 +63,7 @@ pub mod novel_split;
 pub mod nt_gates;
 pub mod online_recall;
 pub mod paired_recovery;
+pub mod packed_q2;
 pub mod plasticity;
 pub mod recovery_profile;
 pub mod recurrent_csr;
