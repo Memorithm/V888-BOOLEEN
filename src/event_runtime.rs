@@ -18,8 +18,8 @@ mod contacts;
 mod parallel;
 mod parallel_commit;
 
-use contacts::{aggregate_outgoing, build_contact_cache, ContactCache};
 pub use contacts::ContactCacheReport;
+use contacts::{aggregate_outgoing, build_contact_cache, ContactCache};
 pub use parallel::ParallelFrontierWork;
 pub use parallel_commit::DisjointCommitWork;
 
