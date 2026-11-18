@@ -58,6 +58,7 @@ après admission explicite dans son groupe de runners.
 - [Banc de mesures appariées des ordonnanceurs asynchrones](docs/EVENT_BENCH.md)
 - [Cache facultatif des contributions synaptiques CSR](docs/EVENT_CONTACT_CACHE.md)
 - [Agrégation exacte des destinations en runs CSR](docs/EVENT_CSR_RUNS.md)
+- [Admission topologique par coûts mesurés](docs/EVENT_TOPOLOGY_COST.md)
 
 ## Droits
 

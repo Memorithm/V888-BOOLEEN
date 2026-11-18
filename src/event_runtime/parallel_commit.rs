@@ -15,6 +15,7 @@ use std::collections::BTreeSet;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use super::admission::MeasuredDisjointCosts;
 use super::contacts::effective_outgoing_work;
 use super::parallel::{prepare_one, PreparedEvent};
 use super::{EventError, EventKey, EventRuntime, EventWork, DRIVE, RECHECK};
@@ -205,6 +206,10 @@ pub struct DisjointCommitWork {
     pub serial_events: usize,
     /// Maximum number of events in one disjoint group.
     pub max_group_width: usize,
+    /// Candidate prefixes accepted by the optional external cost model.
+    pub cost_profile_accepted: usize,
+    /// Candidate prefixes rejected by the optional external cost model.
+    pub cost_profile_rejected: usize,
 }
 
 struct StagedCommit {
@@ -249,6 +254,44 @@ impl<'g> EventRuntime<'g> {
         requested_threads: usize,
         profile: &mut DisjointAdmissionProfile,
     ) -> Result<DisjointCommitWork, EventError> {
+        self.run_disjoint_parallel_commits_with_admission(
+            max_events,
+            requested_threads,
+            profile,
+            None,
+        )
+    }
+
+    /// Optional external-cost admission. The default online calibration
+    /// remains available through run_disjoint_parallel_commits_with_profile.
+    /// This method never trains the online profile or changes neuron rules.
+    pub fn run_disjoint_parallel_commits_with_costs(
+        &mut self,
+        max_events: usize,
+        requested_threads: usize,
+        costs: MeasuredDisjointCosts,
+    ) -> Result<DisjointCommitWork, EventError> {
+        if requested_threads == 0 {
+            return Err(EventError::InvalidWorkerCount);
+        }
+        if !costs.valid() || costs.workers != requested_threads.min(MAX_COMMIT_THREADS) {
+            return Err(EventError::InvalidCostProfile);
+        }
+        self.run_disjoint_parallel_commits_with_admission(
+            max_events,
+            requested_threads,
+            &mut DisjointAdmissionProfile::default(),
+            Some(costs),
+        )
+    }
+
+    fn run_disjoint_parallel_commits_with_admission(
+        &mut self,
+        max_events: usize,
+        requested_threads: usize,
+        profile: &mut DisjointAdmissionProfile,
+        costs: Option<MeasuredDisjointCosts>,
+    ) -> Result<DisjointCommitWork, EventError> {
         if requested_threads == 0 {
             return Err(EventError::InvalidWorkerCount);
         }
@@ -260,7 +303,7 @@ impl<'g> EventRuntime<'g> {
         }
         // Work this small cannot amortize the two scoped thread passes.
         // Direct delegation avoids repeated graph scans and temporary buffers.
-        if self.graph.targets.len() < MIN_PROBE_CONTACTS {
+        if costs.is_none() && self.graph.targets.len() < MIN_PROBE_CONTACTS {
             let work = self.run(max_events)?;
             return Ok(DisjointCommitWork {
                 serial_events: work.events_consumed,
@@ -307,7 +350,24 @@ impl<'g> EventRuntime<'g> {
                 effective_contacts: work_to_prepare,
                 distinct_targets,
             };
-            if !profile.should_parallel(topology) {
+            let admit = if let Some(measured) = costs {
+                measured.admits(
+                    topology.changing_sources,
+                    topology.effective_contacts,
+                    topology.distinct_targets,
+                    threads,
+                )
+            } else {
+                profile.should_parallel(topology)
+            };
+            if costs.is_some() {
+                if admit {
+                    result.cost_profile_accepted += 1;
+                } else {
+                    result.cost_profile_rejected += 1;
+                }
+            }
+            if !admit {
                 // A rejected prefix can be consumed in canonical order.
                 // Do not replan the same tiny group after each event.
                 let started = Instant::now();
@@ -315,7 +375,9 @@ impl<'g> EventRuntime<'g> {
                     self.consume_one(&mut result.work)?;
                     result.serial_events += 1;
                 }
-                profile.observe(topology, false, started.elapsed());
+                if costs.is_none() {
+                    profile.observe(topology, false, started.elapsed());
+                }
                 continue;
             }
 
@@ -413,7 +475,9 @@ impl<'g> EventRuntime<'g> {
             result.max_group_width = result.max_group_width.max(group.len());
             result.target_counters_written += targets_written;
             result.target_writer_threads += writer_threads;
-            profile.observe(topology, true, parallel_started.elapsed());
+            if costs.is_none() {
+                profile.observe(topology, true, parallel_started.elapsed());
+            }
         }
         Ok(result)
     }
@@ -1078,5 +1142,217 @@ mod tests {
         // Two drives, two t+1 rechecks, then a t+2 no-op recheck.
         assert_eq!(report.work.events_consumed, 5);
         assert_eq!(report.work.state_transitions, 3);
+    }
+
+    fn small_disjoint_graph() -> Connectome {
+        Connectome {
+            ids: (10..20).collect(),
+            offsets: [0, 4, 8]
+                .into_iter()
+                .chain(std::iter::repeat_n(8, 8))
+                .collect(),
+            targets: (2..10).collect(),
+            counts: vec![1; 8],
+        }
+    }
+
+    fn small_measured_costs() -> MeasuredDisjointCosts {
+        // Synthetic positive coefficients prove selection logic, not speedup.
+        MeasuredDisjointCosts {
+            workers: 2,
+            min_producers: 2,
+            max_producers: 2,
+            min_effective_contacts: 8,
+            max_effective_contacts: 8,
+            min_distinct_targets: 8,
+            max_distinct_targets: 8,
+            two_pass_overhead_ns: 100,
+            serial_contact_ns: 15,
+            serial_target_ns: 10,
+            parallel_contact_ns: 2,
+            parallel_target_ns: 3,
+        }
+    }
+
+    #[test]
+    fn favorable_measured_profile_admits_small_topology_without_changing_results() {
+        let graph = small_disjoint_graph();
+        graph.validate().unwrap();
+        let mut baseline = EventRuntime::new(&graph, 1, 32).unwrap();
+        let mut measured = EventRuntime::new(&graph, 1, 32).unwrap();
+        for runtime in [&mut baseline, &mut measured] {
+            runtime.schedule_drive(0, 10, true).unwrap();
+            runtime.schedule_drive(0, 11, true).unwrap();
+        }
+        let expected = baseline.run(32).unwrap();
+        let actual = measured
+            .run_disjoint_parallel_commits_with_costs(32, 2, small_measured_costs())
+            .unwrap();
+        assert_eq!(actual.work, expected);
+        assert_eq!(actual.disjoint_groups, 1);
+        assert_eq!(actual.cost_profile_accepted, 1);
+        assert_eq!(actual.cost_profile_rejected, 0);
+        assert_eq!(actual.target_writer_threads, 2);
+        assert_eq!(actual.target_counters_written, 8);
+        assert_eq!(measured.state(), baseline.state());
+        assert_eq!(measured.incoming, baseline.incoming);
+        assert_eq!(measured.pending, baseline.pending);
+        assert_eq!(measured.last_time, baseline.last_time);
+        assert_eq!(measured.audit_incoming(), Ok(true));
+    }
+
+    #[test]
+    fn expensive_or_unmatched_profile_falls_back_without_changing_results() {
+        let graph = small_disjoint_graph();
+        let mut baseline = EventRuntime::new(&graph, 1, 32).unwrap();
+        let mut expensive = EventRuntime::new(&graph, 1, 32).unwrap();
+        for runtime in [&mut baseline, &mut expensive] {
+            runtime.schedule_drive(0, 10, true).unwrap();
+            runtime.schedule_drive(0, 11, true).unwrap();
+        }
+        let expected = baseline.run(32).unwrap();
+        let mut costs = small_measured_costs();
+        costs.two_pass_overhead_ns = 1_000_000;
+        let report = expensive
+            .run_disjoint_parallel_commits_with_costs(32, 2, costs)
+            .unwrap();
+        assert_eq!(report.work, expected);
+        assert_eq!(report.disjoint_groups, 0);
+        assert_eq!(report.cost_profile_accepted, 0);
+        assert_eq!(report.cost_profile_rejected, 1);
+        assert_eq!(report.target_writer_threads, 0);
+        assert_eq!(expensive.incoming, baseline.incoming);
+        assert_eq!(expensive.pending, baseline.pending);
+        assert_eq!(expensive.state(), baseline.state());
+
+        let mut out_of_envelope = EventRuntime::new(&graph, 1, 32).unwrap();
+        out_of_envelope.schedule_drive(0, 10, true).unwrap();
+        out_of_envelope.schedule_drive(0, 11, true).unwrap();
+        let mut costs = small_measured_costs();
+        costs.min_effective_contacts = 9;
+        costs.max_effective_contacts = 12;
+        let report = out_of_envelope
+            .run_disjoint_parallel_commits_with_costs(32, 2, costs)
+            .unwrap();
+        assert_eq!(report.work, expected);
+        assert_eq!(report.disjoint_groups, 0);
+        assert_eq!(out_of_envelope.incoming, baseline.incoming);
+    }
+
+    #[test]
+    fn invalid_cost_profile_is_rejected_atomically() {
+        let graph = small_disjoint_graph();
+        let mut runtime = EventRuntime::new(&graph, 1, 32).unwrap();
+        runtime.schedule_drive(0, 10, true).unwrap();
+        let mut invalid = small_measured_costs();
+        invalid.serial_contact_ns = 0;
+        assert_eq!(
+            runtime.run_disjoint_parallel_commits_with_costs(32, 2, invalid),
+            Err(EventError::InvalidCostProfile)
+        );
+        assert_eq!(
+            runtime.run_disjoint_parallel_commits_with_costs(32, 3, small_measured_costs()),
+            Err(EventError::InvalidCostProfile)
+        );
+        assert_eq!(runtime.state().active_count(), 0);
+        assert_eq!(runtime.pending_count(), 1);
+        assert_eq!(runtime.next_event_time(), Some(0));
+        assert_eq!(runtime.last_time, None);
+    }
+
+    #[test]
+    fn cached_topology_uses_effective_pairs_not_raw_csr_row_count() {
+        // 512 logical CSR rows compress to eight disjoint weighted pairs.
+        // A profile calibrated only for eight effective iterations must
+        // admit cached execution and reject the same graph without cache.
+        let graph = Connectome {
+            ids: (10..20).collect(),
+            offsets: [0, 256, 512]
+                .into_iter()
+                .chain(std::iter::repeat_n(512, 8))
+                .collect(),
+            targets: (2..10)
+                .flat_map(|target| std::iter::repeat_n(target, 64))
+                .collect(),
+            counts: vec![1; 512],
+        };
+        graph.validate().unwrap();
+        let mut reference = EventRuntime::new(&graph, 1, 32).unwrap();
+        let mut cached = EventRuntime::new(&graph, 1, 32).unwrap();
+        let mut uncached = EventRuntime::new(&graph, 1, 32).unwrap();
+        let cache_report = cached.prepare_contact_cache(8).unwrap();
+        assert_eq!(cache_report.cached_pairs, 8);
+        assert_eq!(cache_report.covered_contact_rows, 512);
+
+        for runtime in [&mut reference, &mut cached, &mut uncached] {
+            runtime.schedule_drive(0, 10, true).unwrap();
+            runtime.schedule_drive(0, 11, true).unwrap();
+        }
+        let expected = reference.run(32).unwrap();
+        let cached_work = cached
+            .run_disjoint_parallel_commits_with_costs(32, 2, small_measured_costs())
+            .unwrap();
+        let uncached_work = uncached
+            .run_disjoint_parallel_commits_with_costs(32, 2, small_measured_costs())
+            .unwrap();
+        assert_eq!(cached_work.work, expected);
+        assert_eq!(uncached_work.work, expected);
+        assert_eq!(cached_work.cost_profile_accepted, 1);
+        assert_eq!(cached_work.disjoint_groups, 1);
+        assert_eq!(uncached_work.cost_profile_accepted, 0);
+        assert_eq!(uncached_work.disjoint_groups, 0);
+        assert_eq!(cached.state(), reference.state());
+        assert_eq!(cached.incoming, reference.incoming);
+        assert_eq!(cached.pending, reference.pending);
+        assert_eq!(uncached.state(), reference.state());
+        assert_eq!(uncached.incoming, reference.incoming);
+        assert_eq!(uncached.pending, reference.pending);
+        assert_eq!(cached.audit_incoming(), Ok(true));
+        assert_eq!(uncached.audit_incoming(), Ok(true));
+    }
+
+    #[test]
+    fn cost_admitted_prefix_preserves_first_queue_capacity_error_and_partial_commit() {
+        let graph = small_disjoint_graph();
+        let mut reference = EventRuntime::new(&graph, 1, 6).unwrap();
+        let mut modeled = EventRuntime::new(&graph, 1, 6).unwrap();
+        for runtime in [&mut reference, &mut modeled] {
+            runtime.schedule_drive(0, 10, true).unwrap();
+            runtime.schedule_drive(0, 11, true).unwrap();
+        }
+        assert_eq!(reference.run(32), Err(EventError::PendingBudgetExceeded));
+        assert_eq!(
+            modeled.run_disjoint_parallel_commits_with_costs(32, 2, small_measured_costs()),
+            Err(EventError::PendingBudgetExceeded)
+        );
+        assert_eq!(modeled.state(), reference.state());
+        assert_eq!(modeled.incoming, reference.incoming);
+        assert_eq!(modeled.pending, reference.pending);
+        assert_eq!(modeled.last_time, reference.last_time);
+        assert_eq!(modeled.state().active_count(), 1);
+        assert_eq!(modeled.pending_count(), 5);
+        assert_eq!(modeled.audit_incoming(), Ok(true));
+    }
+
+    #[test]
+    fn cost_admitted_prefix_keeps_overflowing_logical_time_uncommitted() {
+        let graph = small_disjoint_graph();
+        let mut reference = EventRuntime::new(&graph, 1, 32).unwrap();
+        let mut modeled = EventRuntime::new(&graph, 1, 32).unwrap();
+        for runtime in [&mut reference, &mut modeled] {
+            runtime.schedule_drive(u64::MAX, 10, true).unwrap();
+            runtime.schedule_drive(u64::MAX, 11, true).unwrap();
+        }
+        assert_eq!(reference.run(32), Err(EventError::LogicalTimeOverflow));
+        assert_eq!(
+            modeled.run_disjoint_parallel_commits_with_costs(32, 2, small_measured_costs()),
+            Err(EventError::LogicalTimeOverflow)
+        );
+        assert_eq!(modeled.state(), reference.state());
+        assert_eq!(modeled.incoming, reference.incoming);
+        assert_eq!(modeled.pending, reference.pending);
+        assert_eq!(modeled.last_time, reference.last_time);
+        assert_eq!(modeled.pending_count(), 2);
+        assert_eq!(modeled.audit_incoming(), Ok(true));
     }
 }
