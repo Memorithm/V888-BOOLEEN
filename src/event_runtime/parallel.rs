@@ -200,7 +200,8 @@ impl<'g> EventRuntime<'g> {
                 let current = self.state.get(source).expect("validated source index");
                 let desired = self.incoming[source] >= self.threshold;
                 if desired != current {
-                    if let Some(reduced) = self.contact_cache.as_ref().and_then(|c| c.get(&source)) {
+                    if let Some(reduced) = self.contact_cache.as_ref().and_then(|c| c.get(&source))
+                    {
                         // Cached pairs represent exactly the nonzero CSR
                         // destinations. Avoid rescanning large repeated runs.
                         for &(target, _) in reduced {
