@@ -18,8 +18,8 @@ Quatre topologies contrôles sont disponibles :
   Cette topologie augmente les contacts traversés, pas le nombre de
   neurones ou de destinations distinctes.
 - `heavy-disjoint` : même schéma mais **512 lignes CSR par source**,
-  afin de vérifier la voie parallèle réelle après admission du seuil
-  conservateur de 65 536 lignes CSR.
+  afin de vérifier la voie parallèle réelle et la sélection fondée
+  sur le coût observé, initialement amorcée par le seuil de 65 536 unités.
 
 Les N sources sont activées à t=0 et désactivées à t=3. Tous les
 `RECHECK` programmés par les transitions sont exécutés avant la
@@ -61,6 +61,11 @@ La sortie machine `V888_EVENT_BENCH` comprend :
 - nombre exact d'événements, transitions, contacts explorés ;
 - durée de chaque mode agrégée par min/médiane/max/total (nanosecondes) ;
 - nombre cumulé de threads auteurs pour `disjoint` ;
+- `calibration_serial_groups` et `calibration_parallel_groups` : nombres
+  de groupes dont la durée réelle a alimenté le profil de coût. Le profil
+  est réutilisé entre le warmup et les répétitions du même processus ; il
+  est réinitialisé dans chaque nouveau processus de benchmark. Ces comptes
+  ne prouvent pas un gain de vitesse.
 - mémoire résidente courante `VmRSS` et maximum **du processus entier**
   `VmHWM`, en KiB, si `/proc/self/status` est disponible ;
 - ticks CPU du processus (`/proc/self/stat`), sans conversion implicite

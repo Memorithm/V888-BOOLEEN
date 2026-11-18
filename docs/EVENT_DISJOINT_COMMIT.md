@@ -34,52 +34,92 @@ réparties entre des segments non chevauchants du vecteur d'entrée, puis
 déduplications et compteurs de travail sont publiés par l'unique
 propriétaire, dans l'ordre causal d'origine.
 
-## Admission adaptative et repli sans threads
+## Garde-fous historiques et exploration adaptative
 
-À la suite des mesures pilotes sur Dell, le mode de commit parallèle
-passe immédiatement par le moteur séquentiel lorsque le graphe entier
-comprend moins de **65 536 lignes CSR**. Sur un grand graphe, les groupes
-de drives sans conflit sont eux-mêmes traités séquentiellement tant que
-leurs transitions cumulées n'examineraient pas 65 536 lignes de contacts,
-ou si moins de deux sources émettent des contributions réellement actives.
-Cela évite une double création de threads pour des groupes de petite
-taille. Les préfixes rejetés sont consommés en ordre, sans modifier la
-sémantique et sans relancer inutilement leur préparation.
+Le moteur a d'abord appliqué deux seuils fixes : au moins **65 536 unités
+de préparation** et **1 024 compteurs cibles distincts**, sur un préfixe
+comprenant au moins deux sources réellement actives. Ces valeurs avaient
+été introduites après les mesures pilotes du 18 novembre 2026 :
+un graphe `wide-disjoint` à 16 384 lignes CSR était alors environ neuf
+fois plus lent sur le chemin de commits parallèles.
 
-Ce seuil de recherche de 65 536 contacts est volontairement explicite,
-**non calibré** en joules et non garanti optimal. Lors de la première
-campagne du 18 novembre 2026, le graphe `wide-disjoint` à 16 384 lignes
-CSR restait environ neuf fois plus lent avec les commits parallèles. Les groupes volumineux continuent à
-utiliser de véritables écritures concurrentes sur des segments disjoints.
-
-## Admission selon les compteurs réellement distincts
+Ces valeurs restent un **point de départ conservateur en l'absence de
+mesures**, pas une règle absolue. Le mode actuel étudie aussi les groupes
+de plus petite taille pour apprendre le coût réel du chemin séquentiel.
+Il peut ensuite sonder le chemin parallèle, sous des minima de sécurité,
+selon la topologie effective et les observations de coût par classe.
 
 Une grande quantité de contacts CSR ne signifie pas que le groupe a beaucoup
-de compteurs d'entrée différents à modifier. Sur les graphes à contacts très
-répétés, créer des threads pour seulement huit destinations pouvait
-multiplier le temps d'exécution malgré 65 536 contacts logiques.
+de compteurs d'entrée différents à modifier. Le préfixe causal utilise
+déjà la cardinalité exacte des destinations non nulles du `BTreeSet`,
+sans balayage supplémentaire pour ce chiffre. Les contacts sans poids ne
+produisent pas de mises à jour ; les contributions mises en cache sont
+comptées comme paires pondérées lors de la préparation.
 
-Le préfixe causal suit déjà les cibles non nulles dans un `BTreeSet` pour
-détecter les conflits. Le moteur réutilise maintenant la cardinalité exacte
-de cet ensemble, **sans balayage supplémentaire du graphe**, pour refuser
-l'exécution concurrente lorsque moins de 1 024 compteurs distincts seraient
-écrits. Ce seuil conservateur s'ajoute aux conditions précédentes
-(au moins deux producteurs et 65 536 unités de préparation effective).
-Les contacts non mis en cache restent comptés comme lectures CSR ; les contacts
-mis en cache comme paires de destinations agrégées.
+Un groupe rejeté est commis séquentiellement, dans l'ordre d'origine.
+Les bits, compteurs entrants, réveils, dates et huit compteurs logiques
+conservent donc leur signification. L'adaptation ne prétend pas supprimer
+les coûts du préfixe causal ou garantir une accélération.
 
-Pour les sources sans cache, les runs adjacents visant la même cible non nulle
-évitent aussi les recherches répétées dans l'ensemble des cibles. Les contacts
-de poids nul et les destinations non triées restent sémantiquement identiques.
+## Admission mesurée par topologie (profil expérimental)
 
-Le repli consomme les événements dans l'ordre de référence. Les états,
-réveils, dates et huit compteurs logiques restent inchangés. Un test avec
-1 024 destinations disjointes démontre que les écritures concurrentes sont
-toujours réellement exercées lorsqu'elles peuvent être admises.
+Le point d'entrée existant `run_disjoint_parallel_commits` utilise désormais
+un profil local créé à chaque appel. Pour réutiliser les mesures entre plusieurs
+tranches ou répétitions indépendantes, l'appelant peut conserver un
+`DisjointAdmissionProfile` et appeler
+`run_disjoint_parallel_commits_with_profile(max_events, threads, &mut profile)`.
+Le profil appartient à l'appelant ; il n'existe ni état global mutable, ni
+fichier de calibration, ni modification du graphe.
 
-Ce seuil n'est pas une estimation d'énergie ni une garantie d'accélération :
-des mesures appariées de temps CPU, mémoire et coût de synchronisation
-restent nécessaires pour en apprécier la pertinence selon la topologie.
+Chaque **préfixe causal DRIVE sans cible commune** est décrit par des données
+du graphe réellement parcouru :
+
+- nombre de sources dont le bit change et qui possèdent des contacts ;
+- nombre total de lignes CSR de ces sources ;
+- unités de préparation effectives : lignes CSR sans cache, couples
+  (destination, poids) lorsque le cache est présent ;
+- nombre exact de destinations non nulles distinctes, déjà déterminé par
+  le contrôle d'absence de conflits.
+
+Le profil utilise douze classes : trois bandes de cardinalité des cibles
+(`<128`, `128..1023`, `>=1024`), deux classes de compression par cache
+et deux classes de répétition des cibles. Les observations proviennent des
+durées murales réelles `Instant` de groupes séquentiels et parallèles ; leur
+moyenne exponentielle amortie est normalisée en nanosecondes pour 1 024 unités
+de travail estimées :
+
+\[
+U=C_{\mathrm{eff}}+T+8S,\qquad
+c=\frac{1024\,t_{\mathrm{observé}}}{\max(1,U)}.
+\]
+
+Ici `T` est le nombre de cibles distinctes et `S` celui des sources
+actives ; le coefficient 8 est **un poids heuristique**, non une constante
+physique mesurée. Pour une classe avec au moins deux observations de chaque
+chemin, l'admission privilégie le parallèle seulement si
+`100 × coût_parallèle < 85 × coût_séquentiel`. Un sondage du chemin temporairement défavorisé tous les 32 candidats
+réactualise alternativement le coût séquentiel ou parallèle lorsque les conditions changent.
+Les mesures de groupe n'incluent pas le calcul du préfixe, commun aux deux
+chemins ; elles ne justifient pas à elles seules de déclarer un gain global.
+
+Avant calibration, les groupes suffisamment larges conservent la condition
+historique (65 536 unités et 1 024 cibles). Le profil collecte également
+des groupes séquentiels comparables. Après deux observations séquentielles,
+un sondage parallèle limité peut être tenté sous les anciens seuils, mais
+**jamais** pour moins de 256 unités de préparation, 32 destinations distinctes
+ou deux sources actives. Une fenêtre d'événements trop petite est toujours
+traitée séquentiellement.
+
+La variabilité des threads, l'ordonnancement hôte, les tailles de groupe et
+les coûts du cache peuvent perturber les moyennes. Le profil n'est ni une
+calibration énergétique ni une garantie de débit. Les seuils d'exploration,
+le coefficient de normalisation et la marge de 15 % restent des hypothèses
+révisables après mesures reproductibles contrôlées par RemoteOps.
+
+**Invariant** : le profil ne modifie que le choix du chemin d'exécution.
+Le contrôle des conflits, les prévalidations, les arithmétiques et les
+publications restent inchangés. Les sondages parallèles passent par le même
+protocole exact ; tous les RECHECK demeurent séquentiels.
 
 ## Bornes et observabilité
 
@@ -88,6 +128,8 @@ restent nécessaires pour en apprécier la pertinence selon la topologie.
 - `requested_threads=1` : délégation directe au moteur séquentiel.
 - `DisjointCommitWork.work` doit être exactement identique à
   `EventRuntime::run`.
+- `DisjointAdmissionProfile::observation_counts()` rapporte les observations
+  en mémoire, par chemin ; les comptes sont bornés par classe.
 - `disjoint_groups`, `grouped_events`, `target_counters_written`,
   `target_writer_threads`, `serial_events` et `max_group_width`
   décrivent le travail de ce chemin, non des mesures physiques.
