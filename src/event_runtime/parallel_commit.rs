@@ -33,6 +33,8 @@ const MIN_PROBE_TARGETS: usize = 32;
 const COST_BUCKETS: usize = 12;
 const COST_OBSERVATIONS: u8 = 2;
 const PROBE_EVERY: u64 = 32;
+/// Recheck strongly losing paths less often, but never stop remeasuring.
+const SLOW_PROBE_EVERY: u64 = 256;
 
 /// Characteristics of the *current causal prefix*, not global graph averages.
 /// A cached row has a smaller effective preparation count than its raw CSR size.
@@ -177,10 +179,26 @@ impl DisjointAdmissionProfile {
 
         if serial_ready && parallel_ready {
             // Require a 15% measured margin to avoid unstable tie decisions.
-            // Revisit the disfavored path periodically, in either direction.
-            let parallel_faster = bucket.parallel.ns_per_1024_units.saturating_mul(100)
-                < bucket.serial.ns_per_1024_units.saturating_mul(85);
-            return if bucket.candidates % PROBE_EVERY == 0 {
+            // Revisit the disfavored path in both directions, even after a
+            // large observed loss. Amortize exploratory thread launches when
+            // the disfavored path costs at least 2x the selected path.
+            let serial_cost = bucket.serial.ns_per_1024_units;
+            let parallel_cost = bucket.parallel.ns_per_1024_units;
+            let parallel_faster =
+                parallel_cost.saturating_mul(100) < serial_cost.saturating_mul(85);
+            let clearly_disfavored = serial_cost > 0
+                && parallel_cost > 0
+                && if parallel_faster {
+                    serial_cost >= parallel_cost.saturating_mul(2)
+                } else {
+                    parallel_cost >= serial_cost.saturating_mul(2)
+                };
+            let probe_every = if clearly_disfavored {
+                SLOW_PROBE_EVERY
+            } else {
+                PROBE_EVERY
+            };
+            return if bucket.candidates % probe_every == 0 {
                 !parallel_faster
             } else {
                 parallel_faster
@@ -908,27 +926,51 @@ mod tests {
     }
 
     #[test]
-    fn periodic_probes_resample_the_disfavored_path_in_both_directions() {
+    fn strongly_disfavored_paths_are_still_resampled_but_less_often() {
         let shape = PrefixTopology {
             changing_sources: 2,
             raw_contacts: 512,
             effective_contacts: 512,
             distinct_targets: 256,
         };
-        let mut fast = DisjointAdmissionProfile::default();
-        let mut slow = DisjointAdmissionProfile::default();
+        let mut parallel_fast = DisjointAdmissionProfile::default();
+        let mut serial_fast = DisjointAdmissionProfile::default();
         for _ in 0..2 {
-            fast.observe(shape, false, Duration::from_millis(8));
-            fast.observe(shape, true, Duration::from_millis(2));
-            slow.observe(shape, false, Duration::from_millis(2));
-            slow.observe(shape, true, Duration::from_millis(8));
+            parallel_fast.observe(shape, false, Duration::from_millis(8));
+            parallel_fast.observe(shape, true, Duration::from_millis(2));
+            serial_fast.observe(shape, false, Duration::from_millis(2));
+            serial_fast.observe(shape, true, Duration::from_millis(8));
+        }
+        for _ in 0..SLOW_PROBE_EVERY - 1 {
+            assert!(parallel_fast.should_parallel(shape));
+            assert!(!serial_fast.should_parallel(shape));
+        }
+        assert!(!parallel_fast.should_parallel(shape)); // Refresh serial baseline.
+        assert!(serial_fast.should_parallel(shape)); // Refresh parallel baseline.
+    }
+
+    #[test]
+    fn close_costs_keep_frequent_bounded_bidirectional_probes() {
+        let shape = PrefixTopology {
+            changing_sources: 2,
+            raw_contacts: 512,
+            effective_contacts: 512,
+            distinct_targets: 256,
+        };
+        let mut parallel_fast = DisjointAdmissionProfile::default();
+        let mut serial_fast = DisjointAdmissionProfile::default();
+        for _ in 0..2 {
+            parallel_fast.observe(shape, false, Duration::from_millis(10));
+            parallel_fast.observe(shape, true, Duration::from_millis(7));
+            serial_fast.observe(shape, false, Duration::from_millis(7));
+            serial_fast.observe(shape, true, Duration::from_millis(10));
         }
         for _ in 0..PROBE_EVERY - 1 {
-            assert!(fast.should_parallel(shape));
-            assert!(!slow.should_parallel(shape));
+            assert!(parallel_fast.should_parallel(shape));
+            assert!(!serial_fast.should_parallel(shape));
         }
-        assert!(!fast.should_parallel(shape)); // Refresh serial baseline.
-        assert!(slow.should_parallel(shape)); // Refresh parallel baseline.
+        assert!(!parallel_fast.should_parallel(shape));
+        assert!(serial_fast.should_parallel(shape));
     }
 
     #[test]
