@@ -444,6 +444,19 @@ mod tests {
     }
 
     #[test]
+    fn isolated_rechecks_always_advance_after_large_graph_serial_fallback() {
+        let graph = eight_disjoint_sources();
+        let mut runtime = EventRuntime::new(&graph, 1, 32).unwrap();
+        runtime.schedule_drive(0, 10, true).unwrap();
+        let first = runtime.run_disjoint_parallel_commits(2, 4).unwrap();
+        assert_eq!(first.work.events_consumed, 2);
+        assert_eq!(first.work.state_transitions, 2);
+        assert_eq!(first.serial_events, 2);
+        assert_eq!(runtime.pending_count(), 0);
+        assert_eq!(runtime.audit_incoming(), Ok(true));
+    }
+
+    #[test]
     fn worker_count_one_delegates_to_exact_serial_engine() {
         let graph = eight_disjoint_sources();
         let drives = [(0, 10, true), (0, 11, true)];
