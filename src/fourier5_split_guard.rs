@@ -1,11 +1,18 @@
 //! Explicit disjointness guard for synthetic sequential calibration and holdout.
 //! Sample identifiers are caller-supplied opaque IDs, not biological neuron IDs.
 //! A repeated identifier across splits is rejected before any policy is fitted.
+use crate::fourier5_sequential_cost_policy::{
+    SequentialCost, SequentialCostPolicy, SequentialHoldoutAudit, SequentialPolicyError,
+};
 use std::collections::BTreeSet;
-use crate::fourier5_sequential_cost_policy::{SequentialCost, SequentialCostPolicy, SequentialPolicyError, SequentialHoldoutAudit};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Split { Train, Valid, Test, Ood }
+pub enum Split {
+    Train,
+    Valid,
+    Test,
+    Ood,
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct TaggedCost {
@@ -25,7 +32,9 @@ pub enum SplitError {
 }
 
 impl From<SequentialPolicyError> for SplitError {
-    fn from(error: SequentialPolicyError) -> Self { Self::Policy(error) }
+    fn from(error: SequentialPolicyError) -> Self {
+        Self::Policy(error)
+    }
 }
 
 /// Fail closed on repeated IDs even within one split: no reused observation
@@ -38,11 +47,21 @@ pub fn fit_disjoint_valid(
     let mut seen = BTreeSet::new();
     let mut valid = Vec::new();
     for row in rows {
-        if !seen.insert(row.sample_id) { return Err(SplitError::DuplicateSample); }
-        if row.split == Split::Valid { valid.push(row.cost); }
+        if !seen.insert(row.sample_id) {
+            return Err(SplitError::DuplicateSample);
+        }
+        if row.split == Split::Valid {
+            valid.push(row.cost);
+        }
     }
-    if valid.is_empty() { return Err(SplitError::EmptyValid); }
-    Ok(SequentialCostPolicy::fit_valid(&valid, min_samples, margin_ns)?)
+    if valid.is_empty() {
+        return Err(SplitError::EmptyValid);
+    }
+    Ok(SequentialCostPolicy::fit_valid(
+        &valid,
+        min_samples,
+        margin_ns,
+    )?)
 }
 
 /// Audit one held-out split without updating the VALID-frozen policy.
@@ -58,14 +77,15 @@ pub fn audit_disjoint_holdout(
     let mut seen = BTreeSet::new();
     let mut audits = Vec::new();
     for row in rows {
-        if !seen.insert(row.sample_id) { return Err(SplitError::DuplicateSample); }
+        if !seen.insert(row.sample_id) {
+            return Err(SplitError::DuplicateSample);
+        }
         if row.split == split {
             audits.push(policy.audit_holdout(&[row.cost], row.cache_current)?);
         }
     }
     Ok(audits)
 }
-
 
 /// Audit a held-out partition against the *same* calibration manifest.
 /// The original audit function only checks duplicates within its input slice;
@@ -121,16 +141,27 @@ mod tests {
     use crate::fourier5_conservative_policy::Engine;
     fn row(id: u128, split: Split, full: u64, inc: u64) -> TaggedCost {
         TaggedCost {
-            sample_id: id, split, cache_current: true,
-            cost: SequentialCost { gates: 128, cone_gates: 4, full_ns: full,
-                incremental_ns: inc, cache_update_ns: 5,
-                same_output: true, same_decision: true },
+            sample_id: id,
+            split,
+            cache_current: true,
+            cost: SequentialCost {
+                gates: 128,
+                cone_gates: 4,
+                full_ns: full,
+                incremental_ns: inc,
+                cache_update_ns: 5,
+                same_output: true,
+                same_decision: true,
+            },
         }
     }
     #[test]
     fn duplicate_id_across_splits_is_rejected() {
         let rows = [row(1, Split::Valid, 100, 10), row(1, Split::Test, 1, 100)];
-        assert!(matches!(fit_disjoint_valid(&rows, 1, 0), Err(SplitError::DuplicateSample)));
+        assert!(matches!(
+            fit_disjoint_valid(&rows, 1, 0),
+            Err(SplitError::DuplicateSample)
+        ));
     }
     #[test]
     fn test_regression_cannot_change_valid_selection() {
@@ -139,17 +170,30 @@ mod tests {
         assert_eq!(policy.select(128, 4, true), Engine::Incremental);
         let audits = audit_disjoint_holdout(&policy, &rows, Split::Test).unwrap();
         assert_eq!(audits.len(), 1);
-        assert_eq!(audits[0].cells.iter().map(|c| c.latency_regressions).sum::<u64>(), 1);
+        assert_eq!(
+            audits[0]
+                .cells
+                .iter()
+                .map(|c| c.latency_regressions)
+                .sum::<u64>(),
+            1
+        );
         assert_eq!(policy.select(128, 4, true), Engine::Incremental);
     }
     #[test]
     fn train_and_ood_never_fit_valid() {
         let rows = [row(1, Split::Train, 100, 10), row(2, Split::Ood, 100, 10)];
-        assert!(matches!(fit_disjoint_valid(&rows, 1, 0), Err(SplitError::EmptyValid)));
+        assert!(matches!(
+            fit_disjoint_valid(&rows, 1, 0),
+            Err(SplitError::EmptyValid)
+        ));
     }
     #[test]
     fn calibration_overlap_is_rejected_even_when_holdout_is_passed_separately() {
-        let calibration = [row(11, Split::Train, 100, 10), row(12, Split::Valid, 100, 10)];
+        let calibration = [
+            row(11, Split::Train, 100, 10),
+            row(12, Split::Valid, 100, 10),
+        ];
         let policy = fit_disjoint_valid(&calibration, 1, 0).unwrap();
         let overlap = [row(12, Split::Test, 100, 10)];
         assert!(matches!(
@@ -159,7 +203,9 @@ mod tests {
         let clean = [row(13, Split::Test, 100, 10)];
         assert_eq!(
             audit_holdout_with_calibration_manifest(&policy, &calibration, &clean, Split::Test)
-                .unwrap().len(), 1
+                .unwrap()
+                .len(),
+            1
         );
         assert_eq!(policy.select(128, 4, true), Engine::Incremental);
     }
@@ -174,7 +220,10 @@ mod tests {
         ));
         assert!(matches!(
             audit_holdout_with_calibration_manifest(
-                &policy, &calibration, &[row(2, Split::Valid, 100, 10)], Split::Test
+                &policy,
+                &calibration,
+                &[row(2, Split::Valid, 100, 10)],
+                Split::Test
             ),
             Err(SplitError::UnexpectedSplit)
         ));
@@ -192,14 +241,20 @@ mod tests {
         ));
         let mislabeled = [row(3, Split::Test, 100, 10), row(4, Split::Ood, 100, 10)];
         assert!(matches!(
-            audit_holdout_with_calibration_manifest(&policy, &calibration, &mislabeled, Split::Test),
+            audit_holdout_with_calibration_manifest(
+                &policy,
+                &calibration,
+                &mislabeled,
+                Split::Test
+            ),
             Err(SplitError::UnexpectedSplit)
         ));
         let clean = [row(3, Split::Test, 100, 10), row(4, Split::Test, 100, 10)];
         assert_eq!(
             audit_holdout_with_calibration_manifest(&policy, &calibration, &clean, Split::Test)
-                .unwrap().len(), 2
+                .unwrap()
+                .len(),
+            2
         );
     }
-
 }
