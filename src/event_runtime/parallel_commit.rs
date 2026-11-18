@@ -22,6 +22,9 @@ const MAX_COMMIT_THREADS: usize = 32;
 const EVENTS_PER_THREAD: usize = 32;
 /// Preliminary admission threshold: measured runtime cost, not joule calibration.
 const MIN_PARALLEL_CONTACTS: usize = 65_536;
+/// Sparse target writes cannot amortize two sets of scoped threads even when
+/// the uncached CSR fanout is large. This is a conservative CPU heuristic.
+const MIN_PARALLEL_TARGETS: usize = 1_024;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DisjointCommitWork {
@@ -91,7 +94,7 @@ impl<'g> EventRuntime<'g> {
         while result.work.events_consumed < max_events && !self.pending.is_empty() {
             let allowance = (max_events - result.work.events_consumed)
                 .min(threads.saturating_mul(EVENTS_PER_THREAD));
-            let group = self.disjoint_drive_prefix(allowance);
+            let (group, distinct_targets) = self.disjoint_drive_prefix(allowance);
             // RECHECK does not enter a DRIVE prefix. Always consume the
             // earliest event so that a nonempty queue makes progress.
             if group.is_empty() {
@@ -115,7 +118,10 @@ impl<'g> EventRuntime<'g> {
             // not merely two queued drives (other drives can be no-ops).
             // Compressed cached rows have already paid their CSR scan cost.
             // Do not launch two thread passes for only a handful of pairs.
-            if changing_sources < 2 || work_to_prepare < MIN_PARALLEL_CONTACTS {
+            if changing_sources < 2
+                || work_to_prepare < MIN_PARALLEL_CONTACTS
+                || distinct_targets < MIN_PARALLEL_TARGETS
+            {
                 // A rejected prefix can be consumed in canonical order.
                 // Do not replan the same tiny group after each event.
                 for _ in 0..group.len() {
@@ -223,13 +229,14 @@ impl<'g> EventRuntime<'g> {
     }
 
     /// Select only a true causal prefix: never reorder a conflicting event.
+    /// Return the number of distinct nonzero writable targets for admission.
     /// A source that stays unchanged does not write its outgoing targets.
-    fn disjoint_drive_prefix(&self, limit: usize) -> Vec<(EventKey, bool)> {
+    fn disjoint_drive_prefix(&self, limit: usize) -> (Vec<(EventKey, bool)>, usize) {
         let Some((&(time, phase, _), _)) = self.pending.first_key_value() else {
-            return Vec::new();
+            return (Vec::new(), 0);
         };
         if phase != DRIVE {
-            return Vec::new();
+            return (Vec::new(), 0);
         }
         let mut touched = BTreeSet::new();
         let mut selected = Vec::new();
@@ -250,22 +257,37 @@ impl<'g> EventRuntime<'g> {
                 } else {
                     let first = self.graph.offsets[source] as usize;
                     let last = self.graph.offsets[source + 1] as usize;
+                    // Avoid repeated BTreeSet lookups for adjacent CSR rows
+                    // with the same nonzero target. Zeros do not create writes.
+                    let mut last_target = None;
                     if (first..last).any(|edge| {
-                        self.graph.counts[edge] != 0
-                            && touched.contains(&(self.graph.targets[edge] as usize))
+                        if self.graph.counts[edge] == 0 {
+                            return false;
+                        }
+                        let target = self.graph.targets[edge] as usize;
+                        if last_target == Some(target) {
+                            return false;
+                        }
+                        last_target = Some(target);
+                        touched.contains(&target)
                     }) {
                         break;
                     }
+                    let mut last_target = None;
                     for edge in first..last {
                         if self.graph.counts[edge] != 0 {
-                            touched.insert(self.graph.targets[edge] as usize);
+                            let target = self.graph.targets[edge] as usize;
+                            if last_target != Some(target) {
+                                touched.insert(target);
+                                last_target = Some(target);
+                            }
                         }
                     }
                 }
             }
             selected.push((key, requested));
         }
-        selected
+        (selected, touched.len())
     }
 
     /// Returns None when exact sequential preflight would encounter an error.
@@ -439,8 +461,8 @@ mod tests {
                 engine.schedule_drive(0, id, true).unwrap();
             }
         }
-        assert_eq!(reference.disjoint_drive_prefix(8).len(), 1);
-        assert_eq!(cached.disjoint_drive_prefix(8).len(), 1);
+        assert_eq!(reference.disjoint_drive_prefix(8), (vec![((0, DRIVE, 0), true)], 1));
+        assert_eq!(cached.disjoint_drive_prefix(8), (vec![((0, DRIVE, 0), true)], 1));
         let expected = reference.run(64).unwrap();
         let actual = cached.run_disjoint_parallel_commits(64, 4).unwrap();
         assert_eq!(actual.work, expected);
@@ -451,16 +473,46 @@ mod tests {
     }
 
     #[test]
-    fn distinct_targets_are_written_by_multiple_threads() {
+    fn few_distinct_targets_skip_threads_despite_large_uncached_fanout() {
         let graph = eight_disjoint_sources();
         let drives = (10..18).map(|id| (0, id, true)).collect::<Vec<_>>();
         let result = compare(&graph, 1, &drives, 20, 64, 4);
-        assert_eq!(result.disjoint_groups, 1);
-        assert_eq!(result.grouped_events, 8);
-        assert_eq!(result.target_counters_written, 8);
-        assert_eq!(result.target_writer_threads, 4);
-        assert_eq!(result.max_group_width, 8);
+        assert_eq!(result.disjoint_groups, 0);
+        assert_eq!(result.target_counters_written, 0);
+        assert_eq!(result.target_writer_threads, 0);
+        assert_eq!(result.serial_events, result.work.events_consumed);
         assert_eq!(result.work.state_transitions, 16);
+        assert_eq!(result.work.contacts_examined, 65_536);
+    }
+
+    #[test]
+    fn many_distinct_targets_still_use_real_parallel_writers() {
+        // 65_536 uncached CSR rows contain 1_024 disjoint weighted targets.
+        // This is deliberately above both thread-admission thresholds.
+        let target_count = MIN_PARALLEL_TARGETS;
+        let node_count = target_count + 2;
+        let mut offsets = vec![65_536; node_count + 1];
+        offsets[0] = 0;
+        offsets[1] = 32_768;
+        let graph = Connectome {
+            ids: (10..10 + node_count as u64).collect(),
+            offsets,
+            targets: (0..2)
+                .flat_map(|source| {
+                    (0..target_count / 2).flat_map(move |target| {
+                        std::iter::repeat_n((2 + source * (target_count / 2) + target) as u32, 64)
+                    })
+                })
+                .collect(),
+            counts: vec![1; 65_536],
+        };
+        graph.validate().unwrap();
+        let result = compare(&graph, 1, &[(0, 10, true), (0, 11, true)], node_count, 2_048, 4);
+        assert_eq!(result.disjoint_groups, 1);
+        assert_eq!(result.grouped_events, 2);
+        assert_eq!(result.target_counters_written, target_count);
+        assert_eq!(result.target_writer_threads, 4);
+        assert_eq!(result.work.contacts_examined, 65_536);
     }
 
     #[test]
@@ -489,15 +541,15 @@ mod tests {
     }
 
     #[test]
-    fn independent_negative_fronts_are_written_in_parallel() {
+    fn independent_negative_fronts_skip_threads_when_writes_are_sparse() {
         let graph = eight_disjoint_sources();
         let mut drives = (10..18).map(|id| (0, id, true)).collect::<Vec<_>>();
         drives.extend((10..18).map(|id| (3, id, false)));
         let stats = compare(&graph, 1, &drives, 100, 64, 4);
-        assert_eq!(stats.disjoint_groups, 2);
+        assert_eq!(stats.disjoint_groups, 0);
         assert_eq!(stats.work.rising_transitions, 16);
         assert_eq!(stats.work.falling_transitions, 16);
-        assert_eq!(stats.target_counters_written, 16);
+        assert_eq!(stats.target_counters_written, 0);
     }
 
     #[test]
