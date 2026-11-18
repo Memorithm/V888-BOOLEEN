@@ -127,13 +127,17 @@ pub fn measure_sequential_step_balanced<T: Eq>(
     Ok(PairedStep {
         verified_output: reference,
         cost: SequentialCost {
-            gates, cone_gates, full_ns, incremental_ns, cache_update_ns,
-            same_output, same_decision: decision_equal,
+            gates,
+            cone_gates,
+            full_ns,
+            incremental_ns,
+            cache_update_ns,
+            same_output,
+            same_decision: decision_equal,
         },
         vm_hwm_kib: linux_vm_hwm_kib(),
     })
 }
-
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SequentialBatch<T> {
@@ -178,7 +182,10 @@ pub fn measure_sequential_batch<T: Eq>(
 ) -> Result<SequentialBatch<T>, ProbeError> {
     // Validate the entire planned sequence before any callback can mutate state.
     // A late malformed geometry must not leave a partially applied workload.
-    if geometries.iter().any(|&(gates, cone)| gates == 0 || cone > gates) {
+    if geometries
+        .iter()
+        .any(|&(gates, cone)| gates == 0 || cone > gates)
+    {
         return Err(ProbeError::FullEvaluation);
     }
     let batch_start = Instant::now();
@@ -195,7 +202,9 @@ pub fn measure_sequential_batch<T: Eq>(
             || incremental(index),
             |a, b| same_decision(a, b),
         )?;
-        full_ns = full_ns.checked_add(step.cost.full_ns).ok_or(ProbeError::FullEvaluation)?;
+        full_ns = full_ns
+            .checked_add(step.cost.full_ns)
+            .ok_or(ProbeError::FullEvaluation)?;
         incremental_ns = incremental_ns
             .checked_add(step.cost.incremental_ns)
             .ok_or(ProbeError::IncrementalEvaluation)?;
@@ -217,7 +226,6 @@ pub fn measure_sequential_batch<T: Eq>(
         vm_hwm_kib: linux_vm_hwm_kib(),
     })
 }
-
 
 /// Conservative post-hoc cost accounting for a verified paired sequence.
 /// A mismatch cannot be counted as a successful incremental decision.
@@ -247,7 +255,8 @@ impl<T> SequentialBatch<T> {
             let cost = &step.cost;
             result.full_reference_ns += u128::from(cost.full_ns);
             if select_incremental(cost.gates, cost.cone_gates, index)
-                && cost.same_output && cost.same_decision
+                && cost.same_output
+                && cost.same_decision
             {
                 result.safe_incremental_steps += 1;
                 let cache_ns = u128::from(cost.cache_update_ns);
@@ -274,24 +283,42 @@ mod verified_routing_tests {
             |i| Ok(i as u8),
             |i| Ok((i + usize::from(i == 1)) as u8),
             |a, b| a == b,
-        ).unwrap();
+        )
+        .unwrap();
         let report = batch.verified_routing_cost(|_, _, _| true);
         assert_eq!(report.safe_incremental_steps, 2);
         assert_eq!(report.fallback_full_steps, 1);
-        let oracle = batch.steps.iter().map(|s| u128::from(s.cost.full_ns)).sum::<u128>();
+        let oracle = batch
+            .steps
+            .iter()
+            .map(|s| u128::from(s.cost.full_ns))
+            .sum::<u128>();
         assert_eq!(report.full_reference_ns, oracle);
-        let expected = batch.steps.iter().enumerate().map(|(i, s)| {
-            if i == 1 { u128::from(s.cost.full_ns) }
-            else { u128::from(s.cost.incremental_ns) + u128::from(s.cost.cache_update_ns) }
-        }).sum::<u128>();
+        let expected = batch
+            .steps
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                if i == 1 {
+                    u128::from(s.cost.full_ns)
+                } else {
+                    u128::from(s.cost.incremental_ns) + u128::from(s.cost.cache_update_ns)
+                }
+            })
+            .sum::<u128>();
         assert_eq!(report.safe_selected_ns, expected);
     }
 
     #[test]
     fn disabled_route_never_charges_cache_refresh() {
         let batch = measure_sequential_batch(
-            &[(128, 4)], |_| Ok(()), |_| Ok(7_u8), |_| Ok(7_u8), |a, b| a == b,
-        ).unwrap();
+            &[(128, 4)],
+            |_| Ok(()),
+            |_| Ok(7_u8),
+            |_| Ok(7_u8),
+            |a, b| a == b,
+        )
+        .unwrap();
         let report = batch.verified_routing_cost(|_, _, _| false);
         assert_eq!(report.safe_incremental_steps, 0);
         assert_eq!(report.fallback_full_steps, 1);
@@ -305,27 +332,49 @@ mod tests {
     use super::*;
     use std::cell::Cell;
 
-
     #[test]
     fn heterogeneous_batch_alternates_and_preserves_full_oracle() {
         let order = std::cell::RefCell::new(Vec::new());
         let batch = measure_sequential_batch(
             &[(64, 1), (128, 7), (1_562_501, 35)],
-            |i| { order.borrow_mut().push((i, "cache")); Ok(()) },
-            |i| { order.borrow_mut().push((i, "full")); Ok(i as u8) },
+            |i| {
+                order.borrow_mut().push((i, "cache"));
+                Ok(())
+            },
+            |i| {
+                order.borrow_mut().push((i, "full"));
+                Ok(i as u8)
+            },
             |i| {
                 order.borrow_mut().push((i, "incremental"));
                 Ok((i + usize::from(i == 1)) as u8)
             },
             |a, b| a == b,
-        ).unwrap();
-        assert_eq!(batch.steps.iter().map(|s| s.verified_output).collect::<Vec<_>>(), vec![0, 1, 2]);
+        )
+        .unwrap();
+        assert_eq!(
+            batch
+                .steps
+                .iter()
+                .map(|s| s.verified_output)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
         assert_eq!(batch.disagreements, 1);
-        assert_eq!(*order.borrow(), vec![
-            (0, "cache"), (0, "full"), (0, "incremental"),
-            (1, "cache"), (1, "incremental"), (1, "full"),
-            (2, "cache"), (2, "full"), (2, "incremental"),
-        ]);
+        assert_eq!(
+            *order.borrow(),
+            vec![
+                (0, "cache"),
+                (0, "full"),
+                (0, "incremental"),
+                (1, "cache"),
+                (1, "incremental"),
+                (1, "full"),
+                (2, "cache"),
+                (2, "full"),
+                (2, "incremental"),
+            ]
+        );
         assert!(batch.steps_per_second().unwrap() > 0.0);
         assert!(batch.full_ns > 0 && batch.incremental_ns > 0 && batch.cache_update_ns > 0);
     }
@@ -334,11 +383,26 @@ mod tests {
     fn batch_rejects_invalid_geometry_before_callbacks_and_empty_has_no_rate() {
         let calls = Cell::new(0);
         let empty = measure_sequential_batch::<u8>(
-            &[], |_| { calls.set(1); Ok(()) }, |_| Ok(0), |_| Ok(0), |a, b| a == b,
-        ).unwrap();
+            &[],
+            |_| {
+                calls.set(1);
+                Ok(())
+            },
+            |_| Ok(0),
+            |_| Ok(0),
+            |a, b| a == b,
+        )
+        .unwrap();
         assert!(empty.steps_per_second().is_none());
         let error = measure_sequential_batch::<u8>(
-            &[(0, 0)], |_| { calls.set(1); Ok(()) }, |_| Ok(0), |_| Ok(0), |a, b| a == b,
+            &[(0, 0)],
+            |_| {
+                calls.set(1);
+                Ok(())
+            },
+            |_| Ok(0),
+            |_| Ok(0),
+            |a, b| a == b,
         );
         assert_eq!(error, Err(ProbeError::FullEvaluation));
         assert_eq!(calls.get(), 0);
@@ -349,9 +413,18 @@ mod tests {
         let calls = Cell::new(0_u32);
         let result = measure_sequential_batch::<u8>(
             &[(64, 1), (128, 8), (16, 17)],
-            |_| { calls.set(calls.get() + 1); Ok(()) },
-            |_| { calls.set(calls.get() + 1); Ok(1) },
-            |_| { calls.set(calls.get() + 1); Ok(1) },
+            |_| {
+                calls.set(calls.get() + 1);
+                Ok(())
+            },
+            |_| {
+                calls.set(calls.get() + 1);
+                Ok(1)
+            },
+            |_| {
+                calls.set(calls.get() + 1);
+                Ok(1)
+            },
             |a, b| a == b,
         );
         assert_eq!(result, Err(ProbeError::FullEvaluation));
@@ -363,12 +436,24 @@ mod tests {
         for first in [false, true] {
             let order = std::cell::RefCell::new(Vec::new());
             let step = measure_sequential_step_balanced(
-                128, 4, first,
-                || { order.borrow_mut().push("cache"); Ok(()) },
-                || { order.borrow_mut().push("full"); Ok(7_u8) },
-                || { order.borrow_mut().push("incremental"); Ok(8_u8) },
+                128,
+                4,
+                first,
+                || {
+                    order.borrow_mut().push("cache");
+                    Ok(())
+                },
+                || {
+                    order.borrow_mut().push("full");
+                    Ok(7_u8)
+                },
+                || {
+                    order.borrow_mut().push("incremental");
+                    Ok(8_u8)
+                },
                 |a, b| a == b,
-            ).unwrap();
+            )
+            .unwrap();
             let expected = if first {
                 vec!["cache", "incremental", "full"]
             } else {
@@ -384,12 +469,23 @@ mod tests {
     fn oracle_never_returns_disagreeing_incremental_value() {
         let rebuilt = Cell::new(false);
         let step = measure_sequential_step(
-            128, 4,
-            || { rebuilt.set(true); Ok(()) },
-            || { assert!(rebuilt.get()); Ok(7_u8) },
-            || { assert!(rebuilt.get()); Ok(8_u8) },
+            128,
+            4,
+            || {
+                rebuilt.set(true);
+                Ok(())
+            },
+            || {
+                assert!(rebuilt.get());
+                Ok(7_u8)
+            },
+            || {
+                assert!(rebuilt.get());
+                Ok(8_u8)
+            },
             |a, b| a == b,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(step.verified_output, 7);
         assert!(!step.cost.same_output);
         assert!(!step.cost.same_decision);
@@ -402,10 +498,17 @@ mod tests {
     fn failed_cache_rebuild_prevents_both_engines() {
         let calls = Cell::new(0);
         let result = measure_sequential_step::<u8>(
-            64, 1,
+            64,
+            1,
             || Err(ProbeError::CacheBuild),
-            || { calls.set(calls.get() + 1); Ok(1) },
-            || { calls.set(calls.get() + 1); Ok(1) },
+            || {
+                calls.set(calls.get() + 1);
+                Ok(1)
+            },
+            || {
+                calls.set(calls.get() + 1);
+                Ok(1)
+            },
             |a, b| a == b,
         );
         assert_eq!(result, Err(ProbeError::CacheBuild));
@@ -416,8 +519,12 @@ mod tests {
     fn invalid_geometry_does_not_mutate_cache() {
         let calls = Cell::new(0);
         let result = measure_sequential_step::<u8>(
-            4, 5,
-            || { calls.set(1); Ok(()) },
+            4,
+            5,
+            || {
+                calls.set(1);
+                Ok(())
+            },
             || Ok(0),
             || Ok(0),
             |a, b| a == b,
@@ -426,7 +533,6 @@ mod tests {
         assert_eq!(calls.get(), 0);
     }
 }
-
 
 /// Execute a policy-selected intervention with a mandatory independent Full
 /// oracle. This is a correctness gate, not an accelerated production dispatcher:
@@ -467,15 +573,19 @@ pub fn dispatch_sequential_verified<T: Eq>(
     if !select_incremental {
         let output = full().map_err(|_| ProbeError::FullEvaluation)?;
         return Ok(VerifiedDispatch {
-            output, route: VerifiedRoute::Full,
-            elapsed_ns: elapsed_ns(started), vm_hwm_kib: linux_vm_hwm_kib(),
+            output,
+            route: VerifiedRoute::Full,
+            elapsed_ns: elapsed_ns(started),
+            vm_hwm_kib: linux_vm_hwm_kib(),
         });
     }
     if rebuild_cache().is_err() {
         let output = full().map_err(|_| ProbeError::FullEvaluation)?;
         return Ok(VerifiedDispatch {
-            output, route: VerifiedRoute::CacheRebuildFailed,
-            elapsed_ns: elapsed_ns(started), vm_hwm_kib: linux_vm_hwm_kib(),
+            output,
+            route: VerifiedRoute::CacheRebuildFailed,
+            elapsed_ns: elapsed_ns(started),
+            vm_hwm_kib: linux_vm_hwm_kib(),
         });
     }
     // The independent oracle must not depend on the incremental result.
@@ -505,12 +615,21 @@ mod verified_dispatch_tests {
     fn unselected_route_never_builds_cache_or_runs_incremental() {
         let calls = Cell::new(0);
         let result = dispatch_sequential_verified(
-            64, 2, false,
-            || { calls.set(calls.get() + 1); Ok(()) },
+            64,
+            2,
+            false,
+            || {
+                calls.set(calls.get() + 1);
+                Ok(())
+            },
             || Ok(7_u8),
-            || { calls.set(calls.get() + 1); Ok(9_u8) },
+            || {
+                calls.set(calls.get() + 1);
+                Ok(9_u8)
+            },
             |a, b| a == b,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(result.output, 7);
         assert_eq!(result.route, VerifiedRoute::Full);
         assert_eq!(calls.get(), 0);
@@ -520,10 +639,21 @@ mod verified_dispatch_tests {
     fn mismatch_and_incremental_error_cannot_change_oracle_decision() {
         for fail in [false, true] {
             let result = dispatch_sequential_verified(
-                128, 8, true, || Ok(()), || Ok(3_u8),
-                || if fail { Err(ProbeError::IncrementalEvaluation) } else { Ok(4_u8) },
+                128,
+                8,
+                true,
+                || Ok(()),
+                || Ok(3_u8),
+                || {
+                    if fail {
+                        Err(ProbeError::IncrementalEvaluation)
+                    } else {
+                        Ok(4_u8)
+                    }
+                },
                 |a, b| a == b,
-            ).unwrap();
+            )
+            .unwrap();
             assert_eq!(result.output, 3);
             assert_eq!(result.route, VerifiedRoute::IncrementalRejected);
         }
@@ -533,9 +663,18 @@ mod verified_dispatch_tests {
     fn cache_failure_falls_back_to_full_without_incremental_call() {
         let called = Cell::new(false);
         let result = dispatch_sequential_verified(
-            128, 8, true, || Err(ProbeError::CacheBuild), || Ok(5_u8),
-            || { called.set(true); Ok(5_u8) }, |a, b| a == b,
-        ).unwrap();
+            128,
+            8,
+            true,
+            || Err(ProbeError::CacheBuild),
+            || Ok(5_u8),
+            || {
+                called.set(true);
+                Ok(5_u8)
+            },
+            |a, b| a == b,
+        )
+        .unwrap();
         assert_eq!(result.route, VerifiedRoute::CacheRebuildFailed);
         assert_eq!(result.output, 5);
         assert!(!called.get());
@@ -544,15 +683,20 @@ mod verified_dispatch_tests {
     #[test]
     fn valid_candidate_still_returns_independent_full_output() {
         let result = dispatch_sequential_verified(
-            256, 4, true, || Ok(()), || Ok(11_u8), || Ok(11_u8),
+            256,
+            4,
+            true,
+            || Ok(()),
+            || Ok(11_u8),
+            || Ok(11_u8),
             |a, b| a == b,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(result.route, VerifiedRoute::IncrementalVerified);
         assert_eq!(result.output, 11);
         assert!(result.elapsed_ns > 0);
     }
 }
-
 
 /// Exact cache-generation guard for sequential accepted interventions.
 /// Each accepted mutation invalidates the previous cache; only a rebuild
@@ -579,7 +723,10 @@ impl Default for SequentialCacheEpoch {
 impl SequentialCacheEpoch {
     #[must_use]
     pub const fn new() -> Self {
-        Self { generation: 0, cached_generation: None }
+        Self {
+            generation: 0,
+            cached_generation: None,
+        }
     }
 
     #[must_use]
@@ -595,7 +742,9 @@ impl SequentialCacheEpoch {
     }
 
     pub fn accept_intervention(&mut self) -> Result<u64, CacheEpochError> {
-        let next = self.generation.checked_add(1)
+        let next = self
+            .generation
+            .checked_add(1)
             .ok_or(CacheEpochError::GenerationExhausted)?;
         self.generation = next;
         self.cached_generation = None;
@@ -642,7 +791,10 @@ mod sequential_cache_epoch_tests {
         let previous = guard.rebuild_token();
         guard.accept_intervention().unwrap();
         assert!(!guard.route_incremental(true));
-        assert_eq!(guard.commit_rebuild(previous), Err(CacheEpochError::StaleRebuild));
+        assert_eq!(
+            guard.commit_rebuild(previous),
+            Err(CacheEpochError::StaleRebuild)
+        );
         assert!(!guard.incremental_allowed());
         guard.commit_rebuild(guard.rebuild_token()).unwrap();
         assert!(guard.route_incremental(true));
@@ -665,11 +817,13 @@ mod sequential_cache_epoch_tests {
         let old = guard.rebuild_token();
         guard.accept_intervention().unwrap();
         guard.accept_intervention().unwrap();
-        assert_eq!(guard.commit_rebuild(old), Err(CacheEpochError::StaleRebuild));
+        assert_eq!(
+            guard.commit_rebuild(old),
+            Err(CacheEpochError::StaleRebuild)
+        );
         assert!(!guard.incremental_allowed());
     }
 }
-
 
 /// Bind the verified dispatcher to an exact cache generation. A cache rebuild
 /// failure routes to Full; no Incremental result escapes without a Full oracle.
@@ -696,11 +850,23 @@ pub fn dispatch_sequential_epoch_verified<T: Eq>(
         rebuild_cache().is_ok() && epoch.commit_rebuild(token).is_ok()
     };
     let result = dispatch_sequential_verified(
-        gates, cone_gates, ready, || Ok(()), full, incremental, same_decision,
+        gates,
+        cone_gates,
+        ready,
+        || Ok(()),
+        full,
+        incremental,
+        same_decision,
     );
     // A mismatching candidate is evidence that the cache or incremental engine
     // cannot be trusted for this generation. Never reuse it without rebuilding.
-    if matches!(&result, Ok(VerifiedDispatch { route: VerifiedRoute::IncrementalRejected, .. }) | Err(_)) {
+    if matches!(
+        &result,
+        Ok(VerifiedDispatch {
+            route: VerifiedRoute::IncrementalRejected,
+            ..
+        }) | Err(_)
+    ) {
         epoch.invalidate_cache();
     }
     result
@@ -720,10 +886,19 @@ mod epoch_verified_dispatch_tests {
                 epoch.accept_intervention().unwrap();
             }
             let result = dispatch_sequential_epoch_verified(
-                &mut epoch, 128, 4, true,
-                || { builds.set(builds.get() + 1); Ok(()) },
-                || Ok(7_u8), || Ok(7_u8), |a, b| a == b,
-            ).unwrap();
+                &mut epoch,
+                128,
+                4,
+                true,
+                || {
+                    builds.set(builds.get() + 1);
+                    Ok(())
+                },
+                || Ok(7_u8),
+                || Ok(7_u8),
+                |a, b| a == b,
+            )
+            .unwrap();
             assert_eq!(result.route, VerifiedRoute::IncrementalVerified);
             assert_eq!(builds.get(), expected);
         }
@@ -734,12 +909,19 @@ mod epoch_verified_dispatch_tests {
         let mut epoch = SequentialCacheEpoch::new();
         let calls = Cell::new(0);
         let result = dispatch_sequential_epoch_verified(
-            &mut epoch, 128, 4, true,
+            &mut epoch,
+            128,
+            4,
+            true,
             || Err(ProbeError::CacheBuild),
             || Ok(7_u8),
-            || { calls.set(1); Ok(8_u8) },
+            || {
+                calls.set(1);
+                Ok(8_u8)
+            },
             |a, b| a == b,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(result.route, VerifiedRoute::Full);
         assert_eq!(result.output, 7);
         assert_eq!(calls.get(), 0);
@@ -751,17 +933,28 @@ mod epoch_verified_dispatch_tests {
         let mut epoch = SequentialCacheEpoch::new();
         let calls = Cell::new(0);
         let result = dispatch_sequential_epoch_verified(
-            &mut epoch, 4, 5, true,
-            || { calls.set(1); Ok(()) },
-            || { calls.set(1); Ok(0_u8) },
-            || { calls.set(1); Ok(0_u8) },
+            &mut epoch,
+            4,
+            5,
+            true,
+            || {
+                calls.set(1);
+                Ok(())
+            },
+            || {
+                calls.set(1);
+                Ok(0_u8)
+            },
+            || {
+                calls.set(1);
+                Ok(0_u8)
+            },
             |a, b| a == b,
         );
         assert_eq!(result, Err(ProbeError::FullEvaluation));
         assert_eq!(calls.get(), 0);
     }
 }
-
 
 #[cfg(test)]
 mod epoch_quarantine_tests {
@@ -773,18 +966,36 @@ mod epoch_quarantine_tests {
         let mut epoch = SequentialCacheEpoch::new();
         let rebuilds = Cell::new(0);
         let first = dispatch_sequential_epoch_verified(
-            &mut epoch, 128, 4, true,
-            || { rebuilds.set(rebuilds.get() + 1); Ok(()) },
-            || Ok(7_u8), || Ok(8_u8), |a, b| a == b,
-        ).unwrap();
+            &mut epoch,
+            128,
+            4,
+            true,
+            || {
+                rebuilds.set(rebuilds.get() + 1);
+                Ok(())
+            },
+            || Ok(7_u8),
+            || Ok(8_u8),
+            |a, b| a == b,
+        )
+        .unwrap();
         assert_eq!(first.output, 7);
         assert_eq!(first.route, VerifiedRoute::IncrementalRejected);
         assert!(!epoch.incremental_allowed());
         let second = dispatch_sequential_epoch_verified(
-            &mut epoch, 128, 4, true,
-            || { rebuilds.set(rebuilds.get() + 1); Ok(()) },
-            || Ok(7_u8), || Ok(7_u8), |a, b| a == b,
-        ).unwrap();
+            &mut epoch,
+            128,
+            4,
+            true,
+            || {
+                rebuilds.set(rebuilds.get() + 1);
+                Ok(())
+            },
+            || Ok(7_u8),
+            || Ok(7_u8),
+            |a, b| a == b,
+        )
+        .unwrap();
         assert_eq!(second.route, VerifiedRoute::IncrementalVerified);
         assert_eq!(rebuilds.get(), 2);
         assert!(epoch.incremental_allowed());
@@ -795,10 +1006,14 @@ mod epoch_quarantine_tests {
         let mut epoch = SequentialCacheEpoch::new();
         epoch.commit_rebuild(epoch.rebuild_token()).unwrap();
         let result = dispatch_sequential_epoch_verified::<u8>(
-            &mut epoch, 128, 4, true,
+            &mut epoch,
+            128,
+            4,
+            true,
             || panic!("current cache must not be rebuilt"),
             || Err(ProbeError::FullEvaluation),
-            || Ok(7), |a, b| a == b,
+            || Ok(7),
+            |a, b| a == b,
         );
         assert_eq!(result, Err(ProbeError::FullEvaluation));
         assert!(!epoch.incremental_allowed());
