@@ -36,7 +36,8 @@ struct Observation {
     full_ns: u64,
     incremental_ns: u64,
     refresh_ns: u64,
-    equal: bool,
+    output_equal: bool,
+    decision_equal: bool,
     vm_hwm_kib: u64,
 }
 
@@ -49,7 +50,8 @@ fn parse(line: &str) -> Result<Observation, String> {
         split: fields[0].into(), sequence: number(1)?, epoch: number(2)?,
         gates: number(3)?, cone: number(4)?, full_ns: number(5)?,
         incremental_ns: number(6)?, refresh_ns: number(7)?,
-        equal: fields[8] == fields[9] && fields[10] == fields[11],
+        output_equal: fields[8] == fields[9],
+        decision_equal: fields[10] == fields[11],
         vm_hwm_kib: number(12)?,
     };
     if !matches!(fields[8], "0" | "1") || !matches!(fields[9], "0" | "1")
@@ -63,7 +65,7 @@ fn parse(line: &str) -> Result<Observation, String> {
 }
 
 #[derive(Default)]
-struct Totals { count: u64, mismatch: u64, full: u128, selected: u128, incremental: u128, refresh: u128, epoch_transitions: u64, max_hwm: u64, geometry_transitions: u64, min_cone: Option<u64>, max_cone: u64, max_refresh_ns: u64 }
+struct Totals { count: u64, mismatch: u64, output_mismatch: u64, decision_mismatch: u64, full: u128, selected: u128, incremental: u128, refresh: u128, epoch_transitions: u64, max_hwm: u64, geometry_transitions: u64, min_cone: Option<u64>, max_cone: u64, max_refresh_ns: u64 }
 
 fn audit<R: BufRead>(mut reader: R) -> Result<[Totals; 4], String> {
     let mut totals: [Totals; 4] = std::array::from_fn(|_| Totals::default());
@@ -106,12 +108,15 @@ fn audit<R: BufRead>(mut reader: R) -> Result<[Totals; 4], String> {
         t.max_refresh_ns = t.max_refresh_ns.max(o.refresh_ns);
         t.incremental = t.incremental.checked_add(u128::from(o.incremental_ns)).ok_or("incremental timing overflow")?;
         t.refresh = t.refresh.checked_add(u128::from(o.refresh_ns)).ok_or("refresh timing overflow")?;
-        t.mismatch = t.mismatch.checked_add(u64::from(!o.equal)).ok_or("mismatch overflow")?;
+        t.output_mismatch = t.output_mismatch.checked_add(u64::from(!o.output_equal)).ok_or("output mismatch overflow")?;
+        t.decision_mismatch = t.decision_mismatch.checked_add(u64::from(!o.decision_equal)).ok_or("decision mismatch overflow")?;
+        let equal = o.output_equal && o.decision_equal;
+        t.mismatch = t.mismatch.checked_add(u64::from(!equal)).ok_or("mismatch overflow")?;
         t.full = t.full.checked_add(u128::from(o.full_ns)).ok_or("full timing overflow")?;
         // Conservative retrospective accounting: a mismatch is charged Full.
         // Refresh is charged for every successful Incremental evaluation.
         let incremental_total = u128::from(o.incremental_ns) + u128::from(o.refresh_ns);
-        let selected = if o.equal && incremental_total < u128::from(o.full_ns) {
+        let selected = if equal && incremental_total < u128::from(o.full_ns) {
             incremental_total
         } else { u128::from(o.full_ns) };
         t.selected = t.selected.checked_add(selected).ok_or("selected timing overflow")?;
@@ -135,10 +140,10 @@ fn main() {
                 Some(rate) => eprintln!("PHYSICAL_AUDITOR_ROWS_PER_SECOND={rate}"),
                 None => eprintln!("PHYSICAL_AUDITOR_ROWS_PER_SECOND=unavailable"),
             }
-            println!("split,count,mismatches,full_ns,oracle_safe_lower_bound_ns,incremental_ns,refresh_ns,epoch_transitions,oracle_bound_ops_per_second,vm_hwm_kib,geometry_transitions,min_cone,max_cone,max_refresh_ns");
+            println!("split,count,mismatches,output_mismatches,decision_mismatches,full_ns,oracle_safe_lower_bound_ns,incremental_ns,refresh_ns,epoch_transitions,oracle_bound_ops_per_second,vm_hwm_kib,geometry_transitions,min_cone,max_cone,max_refresh_ns");
             for (name, t) in ["TRAIN", "VALID", "TEST", "OOD"].iter().zip(totals.iter()) {
                 let throughput = if t.selected == 0 { 0 } else { u128::from(t.count).saturating_mul(1_000_000_000) / t.selected };
-                println!("{name},{},{},{},{},{},{},{},{},{},{},{},{},{}", t.count, t.mismatch, t.full, t.selected, t.incremental, t.refresh, t.epoch_transitions, throughput, t.max_hwm, t.geometry_transitions, t.min_cone.unwrap_or(0), t.max_cone, t.max_refresh_ns);
+                println!("{name},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}", t.count, t.mismatch, t.output_mismatch, t.decision_mismatch, t.full, t.selected, t.incremental, t.refresh, t.epoch_transitions, throughput, t.max_hwm, t.geometry_transitions, t.min_cone.unwrap_or(0), t.max_cone, t.max_refresh_ns);
             }
             match physical_process_vm_hwm_kib() {
                 Some(kib) => eprintln!("PHYSICAL_AUDITOR_PROCESS_VM_HWM_KIB={kib}"),
@@ -204,6 +209,14 @@ mod tests {
         let mut csv = HEADER.as_bytes().to_vec();
         csv.extend_from_slice(&[0xff, b'\n']);
         assert!(audit(csv.as_slice()).unwrap_err().contains("invalid UTF-8"));
+    }
+    #[test]
+    fn independent_oracle_separates_output_and_decision_disagreements() {
+        let csv = format!("{HEADER}VALID,1,0,100,2,100,10,5,1,0,1,1,10\nVALID,2,0,100,2,100,10,5,1,1,1,0,10\nVALID,3,0,100,2,100,10,5,1,0,1,0,10\nVALID,4,0,100,2,100,10,5,1,1,1,1,10\n");
+        let t = audit(csv.as_bytes()).unwrap();
+        assert_eq!((t[1].count, t[1].output_mismatch, t[1].decision_mismatch, t[1].mismatch), (4, 2, 2, 3));
+        assert_eq!(t[1].selected, 315); // Three rejected probes use Full; only the agreement uses Incremental + refresh.
+        assert_eq!(t[0].mismatch, 0); // Holdout split counters never leak into TRAIN.
     }
     #[test]
     fn stale_epoch_and_bad_geometry_are_rejected() {
