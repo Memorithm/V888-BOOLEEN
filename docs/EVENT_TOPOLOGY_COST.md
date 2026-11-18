@@ -6,11 +6,13 @@ anatomiques. La référence demeure `EventRuntime::run`.
 
 ## Deux modes d'admission
 
-1. `run_disjoint_parallel_commits(max_events, workers)` conserve le
-   profil adaptatif introduit dans la PR #157 : calibration locale de
-   groupes, 12 catégories de topologies et conservation des bornes
-   prudentes au démarrage. `run_disjoint_parallel_commits_with_profile`
-   permet de conserver les observations d'un appel à l'autre.
+1. `run_disjoint_parallel_commits(max_events, workers)` conserve
+   les seuils historiques prudents (65 536 contacts, 1 024 cibles
+   distinctes, deux producteurs), ainsi que le repli séquentiel
+   immédiat si la taille du graphe interdit toute admission.
+   `run_disjoint_parallel_commits_with_profile` sélectionne
+   explicitement l'admission adaptative à 12 classes, avec observations
+   conservées entre les appels.
 2. `run_disjoint_parallel_commits_with_costs(max_events, workers, profile)`
    accepte un **profil de mesures externes** et estime si les deux passes
    de threads peuvent être amorties pour le groupe réellement rencontré.

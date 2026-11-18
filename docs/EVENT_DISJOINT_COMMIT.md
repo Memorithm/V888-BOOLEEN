@@ -63,13 +63,19 @@ les coûts du préfixe causal ou garantir une accélération.
 
 ## Admission mesurée par topologie (profil expérimental)
 
-Le point d'entrée existant `run_disjoint_parallel_commits` utilise désormais
-un profil local créé à chaque appel. Pour réutiliser les mesures entre plusieurs
-tranches ou répétitions indépendantes, l'appelant peut conserver un
-`DisjointAdmissionProfile` et appeler
+Le point d'entrée existant `run_disjoint_parallel_commits` conserve sa
+**politique conservatrice historique** : seuils fixes et repli séquentiel.
+Il évite en outre tout balayage de préfixe lorsque le nombre total de
+neurones ne peut pas atteindre le seuil de 1 024 destinations, même si
+le nombre de lignes CSR du graphe est très élevé.
+
+L'adaptation est **opt-in** : l'appelant conserve un
+`DisjointAdmissionProfile` entre les tranches ou répétitions et appelle
 `run_disjoint_parallel_commits_with_profile(max_events, threads, &mut profile)`.
-Le profil appartient à l'appelant ; il n'existe ni état global mutable, ni
-fichier de calibration, ni modification du graphe.
+Ce second chemin peut explorer les préfixes sous les anciens seuils, mais
+il peut être plus coûteux sur certaines topologies ; aucune accélération
+n'est garantie. Le profil appartient à l'appelant ; il n'existe ni état
+global mutable, ni fichier de calibration, ni modification du graphe.
 
 Chaque **préfixe causal DRIVE sans cible commune** est décrit par des données
 du graphe réellement parcouru :

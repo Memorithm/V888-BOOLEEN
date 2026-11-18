@@ -21,6 +21,7 @@ enum Mode {
     Serial,
     Frontier,
     Disjoint,
+    Adaptive,
 }
 
 impl Mode {
@@ -29,6 +30,7 @@ impl Mode {
             "serial" => Some(Self::Serial),
             "frontier" => Some(Self::Frontier),
             "disjoint" => Some(Self::Disjoint),
+            "adaptive" => Some(Self::Adaptive),
             _ => None,
         }
     }
@@ -38,6 +40,7 @@ impl Mode {
             Self::Serial => "serial",
             Self::Frontier => "frontier",
             Self::Disjoint => "disjoint",
+            Self::Adaptive => "adaptive",
         }
     }
 }
@@ -108,7 +111,7 @@ impl Config {
         for argument in arguments {
             if argument == "--help" {
                 return Err(String::from(
-                    "usage: --mode=serial|frontier|disjoint --shape=disjoint|convergent|wide-disjoint|heavy-disjoint \
+                    "usage: --mode=serial|frontier|disjoint|adaptive --shape=disjoint|convergent|wide-disjoint|heavy-disjoint \
                      --sources=8..4096 --repetitions=1..64 --workers=1..4 --cache=on|off",
                 ));
             }
@@ -269,8 +272,14 @@ fn execute_with_profile(
         ),
         Mode::Disjoint => {
             let report = runtime
-                .run_disjoint_parallel_commits_with_profile(usize::MAX, workers, profile)
+                .run_disjoint_parallel_commits(usize::MAX, workers)
                 .expect("disjoint run");
+            (report.work, report.target_writer_threads)
+        }
+        Mode::Adaptive => {
+            let report = runtime
+                .run_disjoint_parallel_commits_with_profile(usize::MAX, workers, profile)
+                .expect("adaptive run");
             (report.work, report.target_writer_threads)
         }
     };
@@ -419,7 +428,7 @@ mod tests {
         ] {
             let graph = graph(16, shape);
             let baseline = execute(&graph, shape, Mode::Serial, 1, false).outcome;
-            for mode in [Mode::Serial, Mode::Frontier, Mode::Disjoint] {
+            for mode in [Mode::Serial, Mode::Frontier, Mode::Disjoint, Mode::Adaptive] {
                 for cache in [false, true] {
                     let sample = execute(&graph, shape, mode, 4, cache);
                     assert_eq!(sample.outcome, baseline);
