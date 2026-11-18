@@ -238,16 +238,13 @@ impl<'g> EventRuntime<'g> {
         max_events: usize,
         requested_threads: usize,
     ) -> Result<DisjointCommitWork, EventError> {
-        self.run_disjoint_parallel_commits_with_profile(
-            max_events,
-            requested_threads,
-            &mut DisjointAdmissionProfile::default(),
-        )
+        self.run_disjoint_parallel_commits_with_admission(max_events, requested_threads, None, None)
     }
 
-    /// Like `run_disjoint_parallel_commits`, but retain observed costs across
-    /// calls or independently repeated runs using a caller-owned profile.
-    /// Timing affects *only* thread admission, never the computed result.
+    /// Opt-in locally observed admission. Retain measured topology-class
+    /// costs across calls or independent repeated runs. The default entry
+    /// point instead uses the conservative, fixed historical thresholds.
+    /// Timing affects only scheduling, never Boolean arithmetic.
     pub fn run_disjoint_parallel_commits_with_profile(
         &mut self,
         max_events: usize,
@@ -257,7 +254,7 @@ impl<'g> EventRuntime<'g> {
         self.run_disjoint_parallel_commits_with_admission(
             max_events,
             requested_threads,
-            profile,
+            Some(profile),
             None,
         )
     }
@@ -280,7 +277,7 @@ impl<'g> EventRuntime<'g> {
         self.run_disjoint_parallel_commits_with_admission(
             max_events,
             requested_threads,
-            &mut DisjointAdmissionProfile::default(),
+            None,
             Some(costs),
         )
     }
@@ -289,7 +286,7 @@ impl<'g> EventRuntime<'g> {
         &mut self,
         max_events: usize,
         requested_threads: usize,
-        profile: &mut DisjointAdmissionProfile,
+        mut profile: Option<&mut DisjointAdmissionProfile>,
         costs: Option<MeasuredDisjointCosts>,
     ) -> Result<DisjointCommitWork, EventError> {
         if requested_threads == 0 {
@@ -301,9 +298,18 @@ impl<'g> EventRuntime<'g> {
                 ..DisjointCommitWork::default()
             });
         }
-        // Work this small cannot amortize the two scoped thread passes.
-        // Direct delegation avoids repeated graph scans and temporary buffers.
-        if costs.is_none() && self.graph.targets.len() < MIN_PROBE_CONTACTS {
+        // Necessary global bounds avoid constructing a conflict set when
+        // there cannot be enough contacts or distinct destinations to
+        // amortize scoped threads. Keep external calibration independent.
+        let (minimum_contacts, minimum_targets) = if profile.is_some() {
+            (MIN_PROBE_CONTACTS, MIN_PROBE_TARGETS)
+        } else {
+            (MIN_PARALLEL_CONTACTS, MIN_PARALLEL_TARGETS)
+        };
+        if costs.is_none()
+            && (self.graph.targets.len() < minimum_contacts
+                || self.graph.ids.len() < minimum_targets)
+        {
             let work = self.run(max_events)?;
             return Ok(DisjointCommitWork {
                 serial_events: work.events_consumed,
@@ -357,8 +363,10 @@ impl<'g> EventRuntime<'g> {
                     topology.distinct_targets,
                     threads,
                 )
+            } else if let Some(adaptive) = profile.as_deref_mut() {
+                adaptive.should_parallel(topology)
             } else {
-                profile.should_parallel(topology)
+                topology.legacy_eligible()
             };
             if costs.is_some() {
                 if admit {
@@ -370,18 +378,18 @@ impl<'g> EventRuntime<'g> {
             if !admit {
                 // A rejected prefix can be consumed in canonical order.
                 // Do not replan the same tiny group after each event.
-                let started = Instant::now();
+                let serial_started = profile.as_ref().map(|_| Instant::now());
                 for _ in 0..group.len() {
                     self.consume_one(&mut result.work)?;
                     result.serial_events += 1;
                 }
-                if costs.is_none() {
-                    profile.observe(topology, false, started.elapsed());
+                if let (Some(adaptive), Some(started)) = (profile.as_deref_mut(), serial_started) {
+                    adaptive.observe(topology, false, started.elapsed());
                 }
                 continue;
             }
 
-            let parallel_started = Instant::now();
+            let parallel_started = profile.as_ref().map(|_| Instant::now());
             // Parallel preflight has no side effects. Any failed preparation
             // must be reported at its original sequential event boundary.
             let worker_count = threads.min(group.len());
@@ -475,8 +483,8 @@ impl<'g> EventRuntime<'g> {
             result.max_group_width = result.max_group_width.max(group.len());
             result.target_counters_written += targets_written;
             result.target_writer_threads += writer_threads;
-            if costs.is_none() {
-                profile.observe(topology, true, parallel_started.elapsed());
+            if let (Some(adaptive), Some(started)) = (profile.as_deref_mut(), parallel_started) {
+                adaptive.observe(topology, true, started.elapsed());
             }
         }
         Ok(result)
