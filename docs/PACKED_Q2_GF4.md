@@ -53,10 +53,14 @@ The optional CPU binary `v888-gf4-bench` compares a scalar GF(4)
 reference against `PackedQ2::gf4_dot` on identical deterministic
 four-level inputs. It requires exact field-code equality for every
 measured repetition and aborts otherwise. It alternates the order of
-the two modes and reports median nanoseconds independently. Its
-measurements exclude input generation, packing, warmup and result
-verification; the resulting times do **not** describe an end-to-end
-inference workload or a Boolean graph-propagation speedup.
+the three modes and reports median nanoseconds independently. Its
+measurements exclude input generation, warmup and result verification.
+Three paired timing scopes are reported: scalar GF(4) over the original
+byte vectors; packed GF(4) compute-only on reused packed vectors;
+and **packing-inclusive** packed GF(4), which converts both vectors
+from byte levels and computes the inner product in each trial.
+Only the latter includes its packing allocations; neither measures an
+entire inference workload or Boolean graph propagation.
 
 The output reports input payload bytes for both implementations:
 two scalar bytes per input pair versus two packed bitplanes per vector,
@@ -76,5 +80,5 @@ cargo run --offline --release --bin v888-gf4-bench -- \
 The bounded CLI accepts 1..1,048,576 lanes and 3..64 paired
 repetitions. A credible performance claim additionally requires
 several independently pinned physical runs, noise/CPU-affinity
-documentation and an end-to-end packing-inclusive comparator.
+documentation and an end-to-end representative model workload.
 Energy is not measured.
