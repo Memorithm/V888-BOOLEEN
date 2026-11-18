@@ -23,9 +23,17 @@ For two-bit signed codes `a=a0-2a1`, `b=b0-2b1`, the same four popcounts use coe
 
 GF(4) multiplication uses the basis x²+x+1: `c0=(a0&b0) XOR (a1&b1)` and `c1=(a0&b1) XOR (a1&b0) XOR (a1&b1)`.
 
+The exact GF(4) inner product is **the field sum of field products**:
+`⊕_i (a_i · b_i)`. For each 64-lane bitplane pair the implementation
+computes the two polynomial components via AND/XOR and reduces each
+component with the parity of `count_ones()`; it then XOR-accumulates
+the two resulting bits across words. The result is a field code in
+`0..=3`, not a numeric dot product. No heap allocation is required
+for `gf4_dot` beyond the existing packed vectors.
+
 ## Correctness scope
 
-`PackedQ2` rejects invalid levels and mismatched lengths. The tests cover empty buffers, 63/64/65 and 127/128/129 lane boundaries, a BANC-sized 188,508-lane synthetic buffer, numeric reference dots, elementwise GF(4) scalar references and all 16 single-lane GF(4) input pairs. Padding is initialized to zero and cannot be modified through the safe public interface.
+`PackedQ2` rejects invalid levels and mismatched lengths. The tests cover empty buffers, 63/64/65 and 127/128/129 lane boundaries, a BANC-sized 188,508-lane synthetic buffer, numeric reference dots, scalar-oracle GF(4) inner products including incomplete last words, elementwise GF(4) scalar references and all 16 single-lane GF(4) input pairs. Padding is initialized to zero and cannot be modified through the safe public interface.
 
 The arithmetic is exact for its documented code interpretation. It does not imply equivalence to the Boolean V888 runtime because the latter uses exact graph contact counts, thresholds and event ordering.
 
