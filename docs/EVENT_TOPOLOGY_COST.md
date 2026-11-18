@@ -50,6 +50,12 @@ en cas de coût prédit défavorable, le moteur reprend l'exécution série
 canonique. Les passes parallèles existantes conservent leurs préflights
 atomiques, leurs frontières disjointes, et le repli en cas d'erreur.
 
+Le résultat `DisjointCommitWork` expose `cost_profile_accepted` et
+`cost_profile_rejected` : ce sont des **décisions de préadmission** par
+préfixe candidat, pas des exécutions parallèles réussies. Le compteur
+`disjoint_groups` reste la preuve qu'un groupe a effectivement atteint
+le commit parallèle ; les mesures de temps et d'énergie restent externes.
+
 Cette heuristique ignore les effets NUMA, caches partagés, bande passante
 mémoire, création réelle de threads et variance temporelle non modélisés.
 Les mesures d'énergie et les gains de performance restent à démontrer.
