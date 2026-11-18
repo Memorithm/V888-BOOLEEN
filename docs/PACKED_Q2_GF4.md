@@ -31,6 +31,22 @@ the two resulting bits across words. The result is a field code in
 `0..=3`, not a numeric dot product. No heap allocation is required
 for `gf4_dot` beyond the existing packed vectors.
 
+### Fused multiply-accumulate
+
+`PackedQ2::gf4_mul_add_assign(&mut accumulator, &left, &right)` computes
+`accumulator[i] = accumulator[i] + left[i] * right[i]` over GF(4) (field
+addition is XOR). The kernel updates existing packed accumulator planes in
+place without allocating a temporary product, making it suitable as a
+bounded building block for future GF(4) matrix rows and recurrent state
+updates. Operand length checks happen before any mutation.
+
+The existing `gf4_mul` is expressed using this fused primitive to maintain
+a single definition of polynomial multiplication. Tests compare the fused
+operation to the independent scalar GF(4) oracle at 0/1/63/64/65/127/128/129
+and 188,508 lanes, check cancellation after a second accumulation, and
+assert unchanged state on both operand-length errors. No matrix-model speed
+or memory-traffic reduction has been measured.
+
 ## Correctness scope
 
 `PackedQ2` rejects invalid levels and mismatched lengths. The tests cover empty buffers, 63/64/65 and 127/128/129 lane boundaries, a BANC-sized 188,508-lane synthetic buffer, numeric reference dots, scalar-oracle GF(4) inner products including incomplete last words, elementwise GF(4) scalar references and all 16 single-lane GF(4) input pairs. Padding is initialized to zero and cannot be modified through the safe public interface.
