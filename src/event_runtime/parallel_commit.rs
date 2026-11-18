@@ -470,14 +470,7 @@ mod tests {
             targets: vec![2; 65_536],
             counts: vec![1; 65_536],
         };
-        let result = compare(
-            &graph,
-            1,
-            &[(0, 10, true), (0, 20, false)],
-            8,
-            8,
-            4,
-        );
+        let result = compare(&graph, 1, &[(0, 10, true), (0, 20, false)], 8, 8, 4);
         assert_eq!(result.disjoint_groups, 0);
         assert_eq!(result.target_writer_threads, 0);
         assert_eq!(result.serial_events, result.work.events_consumed);
