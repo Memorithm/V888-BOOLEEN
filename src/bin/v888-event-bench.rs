@@ -382,11 +382,19 @@ mod tests {
             let graph = graph(16, shape);
             let baseline = execute(&graph, shape, Mode::Serial, 1, false).outcome;
             for mode in [Mode::Serial, Mode::Frontier, Mode::Disjoint] {
-                let sample = execute(&graph, shape, mode, 4, false);
-                assert_eq!(sample.outcome, baseline);
-                assert!(sample.outcome.complete_audit);
-                assert_eq!(sample.outcome.pending, 0);
-                assert_eq!(sample.outcome.state.active_count(), 0);
+                for cache in [false, true] {
+                    let sample = execute(&graph, shape, mode, 4, cache);
+                    assert_eq!(sample.outcome, baseline);
+                    assert!(sample.outcome.complete_audit);
+                    assert_eq!(sample.outcome.pending, 0);
+                    assert_eq!(sample.outcome.state.active_count(), 0);
+                    if cache && matches!(shape, Shape::WideDisjoint | Shape::HeavyDisjoint) {
+                        assert_eq!(sample.cache_report.cached_sources, 16);
+                        assert_eq!(sample.cache_report.cached_pairs, 16);
+                    } else {
+                        assert_eq!(sample.cache_report.cached_pairs, 0);
+                    }
+                }
             }
         }
     }
@@ -426,6 +434,7 @@ mod tests {
         assert!(Config::parse(["--repetitions=65".to_string()]).is_err());
         assert!(Config::parse(["--mode=unknown".to_string()]).is_err());
         assert!(Config::parse(["--typo=12".to_string()]).is_err());
+        assert!(Config::parse(["--cache=invalid".to_string()]).is_err());
         let config = Config::parse([
             "--mode=disjoint".to_string(),
             "--shape=convergent".to_string(),
@@ -433,6 +442,10 @@ mod tests {
         .expect("valid selected modes");
         assert_eq!(config.mode, Mode::Disjoint);
         assert_eq!(config.shape, Shape::Convergent);
+        let cached = Config::parse(["--cache=on".to_string()]).unwrap();
+        assert!(cached.cache);
+        let uncached = Config::parse(["--cache=off".to_string()]).unwrap();
+        assert!(!uncached.cache);
     }
 
     #[test]
