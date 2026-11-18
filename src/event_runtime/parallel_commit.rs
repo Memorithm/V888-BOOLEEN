@@ -91,6 +91,13 @@ impl<'g> EventRuntime<'g> {
             let allowance = (max_events - result.work.events_consumed)
                 .min(threads.saturating_mul(EVENTS_PER_THREAD));
             let group = self.disjoint_drive_prefix(allowance);
+            // RECHECK does not enter a DRIVE prefix. Always consume the
+            // earliest event so that a nonempty queue makes progress.
+            if group.is_empty() {
+                self.consume_one(&mut result.work)?;
+                result.serial_events += 1;
+                continue;
+            }
             let contacts: usize = group
                 .iter()
                 .map(|&((_, _, source), requested)| {
