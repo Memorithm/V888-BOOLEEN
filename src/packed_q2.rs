@@ -158,11 +158,7 @@ impl PackedQ2 {
     /// The addition is GF(4) XOR, not integer addition. This operates on
     /// packed bitplanes directly without allocating an intermediate product.
     /// Both operand lengths are checked before any accumulator mutation.
-    pub fn gf4_mul_add_assign(
-        &mut self,
-        left: &Self,
-        right: &Self,
-    ) -> Result<(), Q2Error> {
+    pub fn gf4_mul_add_assign(&mut self, left: &Self, right: &Self) -> Result<(), Q2Error> {
         self.same_length(left)?;
         self.same_length(right)?;
         for i in 0..self.low.len() {
@@ -318,6 +314,4 @@ mod tests {
             );
             assert_eq!(accumulator, original);
         }
-    }
-
-}
+    }}
