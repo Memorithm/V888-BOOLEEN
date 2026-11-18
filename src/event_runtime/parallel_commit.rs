@@ -281,9 +281,7 @@ impl<'g> EventRuntime<'g> {
         } else {
             (MIN_PARALLEL_CONTACTS, MIN_PARALLEL_TARGETS)
         };
-        if self.graph.targets.len() < minimum_contacts
-            || self.graph.ids.len() < minimum_targets
-        {
+        if self.graph.targets.len() < minimum_contacts || self.graph.ids.len() < minimum_targets {
             let work = self.run(max_events)?;
             return Ok(DisjointCommitWork {
                 serial_events: work.events_consumed,
@@ -343,9 +341,7 @@ impl<'g> EventRuntime<'g> {
                     self.consume_one(&mut result.work)?;
                     result.serial_events += 1;
                 }
-                if let (Some(costs), Some(started)) =
-                    (profile.as_deref_mut(), serial_started)
-                {
+                if let (Some(costs), Some(started)) = (profile.as_deref_mut(), serial_started) {
                     costs.observe(topology, false, started.elapsed());
                 }
                 continue;
@@ -445,9 +441,7 @@ impl<'g> EventRuntime<'g> {
             result.max_group_width = result.max_group_width.max(group.len());
             result.target_counters_written += targets_written;
             result.target_writer_threads += writer_threads;
-            if let (Some(costs), Some(started)) =
-                (profile.as_deref_mut(), parallel_started)
-            {
+            if let (Some(costs), Some(started)) = (profile.as_deref_mut(), parallel_started) {
                 costs.observe(topology, true, started.elapsed());
             }
         }
