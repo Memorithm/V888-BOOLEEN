@@ -57,6 +57,53 @@ cache évite leur relecture physique. Ce compteur ne peut donc plus
 être interprété comme un comptage des lectures réellement effectuées
 lorsque le cache est activé.
 
+## Admission causale et absence de relecture des cibles
+
+Le cache sert aussi à deux vérifications de dépendances, qui
+précédaient la préparation parallèle et relisaient auparavant le CSR
+complet sur les grosses sources :
+
+- `parallel::independent_prefix` utilise les destinations non nulles
+  agrégées pour détecter si une réévaluation d'un même tick recevrait
+  déjà une contribution d'une source précédente ;
+- `parallel_commit::disjoint_drive_prefix` contrôle les conflits de
+  cibles communes entre transitions en itérant ces mêmes destinations
+  cachées, au lieu de vérifier chaque contact de la source.
+
+Les destinations du cache sont exhaustives pour une source retenue :
+chaque cible d'au moins un contact de poids non nul y figure
+exactement une fois. Les contacts de poids nul restent sans effet.
+Une source absente du cache continue à utiliser le contrôle CSR
+original ; il n'y a donc aucun élargissement des groupes admis.
+
+Les tests dédiés vérifient un cycle de réévaluations dépendantes et
+des sources concurrentes ayant une destination commune, avec et
+sans cache, en exigeant la même frontière causale et le même résultat
+logique. Ce changement évite un travail réel de lecture et de
+comparaison sur des destinations répétées ; il ne garantit aucun
+gain physique avant la campagne appariée.
+
+## Admission parallèle adaptée à la compression
+
+Une frontière peut représenter plus de 65 536 lignes CSR tout en ne
+nécessitant que quelques paires distinctes grâce au cache. Utiliser
+le seul fanout CSR **logique** pour décider de créer des threads
+conservait alors un surcoût inutile de préparation et de synchronisation.
+
+Les deux moteurs opt-in estiment désormais le travail restant comme la
+somme des paires agrégées pour les sources cachées et des lignes CSR pour
+les sources non cachées, uniquement en cas de transition effective.
+Le seuil expérimental conservateur de 65 536 s'applique à cette estimation
+lors de l'admission des threads. En-dessous, le préfixe est traité dans
+l'ordre de référence, sans threads. Cette estimation n'est pas un coût
+énergétique, et les huit compteurs `EventWork` continuent à exprimer le
+travail CSR **logique**, indépendamment du cache et des threads.
+
+Les tests distinguent le véritable parallélisme de la voie de repli :
+65 536 contacts répétés réduits à huit paires ne doivent plus créer de
+threads, tout en préservant l'état, les compteurs, les dates et la file
+exactement. Les sources non cachées conservent leur mode antérieur.
+
 ## Coûts et limites
 
 Le nombre de paires **retenues** est plafonné par le paramètre de

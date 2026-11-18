@@ -117,6 +117,20 @@ pub(super) fn build_contact_cache(
     }
 }
 
+/// Estimated preparation iterations used solely for thread admission.
+/// A cached source reads its distinct weighted target pairs; an uncached
+/// source still scans every CSR contact row. EventWork remains CSR-logical.
+pub(super) fn effective_outgoing_work(
+    graph: &Connectome,
+    cache: Option<&ContactCache>,
+    source: usize,
+) -> usize {
+    match cache.and_then(|stored| stored.get(&source)) {
+        Some(pairs) => pairs.len(),
+        None => (graph.offsets[source + 1] - graph.offsets[source]) as usize,
+    }
+}
+
 /// Get a cached reduction when present, otherwise fall back to exact CSR
 /// reduction. Parallel preflight owns a Vec so it clones only compressed
 /// weighted destination pairs, never the original large CSR run.
@@ -257,6 +271,9 @@ mod tests {
         assert_eq!(limited.cached_sources, 1);
         assert_eq!(limited.covered_contact_rows, 128);
         assert_eq!(one.as_ref().unwrap().get(&0).unwrap(), &vec![(2, 256)]);
+        assert_eq!(effective_outgoing_work(&graph, one.as_ref(), 0), 1);
+        assert_eq!(effective_outgoing_work(&graph, one.as_ref(), 1), 128);
+        assert_eq!(effective_outgoing_work(&graph, None, 0), 128);
         assert_eq!(
             outgoing_with_cache(&graph, one.as_ref(), 1),
             aggregate_outgoing(&graph, 1)
@@ -270,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn cache_preserves_serial_and_both_true_parallel_paths() {
+    fn cached_compact_sources_skip_unprofitable_threads_with_exact_replay() {
         use super::super::EventRuntime;
 
         // Dense independent sources exercise the actual scoped-thread paths:
@@ -322,9 +339,11 @@ mod tests {
         assert_eq!(serial, expected);
         assert_eq!(frontier.work, expected);
         assert_eq!(disjoint.work, expected);
-        assert!(frontier.parallel_groups >= 1);
-        assert!(disjoint.disjoint_groups >= 1);
-        assert!(disjoint.target_writer_threads >= 2);
+        // Eight cached pairs replace 65_536 logical CSR contacts. Spawning
+        // threads for this tiny actual preflight is counterproductive.
+        assert_eq!(frontier.parallel_groups, 0);
+        assert_eq!(disjoint.disjoint_groups, 0);
+        assert_eq!(disjoint.target_writer_threads, 0);
         for engine in [&cached_serial, &cached_frontier, &cached_disjoint] {
             assert_eq!(engine.state(), reference.state());
             assert_eq!(engine.pending, reference.pending);
