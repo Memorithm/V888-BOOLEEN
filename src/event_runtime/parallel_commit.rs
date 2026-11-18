@@ -1026,7 +1026,10 @@ mod tests {
         let (group, distinct) = runtime.disjoint_drive_prefix(3);
         assert_eq!(group.len(), 3);
         assert_eq!(distinct, 5);
-        assert_eq!(group.iter().map(|(key, _)| key.2).collect::<Vec<_>>(), vec![0, 1, 2]);
+        assert_eq!(
+            group.iter().map(|(key, _)| key.2).collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
     }
 
     #[test]
