@@ -13,8 +13,11 @@ use std::collections::BTreeMap;
 use crate::connectome::Connectome;
 use crate::BooleanState;
 
+mod contacts;
 mod parallel;
 mod parallel_commit;
+
+use contacts::aggregate_outgoing;
 pub use parallel::ParallelFrontierWork;
 pub use parallel_commit::DisjointCommitWork;
 
@@ -254,18 +257,7 @@ impl<'g> EventRuntime<'g> {
             let first = self.graph.offsets[source] as usize;
             let last = self.graph.offsets[source + 1] as usize;
             contact_count = last - first;
-            let mut deltas = BTreeMap::<usize, u128>::new();
-            for edge in first..last {
-                let count = u128::from(self.graph.counts[edge]);
-                if count == 0 {
-                    continue;
-                }
-                let target = self.graph.targets[edge] as usize;
-                let item = deltas.entry(target).or_insert(0);
-                *item = item
-                    .checked_add(count)
-                    .ok_or(EventError::ArithmeticOverflow)?;
-            }
+            let deltas = aggregate_outgoing(self.graph, source)?;
             if !deltas.is_empty() {
                 let following = time.checked_add(1).ok_or(EventError::LogicalTimeOverflow)?;
                 for (target, delta) in deltas {
