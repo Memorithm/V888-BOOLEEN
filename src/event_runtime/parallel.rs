@@ -198,11 +198,20 @@ impl<'g> EventRuntime<'g> {
                 let current = self.state.get(source).expect("validated source index");
                 let desired = self.incoming[source] >= self.threshold;
                 if desired != current {
-                    let first = self.graph.offsets[source] as usize;
-                    let last = self.graph.offsets[source + 1] as usize;
-                    for edge in first..last {
-                        if self.graph.counts[edge] > 0 {
-                            touched_by_earlier_rechecks.insert(self.graph.targets[edge] as usize);
+                    if let Some(reduced) = self.contact_cache.as_ref().and_then(|c| c.get(&source)) {
+                        // Cached pairs represent exactly the nonzero CSR
+                        // destinations. Avoid rescanning large repeated runs.
+                        for &(target, _) in reduced {
+                            touched_by_earlier_rechecks.insert(target);
+                        }
+                    } else {
+                        let first = self.graph.offsets[source] as usize;
+                        let last = self.graph.offsets[source + 1] as usize;
+                        for edge in first..last {
+                            if self.graph.counts[edge] > 0 {
+                                touched_by_earlier_rechecks
+                                    .insert(self.graph.targets[edge] as usize);
+                            }
                         }
                     }
                 }
@@ -334,6 +343,37 @@ mod tests {
         );
         assert_eq!(concurrent.audit_incoming(), Ok(true));
         actual
+    }
+
+    #[test]
+    fn cached_recheck_dependencies_keep_exact_causal_prefix() {
+        // At t+1, neuron 30 will write to the already queued 40.
+        // Its cached 65,536-contact fanout must still block speculative
+        // staging of 40 from a stale same-timestamp incoming snapshot.
+        let graph = Connectome {
+            ids: vec![10, 20, 30, 40],
+            offsets: vec![0, 1, 2, 65_538, 65_538],
+            targets: [vec![2, 3], vec![3; 65_536]].concat(),
+            counts: vec![1; 65_538],
+        };
+        graph.validate().unwrap();
+        let mut reference = EventRuntime::new(&graph, 1, 8).unwrap();
+        let mut cached = EventRuntime::new(&graph, 1, 8).unwrap();
+        assert_eq!(cached.prepare_contact_cache(1).unwrap().cached_sources, 1);
+        for engine in [&mut reference, &mut cached] {
+            engine.schedule_drive(0, 10, true).unwrap();
+            engine.schedule_drive(0, 20, true).unwrap();
+            assert_eq!(engine.run(2).unwrap().events_consumed, 2);
+        }
+        assert_eq!(reference.independent_prefix(8).len(), 1);
+        assert_eq!(cached.independent_prefix(8).len(), 1);
+        let expected = reference.run(8).unwrap();
+        let actual = cached.run_parallel_frontiers(8, 4).unwrap();
+        assert_eq!(actual.work, expected);
+        assert_eq!(cached.incoming, reference.incoming);
+        assert_eq!(cached.pending, reference.pending);
+        assert_eq!(cached.state(), reference.state());
+        assert_eq!(cached.audit_incoming(), Ok(true));
     }
 
     #[test]

@@ -57,6 +57,32 @@ cache évite leur relecture physique. Ce compteur ne peut donc plus
 être interprété comme un comptage des lectures réellement effectuées
 lorsque le cache est activé.
 
+## Admission causale et absence de relecture des cibles
+
+Le cache sert aussi à deux vérifications de dépendances, qui
+précédaient la préparation parallèle et relisaient auparavant le CSR
+complet sur les grosses sources :
+
+- `parallel::independent_prefix` utilise les destinations non nulles
+  agrégées pour détecter si une réévaluation d'un même tick recevrait
+  déjà une contribution d'une source précédente ;
+- `parallel_commit::disjoint_drive_prefix` contrôle les conflits de
+  cibles communes entre transitions en itérant ces mêmes destinations
+  cachées, au lieu de vérifier chaque contact de la source.
+
+Les destinations du cache sont exhaustives pour une source retenue :
+chaque cible d'au moins un contact de poids non nul y figure
+exactement une fois. Les contacts de poids nul restent sans effet.
+Une source absente du cache continue à utiliser le contrôle CSR
+original ; il n'y a donc aucun élargissement des groupes admis.
+
+Les tests dédiés vérifient un cycle de réévaluations dépendantes et
+des sources concurrentes ayant une destination commune, avec et
+sans cache, en exigeant la même frontière causale et le même résultat
+logique. Ce changement évite un travail réel de lecture et de
+comparaison sur des destinations répétées ; il ne garantit aucun
+gain physique avant la campagne appariée.
+
 ## Coûts et limites
 
 Le nombre de paires **retenues** est plafonné par le paramètre de

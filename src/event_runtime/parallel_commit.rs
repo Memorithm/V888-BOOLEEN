@@ -236,17 +236,27 @@ impl<'g> EventRuntime<'g> {
             }
             let source = key.2;
             if self.state.get(source).expect("validated source") != requested {
-                let first = self.graph.offsets[source] as usize;
-                let last = self.graph.offsets[source + 1] as usize;
-                if (first..last).any(|edge| {
-                    self.graph.counts[edge] != 0
-                        && touched.contains(&(self.graph.targets[edge] as usize))
-                }) {
-                    break;
-                }
-                for edge in first..last {
-                    if self.graph.counts[edge] != 0 {
-                        touched.insert(self.graph.targets[edge] as usize);
+                if let Some(reduced) = self.contact_cache.as_ref().and_then(|c| c.get(&source)) {
+                    // Exact nonzero target set; no repeated CSR fanout scan.
+                    if reduced.iter().any(|(target, _)| touched.contains(target)) {
+                        break;
+                    }
+                    for &(target, _) in reduced {
+                        touched.insert(target);
+                    }
+                } else {
+                    let first = self.graph.offsets[source] as usize;
+                    let last = self.graph.offsets[source + 1] as usize;
+                    if (first..last).any(|edge| {
+                        self.graph.counts[edge] != 0
+                            && touched.contains(&(self.graph.targets[edge] as usize))
+                    }) {
+                        break;
+                    }
+                    for edge in first..last {
+                        if self.graph.counts[edge] != 0 {
+                            touched.insert(self.graph.targets[edge] as usize);
+                        }
                     }
                 }
             }
@@ -398,6 +408,43 @@ mod tests {
                 .collect(),
             counts: vec![1; 65_536],
         }
+    }
+
+    #[test]
+    fn cached_conflict_guard_does_not_admit_shared_target() {
+        let graph = Connectome {
+            ids: (10..26).collect(),
+            offsets: (0..=8)
+                .map(|source| source * 8192)
+                .chain(std::iter::repeat_n(65_536, 8))
+                .collect(),
+            // First and second source both write neuron 18 (index 8).
+            targets: (0..8)
+                .flat_map(|source| {
+                    let target = if source < 2 { 8 } else { source + 8 };
+                    std::iter::repeat_n(target, 8192)
+                })
+                .collect(),
+            counts: vec![1; 65_536],
+        };
+        graph.validate().unwrap();
+        let mut reference = EventRuntime::new(&graph, 1, 64).unwrap();
+        let mut cached = EventRuntime::new(&graph, 1, 64).unwrap();
+        assert_eq!(cached.prepare_contact_cache(8).unwrap().cached_pairs, 8);
+        for engine in [&mut reference, &mut cached] {
+            for id in 10..18 {
+                engine.schedule_drive(0, id, true).unwrap();
+            }
+        }
+        assert_eq!(reference.disjoint_drive_prefix(8).len(), 1);
+        assert_eq!(cached.disjoint_drive_prefix(8).len(), 1);
+        let expected = reference.run(64).unwrap();
+        let actual = cached.run_disjoint_parallel_commits(64, 4).unwrap();
+        assert_eq!(actual.work, expected);
+        assert_eq!(cached.state(), reference.state());
+        assert_eq!(cached.incoming, reference.incoming);
+        assert_eq!(cached.pending, reference.pending);
+        assert_eq!(cached.audit_incoming(), Ok(true));
     }
 
     #[test]
