@@ -304,3 +304,9 @@ pub mod fourier5_atomic_batch;
 
 /// VALID-only sequential dispatch including measured cache rebuild costs.
 pub mod fourier5_sequential_cost_policy;
+
+/// Paired physical timings and cache-epoch safety for synthetic sequential interventions.
+pub mod fourier5_sequential_physical_step;
+
+/// Provenance guard against synthetic VALID and holdout sample reuse.
+pub mod fourier5_split_guard;
