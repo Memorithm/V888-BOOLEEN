@@ -857,4 +857,54 @@ mod tests {
         assert_eq!(runtime.last_time, None);
     }
 
+
+    #[test]
+    fn cached_topology_uses_effective_pairs_not_raw_csr_row_count() {
+        // 512 logical CSR rows compress to eight disjoint weighted pairs.
+        // A profile calibrated only for eight effective iterations must
+        // admit cached execution and reject the same graph without cache.
+        let graph = Connectome {
+            ids: (10..20).collect(),
+            offsets: [0, 256, 512]
+                .into_iter()
+                .chain(std::iter::repeat_n(512, 8))
+                .collect(),
+            targets: (2..10).flat_map(|target| std::iter::repeat_n(target, 64)).collect(),
+            counts: vec![1; 512],
+        };
+        graph.validate().unwrap();
+        let mut reference = EventRuntime::new(&graph, 1, 32).unwrap();
+        let mut cached = EventRuntime::new(&graph, 1, 32).unwrap();
+        let mut uncached = EventRuntime::new(&graph, 1, 32).unwrap();
+        let cache_report = cached.prepare_contact_cache(8).unwrap();
+        assert_eq!(cache_report.cached_pairs, 8);
+        assert_eq!(cache_report.covered_contact_rows, 512);
+
+        for runtime in [&mut reference, &mut cached, &mut uncached] {
+            runtime.schedule_drive(0, 10, true).unwrap();
+            runtime.schedule_drive(0, 11, true).unwrap();
+        }
+        let expected = reference.run(32).unwrap();
+        let cached_work = cached
+            .run_disjoint_parallel_commits_with_costs(32, 2, small_measured_costs())
+            .unwrap();
+        let uncached_work = uncached
+            .run_disjoint_parallel_commits_with_costs(32, 2, small_measured_costs())
+            .unwrap();
+        assert_eq!(cached_work.work, expected);
+        assert_eq!(uncached_work.work, expected);
+        assert_eq!(cached_work.cost_profile_accepted, 1);
+        assert_eq!(cached_work.disjoint_groups, 1);
+        assert_eq!(uncached_work.cost_profile_accepted, 0);
+        assert_eq!(uncached_work.disjoint_groups, 0);
+        assert_eq!(cached.state(), reference.state());
+        assert_eq!(cached.incoming, reference.incoming);
+        assert_eq!(cached.pending, reference.pending);
+        assert_eq!(uncached.state(), reference.state());
+        assert_eq!(uncached.incoming, reference.incoming);
+        assert_eq!(uncached.pending, reference.pending);
+        assert_eq!(cached.audit_incoming(), Ok(true));
+        assert_eq!(uncached.audit_incoming(), Ok(true));
+    }
+
 }
