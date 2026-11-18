@@ -1022,8 +1022,24 @@ mod tests {
         assert!(!profile.scope.unwrap().cache_enabled);
 
         profile.observe(topology, false, Duration::from_micros(100));
-        let mut cached = EventRuntime::new(&graph, 1, 32).unwrap();
-        cached.prepare_contact_cache(32).unwrap();
+        // The tiny graph is deliberately uncached; use a separate, genuinely
+        // compressible graph (256 rows per source -> four cached pairs).
+        let compressed_graph = Connectome {
+            ids: (10..20).collect(),
+            offsets: [0, 256, 512]
+                .into_iter()
+                .chain(std::iter::repeat_n(512, 8))
+                .collect(),
+            targets: (2..10)
+                .flat_map(|target| std::iter::repeat_n(target, 64))
+                .collect(),
+            counts: vec![1; 512],
+        };
+        compressed_graph.validate().unwrap();
+        let mut cached = EventRuntime::new(&compressed_graph, 1, 32).unwrap();
+        let cache_report = cached.prepare_contact_cache(32).unwrap();
+        assert_eq!(cache_report.cached_sources, 2);
+        assert_eq!(cache_report.cached_pairs, 8);
         cached.schedule_drive(0, 10, true).unwrap();
         cached
             .run_disjoint_parallel_commits_with_profile(16, 4, &mut profile)
