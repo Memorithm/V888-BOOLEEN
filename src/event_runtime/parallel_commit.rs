@@ -18,9 +18,9 @@ use super::parallel::{prepare_one, PreparedEvent};
 use super::{EventError, EventKey, EventRuntime, EventWork, DRIVE, RECHECK};
 
 const MAX_COMMIT_THREADS: usize = 32;
-const EVENTS_PER_THREAD: usize = 16;
+const EVENTS_PER_THREAD: usize = 32;
 /// Preliminary admission threshold: measured runtime cost, not joule calibration.
-const MIN_PARALLEL_CONTACTS: usize = 4096;
+const MIN_PARALLEL_CONTACTS: usize = 65_536;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DisjointCommitWork {
@@ -58,7 +58,7 @@ impl<'g> EventRuntime<'g> {
     /// Mutations of neuron bits and BTreeMap event keys are deliberately
     /// owner-serialized; only disjoint weighted incoming writes run in threads.
     ///
-    /// Maximum 32 threads and at most 16 drives per thread per group.
+    /// Maximum 32 threads and at most 32 drives per thread per group.
     /// A group can use fewer writers when it touches few distinct targets.
     /// The method does not combine the separate contact-budget admission.
     pub fn run_disjoint_parallel_commits(
@@ -98,17 +98,21 @@ impl<'g> EventRuntime<'g> {
                 result.serial_events += 1;
                 continue;
             }
-            let contacts: usize = group
-                .iter()
-                .map(|&((_, _, source), requested)| {
-                    if self.state.get(source).expect("validated neuron index") == requested {
-                        0
-                    } else {
-                        (self.graph.offsets[source + 1] - self.graph.offsets[source]) as usize
+            let mut contacts = 0usize;
+            let mut changing_sources = 0usize;
+            for &((_, _, source), requested) in &group {
+                if self.state.get(source).expect("validated neuron index") != requested {
+                    let fanout =
+                        (self.graph.offsets[source + 1] - self.graph.offsets[source]) as usize;
+                    if fanout > 0 {
+                        changing_sources += 1;
+                        contacts = contacts.saturating_add(fanout);
                     }
-                })
-                .sum();
-            if group.len() < 2 || contacts < MIN_PARALLEL_CONTACTS {
+                }
+            }
+            // Threaded writes require at least two independent producers,
+            // not merely two queued drives (other drives can be no-ops).
+            if changing_sources < 2 || contacts < MIN_PARALLEL_CONTACTS {
                 // A rejected prefix can be consumed in canonical order.
                 // Do not replan the same tiny group after each event.
                 for _ in 0..group.len() {
@@ -378,18 +382,18 @@ mod tests {
     }
 
     fn eight_disjoint_sources() -> Connectome {
-        // 512 parallel contacts for each of eight distinct sources.
-        // The 4096 contacts deliberately exceed the admission threshold.
+        // 8192 contact rows for each of eight distinct sources.
+        // The 65536 contacts exercise the admitted parallel path.
         Connectome {
             ids: (10..26).collect(),
             offsets: (0..=8)
-                .map(|i| i * 512)
-                .chain(std::iter::repeat_n(4096, 8))
+                .map(|i| i * 8192)
+                .chain(std::iter::repeat_n(65_536, 8))
                 .collect(),
             targets: (0..8)
-                .flat_map(|i| std::iter::repeat_n(8 + i, 512))
+                .flat_map(|i| std::iter::repeat_n(8 + i, 8192))
                 .collect(),
-            counts: vec![1; 4096],
+            counts: vec![1; 65_536],
         }
     }
 
@@ -454,6 +458,23 @@ mod tests {
         assert_eq!(first.serial_events, 2);
         assert_eq!(runtime.pending_count(), 0);
         assert_eq!(runtime.audit_incoming(), Ok(true));
+    }
+
+    #[test]
+    fn idle_drive_does_not_count_as_parallel_writer() {
+        // One large source changes, but the other DRIVE is a no-op.
+        // Group length alone must never allocate two writer threads.
+        let graph = Connectome {
+            ids: vec![10, 20, 30],
+            offsets: vec![0, 65_536, 65_536, 65_536],
+            targets: vec![2; 65_536],
+            counts: vec![1; 65_536],
+        };
+        let result = compare(&graph, 1, &[(0, 10, true), (0, 20, false)], 8, 8, 4);
+        assert_eq!(result.disjoint_groups, 0);
+        assert_eq!(result.target_writer_threads, 0);
+        assert_eq!(result.serial_events, result.work.events_consumed);
+        assert_eq!(result.work.state_transitions, 2);
     }
 
     #[test]

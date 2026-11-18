@@ -38,20 +38,23 @@ propriétaire, dans l'ordre causal d'origine.
 
 À la suite des mesures pilotes sur Dell, le mode de commit parallèle
 passe immédiatement par le moteur séquentiel lorsque le graphe entier
-comprend moins de **4 096 lignes CSR**. Sur un grand graphe, les groupes
+comprend moins de **65 536 lignes CSR**. Sur un grand graphe, les groupes
 de drives sans conflit sont eux-mêmes traités séquentiellement tant que
-leurs transitions cumulées n'examineraient pas 4 096 lignes de contacts.
+leurs transitions cumulées n'examineraient pas 65 536 lignes de contacts,
+ou si moins de deux sources émettent des contributions réellement actives.
 Cela évite une double création de threads pour des groupes de petite
 taille. Les préfixes rejetés sont consommés en ordre, sans modifier la
 sémantique et sans relancer inutilement leur préparation.
 
-Ce seuil de recherche est volontairement explicite, **non calibré** en
-joules et non garanti optimal. Les groupes volumineux continuent à
+Ce seuil de recherche de 65 536 contacts est volontairement explicite,
+**non calibré** en joules et non garanti optimal. Lors de la première
+campagne du 18 novembre 2026, le graphe `wide-disjoint` à 16 384 lignes
+CSR restait environ neuf fois plus lent avec les commits parallèles. Les groupes volumineux continuent à
 utiliser de véritables écritures concurrentes sur des segments disjoints.
 
 ## Bornes et observabilité
 
-- 32 threads au plus, 16 événements par thread et par groupe.
+- 32 threads au plus, 32 événements par thread et par groupe.
 - `requested_threads=0` : rejet sans mutation.
 - `requested_threads=1` : délégation directe au moteur séquentiel.
 - `DisjointCommitWork.work` doit être exactement identique à

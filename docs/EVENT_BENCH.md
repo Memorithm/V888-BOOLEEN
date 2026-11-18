@@ -8,7 +8,7 @@ même seuil et la même séquence causale**.
 - `frontier` : `EventRuntime::run_parallel_frontiers` ;
 - `disjoint` : `EventRuntime::run_disjoint_parallel_commits`.
 
-Deux topologies contrôles sont disponibles :
+Quatre topologies contrôles sont disponibles :
 
 - `disjoint` : N sources indépendantes alimentent N cibles distinctes ;
 - `convergent` : N sources alimentent seulement quatre cibles ; des
@@ -17,6 +17,9 @@ Deux topologies contrôles sont disponibles :
   chacune possède **64 lignes CSR parallèles vers la même destination**.
   Cette topologie augmente les contacts traversés, pas le nombre de
   neurones ou de destinations distinctes.
+- `heavy-disjoint` : même schéma mais **512 lignes CSR par source**,
+  afin de vérifier la voie parallèle réelle après admission du seuil
+  conservateur de 65 536 lignes CSR.
 
 Les N sources sont activées à t=0 et désactivées à t=3. Tous les
 `RECHECK` programmés par les transitions sont exécutés avant la
@@ -37,7 +40,7 @@ Exécuter chacun des six cas dans un **processus distinct**, afin de
 remettre à zéro la mémoire maximale (`VmHWM`) entre deux modes :
 
 ```bash
-for shape in disjoint convergent; do
+for shape in disjoint convergent wide-disjoint heavy-disjoint; do
   for mode in serial frontier disjoint; do
     ./target/release/v888-event-bench \
       --shape="$shape" --mode="$mode" \

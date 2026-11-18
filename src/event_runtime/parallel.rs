@@ -13,9 +13,9 @@ use crate::connectome::Connectome;
 use crate::BooleanState;
 
 const MAX_WORKER_THREADS: usize = 32;
-const EVENTS_PER_WORKER: usize = 16;
+const EVENTS_PER_WORKER: usize = 32;
 /// Conservative research admission threshold; benchmark, not energy calibrated.
-const MIN_PARALLEL_CONTACTS: usize = 4096;
+const MIN_PARALLEL_CONTACTS: usize = 65_536;
 const MIN_PARALLEL_EVENTS: usize = 4;
 
 /// Logical work is comparable with `EventRuntime::run`. Additional fields
@@ -93,7 +93,7 @@ impl<'g> EventRuntime<'g> {
     /// scheduling the target's next recheck at t+1. Therefore blindly taking
     /// all t-local RECHECKs from one snapshot can change the reference result.
     ///
-    /// Workers are capped at 32; staging at 16 events per worker. The caller
+    /// Workers are capped at 32; staging at 32 events per worker. The caller
     /// may pass 1 to select the exact sequential execution path. Contact
     /// budgets are handled by the separate sequential `run_with_contact_budget`.
     pub fn run_parallel_frontiers(
@@ -343,18 +343,18 @@ mod tests {
 
     #[test]
     fn simultaneous_independent_drives_are_prepared_by_multiple_threads() {
-        // Four independent sources, each carrying 1024 contact rows.
+        // Four independent sources, each carrying 16_384 contact rows.
         // The group is large enough to exercise the actual thread path.
         let graph = Connectome {
             ids: (10..18).collect(),
             offsets: (0..=4)
-                .map(|i| i * 1024)
-                .chain(std::iter::repeat_n(4096, 4))
+                .map(|i| i * 16_384)
+                .chain(std::iter::repeat_n(65_536, 4))
                 .collect(),
             targets: (0..4)
-                .flat_map(|i| std::iter::repeat_n(4 + i, 1024))
+                .flat_map(|i| std::iter::repeat_n(4 + i, 16_384))
                 .collect(),
-            counts: vec![1; 4096],
+            counts: vec![1; 65_536],
         };
         let stats = compare(
             &graph,
