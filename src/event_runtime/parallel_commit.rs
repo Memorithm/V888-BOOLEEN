@@ -917,11 +917,10 @@ mod tests {
             runtime.schedule_drive(0, 10, true).unwrap();
             runtime.schedule_drive(0, 11, true).unwrap();
         }
-        let error = Err(EventError::PendingBudgetExceeded);
-        assert_eq!(reference.run(32), error);
+        assert_eq!(reference.run(32), Err(EventError::PendingBudgetExceeded));
         assert_eq!(
             modeled.run_disjoint_parallel_commits_with_costs(32, 2, small_measured_costs()),
-            error
+            Err(EventError::PendingBudgetExceeded)
         );
         assert_eq!(modeled.state(), reference.state());
         assert_eq!(modeled.incoming, reference.incoming);
