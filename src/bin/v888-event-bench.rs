@@ -44,6 +44,7 @@ impl Mode {
 enum Shape {
     Disjoint,
     Convergent,
+    WideDisjoint,
 }
 
 impl Shape {
@@ -51,6 +52,7 @@ impl Shape {
         match value {
             "disjoint" => Some(Self::Disjoint),
             "convergent" => Some(Self::Convergent),
+            "wide-disjoint" => Some(Self::WideDisjoint),
             _ => None,
         }
     }
@@ -59,6 +61,7 @@ impl Shape {
         match self {
             Self::Disjoint => "disjoint",
             Self::Convergent => "convergent",
+            Self::WideDisjoint => "wide-disjoint",
         }
     }
 
@@ -66,6 +69,7 @@ impl Shape {
         match self {
             Self::Disjoint => 1,
             Self::Convergent => 2,
+            Self::WideDisjoint => 1,
         }
     }
 }
@@ -97,7 +101,7 @@ impl Config {
         for argument in arguments {
             if argument == "--help" {
                 return Err(String::from(
-                    "usage: --mode=serial|frontier|disjoint --shape=disjoint|convergent \
+                    "usage: --mode=serial|frontier|disjoint --shape=disjoint|convergent|wide-disjoint \
                      --sources=8..4096 --repetitions=1..64 --workers=1..4",
                 ));
             }
@@ -147,23 +151,28 @@ impl Config {
 
 fn graph(sources: usize, shape: Shape) -> Connectome {
     let count = sources * 2;
+    // wide-disjoint retains one unique target per source, but models
+    // 64 physical contact rows with identical presynaptic/postsynaptic IDs.
+    // It measures CSR traversal work, NOT 64 independent output neurons.
+    let contacts_per_source = if shape == Shape::WideDisjoint { 64 } else { 1 };
+    let total_contacts = sources * contacts_per_source;
     let targets: Vec<u32> = (0..sources)
-        .map(|source| {
+        .flat_map(|source| {
             let local = match shape {
-                Shape::Disjoint => source,
+                Shape::Disjoint | Shape::WideDisjoint => source,
                 Shape::Convergent => source % 4,
             };
-            (sources + local) as u32
+            std::iter::repeat_n((sources + local) as u32, contacts_per_source)
         })
         .collect();
     let graph = Connectome {
         ids: (1..=count as u64).collect(),
         offsets: (0..=sources)
-            .map(|index| index as u64)
-            .chain(std::iter::repeat_n(sources as u64, sources))
+            .map(|index| (index * contacts_per_source) as u64)
+            .chain(std::iter::repeat_n(total_contacts as u64, sources))
             .collect(),
         targets,
-        counts: vec![1; sources],
+        counts: vec![1; total_contacts],
     };
     graph.validate().expect("generated graph must validate");
     graph
@@ -323,7 +332,7 @@ mod tests {
 
     #[test]
     fn both_shapes_have_exact_parity_for_all_execution_modes() {
-        for shape in [Shape::Disjoint, Shape::Convergent] {
+        for shape in [Shape::Disjoint, Shape::Convergent, Shape::WideDisjoint] {
             let graph = graph(16, shape);
             let baseline = execute(&graph, shape, Mode::Serial, 1).outcome;
             for mode in [Mode::Serial, Mode::Frontier, Mode::Disjoint] {
@@ -340,8 +349,11 @@ mod tests {
     fn disjoint_and_convergent_graphs_have_distinct_fanout_patterns() {
         let a = graph(32, Shape::Disjoint);
         let b = graph(32, Shape::Convergent);
+        let c = graph(32, Shape::WideDisjoint);
         assert_eq!(a.ids, b.ids);
         assert_eq!(a.targets.len(), 32);
+        assert_eq!(c.targets.len(), 32 * 64);
+        assert_eq!(c.offsets[1], 64);
         assert_eq!(
             a.targets
                 .iter()
@@ -380,5 +392,6 @@ mod tests {
         let _ = proc_status_kib("VmRSS:");
         assert_eq!(Shape::Disjoint.threshold(), 1);
         assert_eq!(Shape::Convergent.threshold(), 2);
+        assert_eq!(Shape::WideDisjoint.threshold(), 1);
     }
 }
