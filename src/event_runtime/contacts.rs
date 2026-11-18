@@ -1,11 +1,11 @@
-//! Exact CSR outgoing-contact reduction with a contiguous-target fast path.
+//! Exact CSR outgoing-contact reduction with a monotone-target fast path.
 //!
-//! The ordinary ordered map is updated once per maximal nonzero target run,
-//! instead of once per edge. Arbitrary (unsorted) CSR targets remain valid;
-//! the result is sorted and the u128 weighted sums are unchanged. Every CSR
-//! row is still examined, including rows whose weight is zero.
+//! Rows whose nonzero destinations are already ascending aggregate directly
+//! into a sorted Vec without allocating a tree. A descending target switches
+//! to a BTreeMap, preserving arbitrary unordered CSR semantics and checked
+//! u128 sums. Every logical CSR row remains counted by the event engine.
 //!
-//! This is an algorithmic implementation, not a claim of physical speedup.
+//! This is an algorithmic implementation, not a physical speedup claim.
 
 use std::collections::BTreeMap;
 
@@ -21,13 +21,14 @@ pub(super) fn aggregate_outgoing(
 ) -> Result<Vec<(usize, u128)>, EventError> {
     let start = graph.offsets[source] as usize;
     let end = graph.offsets[source + 1] as usize;
-    let mut totals = BTreeMap::<usize, u128>::new();
+    let mut ordered_pairs = Vec::<(usize, u128)>::new();
+    let mut unordered = None::<BTreeMap<usize, u128>>;
     let mut previous = None;
     let mut consecutive_sum = 0_u128;
 
-    // The pending consecutive run is flushed only when its destination
-    // changes. This avoids O(edges) repeated BTreeMap lookups on CSR runs
-    // with repeated target IDs (a common case in the synthetic wide probes).
+    // A sorted CSR row is already in the required output order. Retain a
+    // direct vector until a *nonzero* target descends; zeros never contribute.
+    // On first inversion, transfer prior complete runs into the fallback map.
     for edge in start..end {
         let weight = u128::from(graph.counts[edge]);
         if weight == 0 {
@@ -41,21 +42,37 @@ pub(super) fn aggregate_outgoing(
             continue;
         }
         if let Some(old_target) = previous {
-            let entry = totals.entry(old_target).or_insert(0);
-            *entry = entry
-                .checked_add(consecutive_sum)
-                .ok_or(EventError::ArithmeticOverflow)?;
+            if let Some(totals) = unordered.as_mut() {
+                let entry = totals.entry(old_target).or_insert(0);
+                *entry = entry
+                    .checked_add(consecutive_sum)
+                    .ok_or(EventError::ArithmeticOverflow)?;
+            } else {
+                ordered_pairs.push((old_target, consecutive_sum));
+                if target < old_target {
+                    let mut totals = BTreeMap::new();
+                    totals.extend(ordered_pairs.drain(..));
+                    unordered = Some(totals);
+                }
+            }
         }
         previous = Some(target);
         consecutive_sum = weight;
     }
     if let Some(target) = previous {
-        let entry = totals.entry(target).or_insert(0);
-        *entry = entry
-            .checked_add(consecutive_sum)
-            .ok_or(EventError::ArithmeticOverflow)?;
+        if let Some(totals) = unordered.as_mut() {
+            let entry = totals.entry(target).or_insert(0);
+            *entry = entry
+                .checked_add(consecutive_sum)
+                .ok_or(EventError::ArithmeticOverflow)?;
+        } else {
+            ordered_pairs.push((target, consecutive_sum));
+        }
     }
-    Ok(totals.into_iter().collect())
+    Ok(match unordered {
+        Some(totals) => totals.into_iter().collect(),
+        None => ordered_pairs,
+    })
 }
 
 /// Immutable, source-indexed cached reductions. Only worthwhile sources
@@ -190,6 +207,53 @@ mod tests {
                 independent_reference(&graph)
             );
         }
+    }
+
+    #[test]
+    fn ascending_csr_reduces_directly_with_sparse_zeros_and_wide_weights() {
+        // Multiple nonzero repeated rows and interspersed zeros preserve
+        // exact independent u128 totals without the unordered-map fallback.
+        let mut targets = Vec::new();
+        let mut weights = Vec::new();
+        for target in 0..1_024_u32 {
+            for edge in 0..64 {
+                targets.push(target);
+                weights.push(if edge == 1 { 0 } else { u64::MAX });
+            }
+        }
+        let graph = graph(targets, weights);
+        graph.validate().unwrap();
+        let reduced = aggregate_outgoing(&graph, 0).unwrap();
+        assert_eq!(reduced.len(), 1_024);
+        assert_eq!(reduced, independent_reference(&graph));
+        assert_eq!(reduced[0], (0, u128::from(u64::MAX) * 63));
+        assert_eq!(reduced[1_023], (1_023, u128::from(u64::MAX) * 63));
+    }
+
+    #[test]
+    fn descending_nonzero_target_switches_to_exact_unordered_fallback() {
+        let graph = graph(
+            vec![1, 1, 2, 2, 3, 1, 2, 3, 0, 3],
+            vec![1, 0, 3, 4, 5, 6, 7, 8, 0, 9],
+        );
+        graph.validate().unwrap();
+        assert_eq!(
+            aggregate_outgoing(&graph, 0).unwrap(),
+            independent_reference(&graph)
+        );
+        assert_eq!(
+            aggregate_outgoing(&graph, 0).unwrap(),
+            vec![(1, 7), (2, 14), (3, 22)]
+        );
+    }
+
+    #[test]
+    fn zero_weight_descent_does_not_change_ascending_reduction() {
+        let graph = graph(vec![1, 0, 1, 2, 0, 3], vec![2, 0, 4, 5, 0, 6]);
+        assert_eq!(
+            aggregate_outgoing(&graph, 0).unwrap(),
+            vec![(1, 6), (2, 5), (3, 6)]
+        );
     }
 
     #[test]
