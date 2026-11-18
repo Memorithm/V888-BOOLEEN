@@ -49,11 +49,13 @@ impl Config {
                     repetitions = value.parse().map_err(|_| "invalid repetitions")?;
                 }
                 "workers" => workers = value.parse().map_err(|_| "invalid workers")?,
-                "cache" => cache = match value {
-                    "on" => true,
-                    "off" => false,
-                    _ => return Err(String::from("cache must be on or off")),
-                },
+                "cache" => {
+                    cache = match value {
+                        "on" => true,
+                        "off" => false,
+                        _ => return Err(String::from("cache must be on or off")),
+                    }
+                }
                 "costs" => costs = Some(parse_costs(value)?),
                 _ => return Err(format!("unsupported option: {key}")),
             }
@@ -65,7 +67,9 @@ impl Config {
             || !(1..=32).contains(&repetitions)
             || !(2..=4).contains(&workers)
         {
-            return Err(String::from("synthetic topology or repetition limit exceeded"));
+            return Err(String::from(
+                "synthetic topology or repetition limit exceeded",
+            ));
         }
         let costs = costs.ok_or("missing explicit --costs profile")?;
         if costs.workers != workers {
@@ -130,7 +134,9 @@ fn parse_costs(value: &str) -> Result<MeasuredDisjointCosts, String> {
         ]
         .contains(&0)
     {
-        return Err(String::from("invalid profile geometry or cost coefficients"));
+        return Err(String::from(
+            "invalid profile geometry or cost coefficients",
+        ));
     }
     Ok(c)
 }
@@ -191,11 +197,7 @@ fn execute(config: Config, graph: &Connectome, external: bool) -> Measurement {
     let started = Instant::now();
     let (work, writers, accepted, rejected) = if external {
         let report: DisjointCommitWork = engine
-            .run_disjoint_parallel_commits_with_costs(
-                usize::MAX,
-                config.workers,
-                config.costs,
-            )
+            .run_disjoint_parallel_commits_with_costs(usize::MAX, config.workers, config.costs)
             .expect("validated external-cost scheduler");
         (
             report.work,
