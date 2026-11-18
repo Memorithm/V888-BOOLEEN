@@ -112,10 +112,17 @@ mod tests {
         for i in 0..768_usize {
             let target = (i * 17 / 7 + i % 5) % 7;
             targets.push(target as u32);
-            counts.push(if i % 11 == 0 { 0 } else { (i as u64) * 1_000_000 });
+            counts.push(if i % 11 == 0 {
+                0
+            } else {
+                (i as u64) * 1_000_000
+            });
         }
         let graph = graph(targets, counts);
-        assert_eq!(aggregate_outgoing(&graph, 0).unwrap(), independent_reference(&graph));
+        assert_eq!(
+            aggregate_outgoing(&graph, 0).unwrap(),
+            independent_reference(&graph)
+        );
     }
 
     #[test]
@@ -139,8 +146,14 @@ mod tests {
             engine.schedule_drive(3, 20, false).unwrap();
         }
         let expected = serial.run(48).unwrap();
-        assert_eq!(frontier.run_parallel_frontiers(48, 4).unwrap().work, expected);
-        assert_eq!(disjoint.run_disjoint_parallel_commits(48, 4).unwrap().work, expected);
+        assert_eq!(
+            frontier.run_parallel_frontiers(48, 4).unwrap().work,
+            expected
+        );
+        assert_eq!(
+            disjoint.run_disjoint_parallel_commits(48, 4).unwrap().work,
+            expected
+        );
         for engine in [&frontier, &disjoint] {
             assert_eq!(engine.state(), serial.state());
             assert_eq!(engine.incoming, serial.incoming);
