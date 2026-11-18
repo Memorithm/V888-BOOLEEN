@@ -110,27 +110,50 @@ struct CostBucket {
     candidates: u64,
 }
 
+/// Recorded measurements only apply to one worker count and cache state.
+/// The graph's per-prefix topology still selects the appropriate cost bucket.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct MeasurementScope {
+    worker_count: usize,
+    cache_enabled: bool,
+}
+
 /// Optional reusable, locally measured admission profile for disjoint commits.
 ///
 /// No wall-clock observation changes Boolean arithmetic, queue order, or the
 /// disjointness proof. Each bucket learns from actual scoped-thread and serial
 /// groups of comparable target width, cache reduction and target repetition.
-/// Keep one profile across repeated calls/runs to retain the measurements.
+/// Measurements remain reusable across independently reconstructed graphs,
+/// but changing worker count or contact-cache mode clears them before use.
 /// No process-global state, persisted calibration, joule or speedup claim.
 #[derive(Clone, Debug)]
 pub struct DisjointAdmissionProfile {
     buckets: [CostBucket; COST_BUCKETS],
+    scope: Option<MeasurementScope>,
 }
 
 impl Default for DisjointAdmissionProfile {
     fn default() -> Self {
         Self {
             buckets: [CostBucket::default(); COST_BUCKETS],
+            scope: None,
         }
     }
 }
 
 impl DisjointAdmissionProfile {
+    fn bind_scope(&mut self, worker_count: usize, cache_enabled: bool) {
+        let scope = MeasurementScope {
+            worker_count,
+            cache_enabled,
+        };
+        if self.scope.is_some_and(|previous| previous != scope) {
+            self.buckets = [CostBucket::default(); COST_BUCKETS];
+        }
+        self.scope = Some(scope);
+    }
+
+
     /// Returns the number of recorded serial and parallel group measurements.
     #[must_use]
     pub fn observation_counts(&self) -> (usize, usize) {
@@ -298,6 +321,10 @@ impl<'g> EventRuntime<'g> {
                 ..DisjointCommitWork::default()
             });
         }
+        let threads = requested_threads.min(MAX_COMMIT_THREADS);
+        if let Some(adaptive) = profile.as_deref_mut() {
+            adaptive.bind_scope(threads, self.contact_cache.is_some());
+        }
         // Necessary global bounds avoid constructing a conflict set when
         // there cannot be enough contacts or distinct destinations to
         // amortize scoped threads. Keep external calibration independent.
@@ -317,7 +344,6 @@ impl<'g> EventRuntime<'g> {
                 ..DisjointCommitWork::default()
             });
         }
-        let threads = requested_threads.min(MAX_COMMIT_THREADS);
         let mut result = DisjointCommitWork::default();
         while result.work.events_consumed < max_events && !self.pending.is_empty() {
             let allowance = (max_events - result.work.events_consumed)
@@ -942,6 +968,70 @@ mod tests {
         };
         assert!(!single_producer.probe_eligible());
         assert!(!too_few_targets.probe_eligible());
+    }
+
+    #[test]
+    fn measured_profile_invalidates_only_on_worker_or_cache_change() {
+        let topology = PrefixTopology {
+            changing_sources: 2,
+            raw_contacts: 512,
+            effective_contacts: 256,
+            distinct_targets: 256,
+        };
+        let mut profile = DisjointAdmissionProfile::default();
+        profile.bind_scope(2, false);
+        profile.observe(topology, false, Duration::from_micros(100));
+        profile.observe(topology, true, Duration::from_micros(50));
+        assert_eq!(profile.observation_counts(), (1, 1));
+        profile.bind_scope(2, false);
+        assert_eq!(profile.observation_counts(), (1, 1));
+
+        // A measured two-worker cost is not a four-worker prediction.
+        profile.bind_scope(4, false);
+        assert_eq!(profile.observation_counts(), (0, 0));
+        profile.observe(topology, false, Duration::from_micros(100));
+        assert_eq!(profile.observation_counts(), (1, 0));
+
+        // Cached preparation and uncached CSR traversal must not share
+        // timing history, even when their bucket number happens to match.
+        profile.bind_scope(4, true);
+        assert_eq!(profile.observation_counts(), (0, 0));
+        profile.observe(topology, true, Duration::from_micros(50));
+        profile.bind_scope(4, true);
+        assert_eq!(profile.observation_counts(), (0, 1));
+    }
+
+    #[test]
+    fn adaptive_runtime_rebinds_profile_even_on_serial_fallback() {
+        let graph = small_disjoint_graph();
+        let mut profile = DisjointAdmissionProfile::default();
+        let topology = PrefixTopology {
+            changing_sources: 2,
+            raw_contacts: 512,
+            effective_contacts: 256,
+            distinct_targets: 256,
+        };
+        profile.bind_scope(2, false);
+        profile.observe(topology, false, Duration::from_micros(100));
+        let mut runtime = EventRuntime::new(&graph, 1, 32).unwrap();
+        runtime.schedule_drive(0, 10, true).unwrap();
+        runtime
+            .run_disjoint_parallel_commits_with_profile(16, 4, &mut profile)
+            .unwrap();
+        assert_eq!(profile.observation_counts(), (0, 0));
+        assert_eq!(profile.scope.unwrap().worker_count, 4);
+        assert!(!profile.scope.unwrap().cache_enabled);
+
+        profile.observe(topology, false, Duration::from_micros(100));
+        let mut cached = EventRuntime::new(&graph, 1, 32).unwrap();
+        cached.prepare_contact_cache(32).unwrap();
+        cached.schedule_drive(0, 10, true).unwrap();
+        cached
+            .run_disjoint_parallel_commits_with_profile(16, 4, &mut profile)
+            .unwrap();
+        assert_eq!(profile.observation_counts(), (0, 0));
+        assert!(profile.scope.unwrap().cache_enabled);
+        assert_eq!(cached.audit_incoming(), Ok(true));
     }
 
     #[test]
