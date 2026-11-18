@@ -920,11 +920,11 @@ mod epoch_verified_dispatch_tests {
         let calls = Cell::new(0);
         let result = dispatch_sequential_epoch_verified(
             &mut epoch,
-                EpochDispatchConfig {
-                    gates: 128,
-                    cone_gates: 4,
-                    select_incremental: true,
-                },
+            EpochDispatchConfig {
+                gates: 128,
+                cone_gates: 4,
+                select_incremental: true,
+            },
             || Err(ProbeError::CacheBuild),
             || Ok(7_u8),
             || {
@@ -946,11 +946,11 @@ mod epoch_verified_dispatch_tests {
         let calls = Cell::new(0);
         let result = dispatch_sequential_epoch_verified(
             &mut epoch,
-                EpochDispatchConfig {
-                    gates: 4,
-                    cone_gates: 5,
-                    select_incremental: true,
-                },
+            EpochDispatchConfig {
+                gates: 4,
+                cone_gates: 5,
+                select_incremental: true,
+            },
             || {
                 calls.set(1);
                 Ok(())
@@ -981,11 +981,11 @@ mod epoch_quarantine_tests {
         let rebuilds = Cell::new(0);
         let first = dispatch_sequential_epoch_verified(
             &mut epoch,
-                EpochDispatchConfig {
-                    gates: 128,
-                    cone_gates: 4,
-                    select_incremental: true,
-                },
+            EpochDispatchConfig {
+                gates: 128,
+                cone_gates: 4,
+                select_incremental: true,
+            },
             || {
                 rebuilds.set(rebuilds.get() + 1);
                 Ok(())
@@ -1000,11 +1000,11 @@ mod epoch_quarantine_tests {
         assert!(!epoch.incremental_allowed());
         let second = dispatch_sequential_epoch_verified(
             &mut epoch,
-                EpochDispatchConfig {
-                    gates: 128,
-                    cone_gates: 4,
-                    select_incremental: true,
-                },
+            EpochDispatchConfig {
+                gates: 128,
+                cone_gates: 4,
+                select_incremental: true,
+            },
             || {
                 rebuilds.set(rebuilds.get() + 1);
                 Ok(())
@@ -1025,11 +1025,11 @@ mod epoch_quarantine_tests {
         epoch.commit_rebuild(epoch.rebuild_token()).unwrap();
         let result = dispatch_sequential_epoch_verified::<u8>(
             &mut epoch,
-                EpochDispatchConfig {
-                    gates: 128,
-                    cone_gates: 4,
-                    select_incremental: true,
-                },
+            EpochDispatchConfig {
+                gates: 128,
+                cone_gates: 4,
+                select_incremental: true,
+            },
             || panic!("current cache must not be rebuilt"),
             || Err(ProbeError::FullEvaluation),
             || Ok(7),
