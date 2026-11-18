@@ -907,4 +907,51 @@ mod tests {
         assert_eq!(uncached.audit_incoming(), Ok(true));
     }
 
+
+    #[test]
+    fn cost_admitted_prefix_preserves_first_queue_capacity_error_and_partial_commit() {
+        let graph = small_disjoint_graph();
+        let mut reference = EventRuntime::new(&graph, 1, 6).unwrap();
+        let mut modeled = EventRuntime::new(&graph, 1, 6).unwrap();
+        for runtime in [&mut reference, &mut modeled] {
+            runtime.schedule_drive(0, 10, true).unwrap();
+            runtime.schedule_drive(0, 11, true).unwrap();
+        }
+        let error = Err(EventError::PendingBudgetExceeded);
+        assert_eq!(reference.run(32), error);
+        assert_eq!(
+            modeled.run_disjoint_parallel_commits_with_costs(32, 2, small_measured_costs()),
+            error
+        );
+        assert_eq!(modeled.state(), reference.state());
+        assert_eq!(modeled.incoming, reference.incoming);
+        assert_eq!(modeled.pending, reference.pending);
+        assert_eq!(modeled.last_time, reference.last_time);
+        assert_eq!(modeled.state().active_count(), 1);
+        assert_eq!(modeled.pending_count(), 5);
+        assert_eq!(modeled.audit_incoming(), Ok(true));
+    }
+
+    #[test]
+    fn cost_admitted_prefix_keeps_overflowing_logical_time_uncommitted() {
+        let graph = small_disjoint_graph();
+        let mut reference = EventRuntime::new(&graph, 1, 32).unwrap();
+        let mut modeled = EventRuntime::new(&graph, 1, 32).unwrap();
+        for runtime in [&mut reference, &mut modeled] {
+            runtime.schedule_drive(u64::MAX, 10, true).unwrap();
+            runtime.schedule_drive(u64::MAX, 11, true).unwrap();
+        }
+        assert_eq!(reference.run(32), Err(EventError::LogicalTimeOverflow));
+        assert_eq!(
+            modeled.run_disjoint_parallel_commits_with_costs(32, 2, small_measured_costs()),
+            Err(EventError::LogicalTimeOverflow)
+        );
+        assert_eq!(modeled.state(), reference.state());
+        assert_eq!(modeled.incoming, reference.incoming);
+        assert_eq!(modeled.pending, reference.pending);
+        assert_eq!(modeled.last_time, reference.last_time);
+        assert_eq!(modeled.pending_count(), 2);
+        assert_eq!(modeled.audit_incoming(), Ok(true));
+    }
+
 }
