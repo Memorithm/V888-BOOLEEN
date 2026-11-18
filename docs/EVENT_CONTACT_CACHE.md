@@ -83,6 +83,27 @@ logique. Ce changement évite un travail réel de lecture et de
 comparaison sur des destinations répétées ; il ne garantit aucun
 gain physique avant la campagne appariée.
 
+## Admission parallèle adaptée à la compression
+
+Une frontière peut représenter plus de 65 536 lignes CSR tout en ne
+nécessitant que quelques paires distinctes grâce au cache. Utiliser
+le seul fanout CSR **logique** pour décider de créer des threads
+conservait alors un surcoût inutile de préparation et de synchronisation.
+
+Les deux moteurs opt-in estiment désormais le travail restant comme la
+somme des paires agrégées pour les sources cachées et des lignes CSR pour
+les sources non cachées, uniquement en cas de transition effective.
+Le seuil expérimental conservateur de 65 536 s'applique à cette estimation
+lors de l'admission des threads. En-dessous, le préfixe est traité dans
+l'ordre de référence, sans threads. Cette estimation n'est pas un coût
+énergétique, et les huit compteurs `EventWork` continuent à exprimer le
+travail CSR **logique**, indépendamment du cache et des threads.
+
+Les tests distinguent le véritable parallélisme de la voie de repli :
+65 536 contacts répétés réduits à huit paires ne doivent plus créer de
+threads, tout en préservant l'état, les compteurs, les dates et la file
+exactement. Les sources non cachées conservent leur mode antérieur.
+
 ## Coûts et limites
 
 Le nombre de paires **retenues** est plafonné par le paramètre de
