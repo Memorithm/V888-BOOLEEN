@@ -175,7 +175,10 @@ mod tests {
     fn past_event_and_empty_batch_are_safe_after_partial_progress() {
         let graph = chain();
         let mut runtime = EventRuntime::new(&graph, 1, 8).unwrap();
-        assert_eq!(runtime.schedule_drive_batch(&[]), Ok(DriveBatchReport::default()));
+        assert_eq!(
+            runtime.schedule_drive_batch(&[]),
+            Ok(DriveBatchReport::default())
+        );
         runtime.schedule_drive(2, 10, true).unwrap();
         runtime.run(1).unwrap();
         assert_eq!(runtime.last_processed_time(), Some(2));
