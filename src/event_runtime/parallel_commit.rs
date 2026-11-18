@@ -127,6 +127,7 @@ impl<'g> EventRuntime<'g> {
             let worker_count = threads.min(group.len());
             let chunk_size = group.len().div_ceil(worker_count);
             let graph = self.graph;
+            let cache = self.contact_cache.as_ref();
             let state = &self.state;
             let incoming = &self.incoming;
             let threshold = self.threshold;
@@ -137,7 +138,7 @@ impl<'g> EventRuntime<'g> {
                         chunk
                             .iter()
                             .map(|&(key, requested)| {
-                                prepare_one(graph, state, incoming, threshold, key, requested)
+                                prepare_one(graph, cache, state, incoming, threshold, key, requested)
                             })
                             .collect::<Vec<_>>()
                     }));
