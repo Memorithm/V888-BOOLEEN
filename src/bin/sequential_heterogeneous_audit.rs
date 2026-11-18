@@ -3,6 +3,7 @@
 //! full_output,incremental_output,full_decision,incremental_decision,vm_hwm_kib
 //! Rows must be ordered by sequence. This tool never trains on holdouts.
 use std::io::{self, BufRead, Read};
+use std::time::Instant;
 
 // Reject oversized CSV records before allocating unbounded input memory.
 const MAX_RECORD_BYTES: u64 = 4096;
@@ -120,8 +121,20 @@ fn audit<R: BufRead>(mut reader: R) -> Result<[Totals; 4], String> {
 }
 
 fn main() {
+    // This clock measures the audit process only, never the Boolean engine.
+    let audit_start = Instant::now();
     match audit(io::stdin().lock()) {
         Ok(totals) => {
+            let audit_elapsed_ns = audit_start.elapsed().as_nanos();
+            let total_rows: u128 = totals.iter().map(|t| u128::from(t.count)).sum();
+            let audit_rows_per_second = if audit_elapsed_ns == 0 { None } else {
+                total_rows.checked_mul(1_000_000_000).map(|n| n / audit_elapsed_ns)
+            };
+            eprintln!("PHYSICAL_AUDITOR_ELAPSED_NS={audit_elapsed_ns}");
+            match audit_rows_per_second {
+                Some(rate) => eprintln!("PHYSICAL_AUDITOR_ROWS_PER_SECOND={rate}"),
+                None => eprintln!("PHYSICAL_AUDITOR_ROWS_PER_SECOND=unavailable"),
+            }
             println!("split,count,mismatches,full_ns,oracle_safe_lower_bound_ns,incremental_ns,refresh_ns,epoch_transitions,oracle_bound_ops_per_second,vm_hwm_kib,geometry_transitions,min_cone,max_cone,max_refresh_ns");
             for (name, t) in ["TRAIN", "VALID", "TEST", "OOD"].iter().zip(totals.iter()) {
                 let throughput = if t.selected == 0 { 0 } else { u128::from(t.count).saturating_mul(1_000_000_000) / t.selected };
@@ -131,7 +144,7 @@ fn main() {
                 Some(kib) => eprintln!("PHYSICAL_AUDITOR_PROCESS_VM_HWM_KIB={kib}"),
                 None => eprintln!("PHYSICAL_AUDITOR_PROCESS_VM_HWM_KIB=unavailable"),
             }
-            eprintln!("NOTE: oracle_safe_lower_bound_ns and oracle_bound_ops_per_second are retrospective optimistic bounds using oracle outcomes, NOT measured wall-clock throughput, deployable latency or trained policy. incremental_ns and refresh_ns are input-reported sums, not physical measurements made by this program.");
+            eprintln!("NOTE: PHYSICAL_AUDITOR_* measures only CSV ingestion and accounting, NOT engine throughput or end-to-end inference. oracle_safe_lower_bound_ns and oracle_bound_ops_per_second are retrospective optimistic bounds using oracle outcomes, NOT measured wall-clock throughput, deployable latency or trained policy. incremental_ns and refresh_ns are input-reported sums, not physical measurements made by this program.");
         }
         Err(e) => { eprintln!("audit rejected: {e}"); std::process::exit(2); }
     }
