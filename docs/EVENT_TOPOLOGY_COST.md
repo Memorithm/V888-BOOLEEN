@@ -6,14 +6,17 @@ anatomiques. La référence demeure `EventRuntime::run`.
 
 ## Deux modes d'admission
 
-1. `run_disjoint_parallel_commits(max_events, workers)` garde les seuils
-   conservateurs existants (graphe de 65 536 lignes CSR, groupe d'au moins
-   65 536 unités de préparation, 1 024 cibles distinctes, deux producteurs).
+1. `run_disjoint_parallel_commits(max_events, workers)` conserve le
+   profil adaptatif introduit dans la PR #157 : calibration locale de
+   groupes, 12 catégories de topologies et conservation des bornes
+   prudentes au démarrage. `run_disjoint_parallel_commits_with_profile`
+   permet de conserver les observations d'un appel à l'autre.
 2. `run_disjoint_parallel_commits_with_costs(max_events, workers, profile)`
    accepte un **profil de mesures externes** et estime si les deux passes
    de threads peuvent être amorties pour le groupe réellement rencontré.
    Si son enveloppe topologique n'est pas respectée, le groupe est traité
-   séquentiellement. Le seuil global fixe ne bloque pas les profils opt-in.
+   séquentiellement. Les seuils du calibrage en ligne ne bloquent pas les profils externes
+explicitement admis ; les calculs booléens restent identiques.
 
 `MeasuredDisjointCosts` comporte le nombre de workers de la mesure, une
 enveloppe minimale/maximale de producteurs, contacts effectifs et cibles
@@ -55,6 +58,9 @@ Le résultat `DisjointCommitWork` expose `cost_profile_accepted` et
 préfixe candidat, pas des exécutions parallèles réussies. Le compteur
 `disjoint_groups` reste la preuve qu'un groupe a effectivement atteint
 le commit parallèle ; les mesures de temps et d'énergie restent externes.
+
+Cette heuristique externe est indépendante de la calibration en ligne de
+#157. Aucune observation n'est ajoutée au profil adaptatif par cette API.
 
 Cette heuristique ignore les effets NUMA, caches partagés, bande passante
 mémoire, création réelle de threads et variance temporelle non modélisés.

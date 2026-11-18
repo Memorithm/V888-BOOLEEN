@@ -13,6 +13,7 @@
 
 use std::collections::BTreeSet;
 use std::thread;
+use std::time::{Duration, Instant};
 
 use super::admission::MeasuredDisjointCosts;
 use super::contacts::effective_outgoing_work;
@@ -26,6 +27,168 @@ const MIN_PARALLEL_CONTACTS: usize = 65_536;
 /// Sparse target writes cannot amortize two sets of scoped threads even when
 /// the uncached CSR fanout is large. This is a conservative CPU heuristic.
 const MIN_PARALLEL_TARGETS: usize = 1_024;
+/// Small groups never create two thread passes, even while probing.
+const MIN_PROBE_CONTACTS: usize = 256;
+const MIN_PROBE_TARGETS: usize = 32;
+const COST_BUCKETS: usize = 12;
+const COST_OBSERVATIONS: u8 = 2;
+const PROBE_EVERY: u64 = 32;
+
+/// Characteristics of the *current causal prefix*, not global graph averages.
+/// A cached row has a smaller effective preparation count than its raw CSR size.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PrefixTopology {
+    changing_sources: usize,
+    raw_contacts: usize,
+    effective_contacts: usize,
+    distinct_targets: usize,
+}
+
+impl PrefixTopology {
+    fn probe_eligible(self) -> bool {
+        self.changing_sources >= 2
+            && self.effective_contacts >= MIN_PROBE_CONTACTS
+            && self.distinct_targets >= MIN_PROBE_TARGETS
+    }
+
+    fn legacy_eligible(self) -> bool {
+        self.changing_sources >= 2
+            && self.effective_contacts >= MIN_PARALLEL_CONTACTS
+            && self.distinct_targets >= MIN_PARALLEL_TARGETS
+    }
+
+    /// Three target-cardinality bands, whether the cache reduced traversal,
+    /// and whether the anatomical fanout repeats target IDs heavily.
+    fn bucket(self) -> usize {
+        let target_band = if self.distinct_targets < 128 {
+            0
+        } else if self.distinct_targets < MIN_PARALLEL_TARGETS {
+            1
+        } else {
+            2
+        };
+        let cached = usize::from(self.raw_contacts > self.effective_contacts.saturating_mul(4));
+        let repeated = usize::from(self.raw_contacts > self.distinct_targets.saturating_mul(16));
+        target_band * 4 + cached * 2 + repeated
+    }
+
+    fn units(self) -> usize {
+        self.effective_contacts
+            .saturating_add(self.distinct_targets)
+            .saturating_add(self.changing_sources.saturating_mul(8))
+            .max(1)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct CostSample {
+    /// Smoothed nanoseconds per 1024 modeled units; never treated as energy.
+    ns_per_1024_units: u128,
+    observations: u8,
+}
+
+impl CostSample {
+    fn record(&mut self, topology: PrefixTopology, elapsed: Duration) {
+        let sample = elapsed.as_nanos().max(1).saturating_mul(1_024) / topology.units() as u128;
+        if self.observations == 0 {
+            self.ns_per_1024_units = sample;
+        } else {
+            self.ns_per_1024_units = self
+                .ns_per_1024_units
+                .saturating_mul(3)
+                .saturating_add(sample)
+                / 4;
+        }
+        self.observations = self.observations.saturating_add(1);
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct CostBucket {
+    serial: CostSample,
+    parallel: CostSample,
+    candidates: u64,
+}
+
+/// Optional reusable, locally measured admission profile for disjoint commits.
+///
+/// No wall-clock observation changes Boolean arithmetic, queue order, or the
+/// disjointness proof. Each bucket learns from actual scoped-thread and serial
+/// groups of comparable target width, cache reduction and target repetition.
+/// Keep one profile across repeated calls/runs to retain the measurements.
+/// No process-global state, persisted calibration, joule or speedup claim.
+#[derive(Clone, Debug)]
+pub struct DisjointAdmissionProfile {
+    buckets: [CostBucket; COST_BUCKETS],
+}
+
+impl Default for DisjointAdmissionProfile {
+    fn default() -> Self {
+        Self {
+            buckets: [CostBucket::default(); COST_BUCKETS],
+        }
+    }
+}
+
+impl DisjointAdmissionProfile {
+    /// Returns the number of recorded serial and parallel group measurements.
+    #[must_use]
+    pub fn observation_counts(&self) -> (usize, usize) {
+        self.buckets
+            .iter()
+            .fold((0, 0), |(serial, parallel), bucket| {
+                (
+                    serial + usize::from(bucket.serial.observations),
+                    parallel + usize::from(bucket.parallel.observations),
+                )
+            })
+    }
+
+    fn should_parallel(&mut self, topology: PrefixTopology) -> bool {
+        if !topology.probe_eligible() {
+            return false;
+        }
+        let bucket = &mut self.buckets[topology.bucket()];
+        bucket.candidates = bucket.candidates.saturating_add(1);
+        let serial_ready = bucket.serial.observations >= COST_OBSERVATIONS;
+        let parallel_ready = bucket.parallel.observations >= COST_OBSERVATIONS;
+
+        if serial_ready && parallel_ready {
+            // Require a 15% measured margin to avoid unstable tie decisions.
+            // Revisit the disfavored path periodically, in either direction.
+            let parallel_faster = bucket.parallel.ns_per_1024_units.saturating_mul(100)
+                < bucket.serial.ns_per_1024_units.saturating_mul(85);
+            return if bucket.candidates % PROBE_EVERY == 0 {
+                !parallel_faster
+            } else {
+                parallel_faster
+            };
+        }
+        if serial_ready {
+            // Controlled experiment after two real serial observations,
+            // including on sub-65k topologies when they contain enough writes.
+            return true;
+        }
+        if topology.legacy_eligible() {
+            // Retain the historical first-admission behavior, but also acquire
+            // serial baselines every third candidate to calibrate this bucket.
+            return bucket.parallel.observations == 0 || bucket.candidates % 3 != 0;
+        }
+        false
+    }
+
+    fn observe(&mut self, topology: PrefixTopology, parallel: bool, elapsed: Duration) {
+        if !topology.probe_eligible() {
+            return;
+        }
+        let bucket = &mut self.buckets[topology.bucket()];
+        if parallel {
+            bucket.parallel.record(topology, elapsed);
+        } else {
+            bucket.serial.record(topology, elapsed);
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DisjointCommitWork {
@@ -43,9 +206,9 @@ pub struct DisjointCommitWork {
     pub serial_events: usize,
     /// Maximum number of events in one disjoint group.
     pub max_group_width: usize,
-    /// Candidate prefixes accepted by the opt-in cost model before preflight.
+    /// Candidate prefixes accepted by the optional external cost model.
     pub cost_profile_accepted: usize,
-    /// Candidate prefixes rejected by the opt-in cost model.
+    /// Candidate prefixes rejected by the optional external cost model.
     pub cost_profile_rejected: usize,
 }
 
@@ -75,15 +238,30 @@ impl<'g> EventRuntime<'g> {
         max_events: usize,
         requested_threads: usize,
     ) -> Result<DisjointCommitWork, EventError> {
-        self.run_disjoint_parallel_commits_with_optional_costs(max_events, requested_threads, None)
+        self.run_disjoint_parallel_commits_with_profile(
+            max_events,
+            requested_threads,
+            &mut DisjointAdmissionProfile::default(),
+        )
     }
 
-    /// Opt-in topology-aware admission using externally measured costs.
-    ///
-    /// Invalid or worker-mismatched profiles fail before mutating the engine.
-    /// Groups outside the measured topology envelope are executed serially.
-    /// The original default thresholds remain unchanged when this method is
-    /// not selected. A profile changes the execution route, never the result.
+    /// Like `run_disjoint_parallel_commits`, but retain observed costs across
+    /// calls or independently repeated runs using a caller-owned profile.
+    /// Timing affects *only* thread admission, never the computed result.
+    pub fn run_disjoint_parallel_commits_with_profile(
+        &mut self,
+        max_events: usize,
+        requested_threads: usize,
+        profile: &mut DisjointAdmissionProfile,
+    ) -> Result<DisjointCommitWork, EventError> {
+        self.run_disjoint_parallel_commits_with_admission(
+            max_events, requested_threads, profile, None,
+        )
+    }
+
+    /// Optional external-cost admission. The default online calibration
+    /// remains available through run_disjoint_parallel_commits_with_profile.
+    /// This method never trains the online profile or changes neuron rules.
     pub fn run_disjoint_parallel_commits_with_costs(
         &mut self,
         max_events: usize,
@@ -96,17 +274,19 @@ impl<'g> EventRuntime<'g> {
         if !costs.valid() || costs.workers != requested_threads.min(MAX_COMMIT_THREADS) {
             return Err(EventError::InvalidCostProfile);
         }
-        self.run_disjoint_parallel_commits_with_optional_costs(
+        self.run_disjoint_parallel_commits_with_admission(
             max_events,
             requested_threads,
+            &mut DisjointAdmissionProfile::default(),
             Some(costs),
         )
     }
 
-    fn run_disjoint_parallel_commits_with_optional_costs(
+    fn run_disjoint_parallel_commits_with_admission(
         &mut self,
         max_events: usize,
         requested_threads: usize,
+        profile: &mut DisjointAdmissionProfile,
         costs: Option<MeasuredDisjointCosts>,
     ) -> Result<DisjointCommitWork, EventError> {
         if requested_threads == 0 {
@@ -120,7 +300,7 @@ impl<'g> EventRuntime<'g> {
         }
         // Work this small cannot amortize the two scoped thread passes.
         // Direct delegation avoids repeated graph scans and temporary buffers.
-        if costs.is_none() && self.graph.targets.len() < MIN_PARALLEL_CONTACTS {
+        if costs.is_none() && self.graph.targets.len() < MIN_PROBE_CONTACTS {
             let work = self.run(max_events)?;
             return Ok(DisjointCommitWork {
                 serial_events: work.events_consumed,
@@ -142,6 +322,7 @@ impl<'g> EventRuntime<'g> {
                 continue;
             }
             let mut work_to_prepare = 0usize;
+            let mut raw_contacts = 0usize;
             let mut changing_sources = 0usize;
             for &((_, _, source), requested) in &group {
                 if self.state.get(source).expect("validated neuron index") != requested {
@@ -150,6 +331,9 @@ impl<'g> EventRuntime<'g> {
                     if remaining > 0 {
                         changing_sources += 1;
                         work_to_prepare = work_to_prepare.saturating_add(remaining);
+                        raw_contacts = raw_contacts.saturating_add(
+                            (self.graph.offsets[source + 1] - self.graph.offsets[source]) as usize,
+                        );
                     }
                 }
             }
@@ -157,29 +341,44 @@ impl<'g> EventRuntime<'g> {
             // not merely two queued drives (other drives can be no-ops).
             // Compressed cached rows have already paid their CSR scan cost.
             // Do not launch two thread passes for only a handful of pairs.
-            let admit = if let Some(profile) = costs {
-                profile.admits(changing_sources, work_to_prepare, distinct_targets, threads)
+            let topology = PrefixTopology {
+                changing_sources,
+                raw_contacts,
+                effective_contacts: work_to_prepare,
+                distinct_targets,
+            };
+            let admit = if let Some(measured) = costs {
+                measured.admits(
+                    topology.changing_sources,
+                    topology.effective_contacts,
+                    topology.distinct_targets,
+                    threads,
+                )
             } else {
-                work_to_prepare >= MIN_PARALLEL_CONTACTS
-                    && distinct_targets >= MIN_PARALLEL_TARGETS
+                profile.should_parallel(topology)
             };
             if costs.is_some() {
-                if changing_sources >= 2 && admit {
+                if admit {
                     result.cost_profile_accepted += 1;
                 } else {
                     result.cost_profile_rejected += 1;
                 }
             }
-            if changing_sources < 2 || !admit {
+            if !admit {
                 // A rejected prefix can be consumed in canonical order.
                 // Do not replan the same tiny group after each event.
+                let started = Instant::now();
                 for _ in 0..group.len() {
                     self.consume_one(&mut result.work)?;
                     result.serial_events += 1;
                 }
+                if costs.is_none() {
+                    profile.observe(topology, false, started.elapsed());
+                }
                 continue;
             }
 
+            let parallel_started = Instant::now();
             // Parallel preflight has no side effects. Any failed preparation
             // must be reported at its original sequential event boundary.
             let worker_count = threads.min(group.len());
@@ -273,6 +472,9 @@ impl<'g> EventRuntime<'g> {
             result.max_group_width = result.max_group_width.max(group.len());
             result.target_counters_written += targets_written;
             result.target_writer_threads += writer_threads;
+            if costs.is_none() {
+                profile.observe(topology, true, parallel_started.elapsed());
+            }
         }
         Ok(result)
     }
@@ -642,6 +844,204 @@ mod tests {
         assert_eq!(result.target_writer_threads, 0);
         assert_eq!(result.serial_events, result.work.events_consumed);
         assert_eq!(result.work.state_transitions, 2);
+    }
+
+    #[test]
+    fn measured_costs_reject_slow_parallel_and_admit_faster_parallel() {
+        let shape = PrefixTopology {
+            changing_sources: 2,
+            raw_contacts: 512,
+            effective_contacts: 512,
+            distinct_targets: 256,
+        };
+        let mut slow = DisjointAdmissionProfile::default();
+        let mut fast = DisjointAdmissionProfile::default();
+        assert!(!slow.should_parallel(shape)); // Cold sub-65k path.
+        for _ in 0..2 {
+            slow.observe(shape, false, Duration::from_millis(2));
+            slow.observe(shape, true, Duration::from_millis(8));
+            fast.observe(shape, false, Duration::from_millis(8));
+            fast.observe(shape, true, Duration::from_millis(2));
+        }
+        assert!(!slow.should_parallel(shape));
+        assert!(fast.should_parallel(shape));
+        assert_eq!(slow.observation_counts(), (2, 2));
+        assert_eq!(fast.observation_counts(), (2, 2));
+        assert!(shape.probe_eligible());
+        assert!(!shape.legacy_eligible());
+    }
+
+    #[test]
+    fn periodic_probes_resample_the_disfavored_path_in_both_directions() {
+        let shape = PrefixTopology {
+            changing_sources: 2,
+            raw_contacts: 512,
+            effective_contacts: 512,
+            distinct_targets: 256,
+        };
+        let mut fast = DisjointAdmissionProfile::default();
+        let mut slow = DisjointAdmissionProfile::default();
+        for _ in 0..2 {
+            fast.observe(shape, false, Duration::from_millis(8));
+            fast.observe(shape, true, Duration::from_millis(2));
+            slow.observe(shape, false, Duration::from_millis(2));
+            slow.observe(shape, true, Duration::from_millis(8));
+        }
+        for _ in 0..PROBE_EVERY - 1 {
+            assert!(fast.should_parallel(shape));
+            assert!(!slow.should_parallel(shape));
+        }
+        assert!(!fast.should_parallel(shape)); // Refresh serial baseline.
+        assert!(slow.should_parallel(shape)); // Refresh parallel baseline.
+    }
+
+    #[test]
+    fn topology_buckets_separate_caching_repetition_and_target_width() {
+        let medium = PrefixTopology {
+            changing_sources: 2,
+            raw_contacts: 512,
+            effective_contacts: 512,
+            distinct_targets: 256,
+        };
+        let cached = PrefixTopology {
+            raw_contacts: 8_192,
+            effective_contacts: 512,
+            ..medium
+        };
+        let repeated = PrefixTopology {
+            raw_contacts: 8_192,
+            effective_contacts: 8_192,
+            ..medium
+        };
+        let narrow = PrefixTopology {
+            distinct_targets: 32,
+            ..medium
+        };
+        assert_ne!(medium.bucket(), cached.bucket());
+        assert_ne!(medium.bucket(), repeated.bucket());
+        assert_ne!(medium.bucket(), narrow.bucket());
+        assert!(medium.bucket() < COST_BUCKETS);
+        let single_producer = PrefixTopology {
+            changing_sources: 1,
+            ..medium
+        };
+        let too_few_targets = PrefixTopology {
+            distinct_targets: 8,
+            ..medium
+        };
+        assert!(!single_producer.probe_eligible());
+        assert!(!too_few_targets.probe_eligible());
+    }
+
+    #[test]
+    fn calibrated_subthreshold_parallel_commit_preserves_full_serial_state() {
+        let target_count = 256usize;
+        let node_count = target_count + 2;
+        let mut offsets = vec![target_count as u64; node_count + 1];
+        offsets[0] = 0;
+        offsets[1] = (target_count / 2) as u64;
+        let graph = Connectome {
+            ids: (10..10 + node_count as u64).collect(),
+            offsets,
+            targets: (2..2 + target_count as u32).collect(),
+            counts: vec![1; target_count],
+        };
+        graph.validate().unwrap();
+
+        let mut profile = DisjointAdmissionProfile::default();
+        let shape = PrefixTopology {
+            changing_sources: 2,
+            raw_contacts: target_count,
+            effective_contacts: target_count,
+            distinct_targets: target_count,
+        };
+        // Inject measured examples only for this test, never for production.
+        for _ in 0..2 {
+            profile.observe(shape, false, Duration::from_millis(8));
+            profile.observe(shape, true, Duration::from_millis(2));
+        }
+        let mut reference = EventRuntime::new(&graph, 1, 1024).unwrap();
+        let mut adapted = EventRuntime::new(&graph, 1, 1024).unwrap();
+        for runtime in [&mut reference, &mut adapted] {
+            for (time, value) in [(0, true), (3, false)] {
+                runtime.schedule_drive(time, 10, value).unwrap();
+                runtime.schedule_drive(time, 11, value).unwrap();
+            }
+        }
+        let expected = reference.run(usize::MAX).unwrap();
+        let actual = adapted
+            .run_disjoint_parallel_commits_with_profile(usize::MAX, 4, &mut profile)
+            .unwrap();
+        assert!(actual.disjoint_groups >= 1);
+        assert_eq!(actual.work, expected);
+        assert_eq!(adapted.state(), reference.state());
+        assert_eq!(adapted.incoming, reference.incoming);
+        assert_eq!(adapted.pending, reference.pending);
+        assert_eq!(adapted.last_time, reference.last_time);
+        assert_eq!(adapted.audit_incoming(), Ok(true));
+    }
+
+    #[test]
+    fn calibrated_preflight_capacity_error_keeps_exact_partial_state() {
+        let target_count = 256usize;
+        let node_count = target_count + 2;
+        let mut offsets = vec![target_count as u64; node_count + 1];
+        offsets[0] = 0;
+        offsets[1] = (target_count / 2) as u64;
+        let graph = Connectome {
+            ids: (10..10 + node_count as u64).collect(),
+            offsets,
+            targets: (2..2 + target_count as u32).collect(),
+            counts: vec![1; target_count],
+        };
+        graph.validate().unwrap();
+        let topology = PrefixTopology {
+            changing_sources: 2,
+            raw_contacts: target_count,
+            effective_contacts: target_count,
+            distinct_targets: target_count,
+        };
+        let mut profile = DisjointAdmissionProfile::default();
+        for _ in 0..2 {
+            profile.observe(topology, false, Duration::from_millis(8));
+            profile.observe(topology, true, Duration::from_millis(2));
+        }
+        let mut serial = EventRuntime::new(&graph, 1, 130).unwrap();
+        let mut tuned = EventRuntime::new(&graph, 1, 130).unwrap();
+        for engine in [&mut serial, &mut tuned] {
+            engine.schedule_drive(0, 10, true).unwrap();
+            engine.schedule_drive(0, 11, true).unwrap();
+        }
+        assert_eq!(
+            serial.run(usize::MAX),
+            Err(EventError::PendingBudgetExceeded)
+        );
+        assert_eq!(
+            tuned.run_disjoint_parallel_commits_with_profile(usize::MAX, 4, &mut profile),
+            Err(EventError::PendingBudgetExceeded)
+        );
+        assert_eq!(tuned.state(), serial.state());
+        assert_eq!(tuned.incoming, serial.incoming);
+        assert_eq!(tuned.pending, serial.pending);
+        assert_eq!(tuned.last_time, serial.last_time);
+        assert_eq!(tuned.audit_incoming(), Ok(true));
+    }
+
+    #[test]
+    fn wide_legacy_path_uses_threads_before_adaptive_calibration() {
+        let large = PrefixTopology {
+            changing_sources: 2,
+            raw_contacts: 65_536,
+            effective_contacts: 65_536,
+            distinct_targets: 1_024,
+        };
+        let mut profile = DisjointAdmissionProfile::default();
+        assert!(profile.should_parallel(large));
+        for _ in 0..2 {
+            profile.observe(large, false, Duration::from_millis(1));
+            profile.observe(large, true, Duration::from_millis(10));
+        }
+        assert!(!profile.should_parallel(large));
     }
 
     #[test]
