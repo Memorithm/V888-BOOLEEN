@@ -244,10 +244,7 @@ mod tests {
         let graph = Connectome {
             ids: vec![10, 20, 30, 40],
             offsets: vec![0, 128, 256, 256, 256],
-            targets: (0..128)
-                .map(|_| 2)
-                .chain((0..128).map(|_| 3))
-                .collect(),
+            targets: (0..128).map(|_| 2).chain((0..128).map(|_| 3)).collect(),
             counts: vec![2; 256],
         };
         graph.validate().unwrap();
@@ -295,13 +292,22 @@ mod tests {
         let mut cached_frontier = EventRuntime::new(&graph, 1, 64).unwrap();
         let mut cached_disjoint = EventRuntime::new(&graph, 1, 64).unwrap();
 
-        for engine in [&mut cached_serial, &mut cached_frontier, &mut cached_disjoint] {
+        for engine in [
+            &mut cached_serial,
+            &mut cached_frontier,
+            &mut cached_disjoint,
+        ] {
             let report = engine.prepare_contact_cache(8).unwrap();
             assert_eq!(report.cached_sources, 8);
             assert_eq!(report.cached_pairs, 8);
             assert_eq!(report.covered_contact_rows, 65_536);
         }
-        for engine in [&mut reference, &mut cached_serial, &mut cached_frontier, &mut cached_disjoint] {
+        for engine in [
+            &mut reference,
+            &mut cached_serial,
+            &mut cached_frontier,
+            &mut cached_disjoint,
+        ] {
             for id in 10..18 {
                 engine.schedule_drive(0, id, true).unwrap();
                 engine.schedule_drive(3, id, false).unwrap();
@@ -310,7 +316,9 @@ mod tests {
         let expected = reference.run(64).unwrap();
         let serial = cached_serial.run(64).unwrap();
         let frontier = cached_frontier.run_parallel_frontiers(64, 4).unwrap();
-        let disjoint = cached_disjoint.run_disjoint_parallel_commits(64, 4).unwrap();
+        let disjoint = cached_disjoint
+            .run_disjoint_parallel_commits(64, 4)
+            .unwrap();
         assert_eq!(serial, expected);
         assert_eq!(frontier.work, expected);
         assert_eq!(disjoint.work, expected);
@@ -321,7 +329,10 @@ mod tests {
             assert_eq!(engine.state(), reference.state());
             assert_eq!(engine.pending, reference.pending);
             assert_eq!(engine.incoming, reference.incoming);
-            assert_eq!(engine.last_processed_time(), reference.last_processed_time());
+            assert_eq!(
+                engine.last_processed_time(),
+                reference.last_processed_time()
+            );
             assert_eq!(engine.audit_incoming(), Ok(true));
         }
     }
