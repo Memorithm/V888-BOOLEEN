@@ -107,12 +107,12 @@ impl Config {
                 .ok_or_else(|| format!("expected --name=value, got {argument}"))?;
             match name {
                 "mode" => {
-                    config.mode = Mode::parse(value)
-                        .ok_or_else(|| format!("unsupported mode {value}"))?;
+                    config.mode =
+                        Mode::parse(value).ok_or_else(|| format!("unsupported mode {value}"))?;
                 }
                 "shape" => {
-                    config.shape = Shape::parse(value)
-                        .ok_or_else(|| format!("unsupported shape {value}"))?;
+                    config.shape =
+                        Shape::parse(value).ok_or_else(|| format!("unsupported shape {value}"))?;
                 }
                 "sources" => {
                     config.sources = value
@@ -189,8 +189,8 @@ struct Sample {
 
 fn execute(graph: &Connectome, shape: Shape, mode: Mode, workers: usize) -> Sample {
     let sources = graph.ids.len() / 2;
-    let mut runtime = EventRuntime::new(graph, shape.threshold(), 4 * sources + 16)
-        .expect("valid bounded graph");
+    let mut runtime =
+        EventRuntime::new(graph, shape.threshold(), 4 * sources + 16).expect("valid bounded graph");
     for &id in &graph.ids[..sources] {
         runtime.schedule_drive(0, id, true).expect("first drive");
         runtime.schedule_drive(3, id, false).expect("second drive");
@@ -274,14 +274,10 @@ fn report(config: Config) {
     let ticks_after = proc_cpu_ticks();
     durations.sort_unstable();
     let total_ns: u128 = durations.iter().sum();
-    let peak_rss = proc_status_kib("VmHWM:").map_or_else(
-        || "unavailable".to_string(),
-        |value| value.to_string(),
-    );
-    let current_rss = proc_status_kib("VmRSS:").map_or_else(
-        || "unavailable".to_string(),
-        |value| value.to_string(),
-    );
+    let peak_rss = proc_status_kib("VmHWM:")
+        .map_or_else(|| "unavailable".to_string(), |value| value.to_string());
+    let current_rss = proc_status_kib("VmRSS:")
+        .map_or_else(|| "unavailable".to_string(), |value| value.to_string());
     let ticks = ticks_before
         .zip(ticks_after)
         .and_then(|(before, after)| after.checked_sub(before))
@@ -346,8 +342,20 @@ mod tests {
         let b = graph(32, Shape::Convergent);
         assert_eq!(a.ids, b.ids);
         assert_eq!(a.targets.len(), 32);
-        assert_eq!(a.targets.iter().collect::<std::collections::BTreeSet<_>>().len(), 32);
-        assert_eq!(b.targets.iter().collect::<std::collections::BTreeSet<_>>().len(), 4);
+        assert_eq!(
+            a.targets
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            32
+        );
+        assert_eq!(
+            b.targets
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            4
+        );
     }
 
     #[test]
@@ -357,8 +365,11 @@ mod tests {
         assert!(Config::parse(["--repetitions=65".to_string()]).is_err());
         assert!(Config::parse(["--mode=unknown".to_string()]).is_err());
         assert!(Config::parse(["--typo=12".to_string()]).is_err());
-        let config = Config::parse(["--mode=disjoint".to_string(), "--shape=convergent".to_string()])
-            .expect("valid selected modes");
+        let config = Config::parse([
+            "--mode=disjoint".to_string(),
+            "--shape=convergent".to_string(),
+        ])
+        .expect("valid selected modes");
         assert_eq!(config.mode, Mode::Disjoint);
         assert_eq!(config.shape, Shape::Convergent);
     }
