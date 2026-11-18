@@ -34,6 +34,21 @@ réparties entre des segments non chevauchants du vecteur d'entrée, puis
 déduplications et compteurs de travail sont publiés par l'unique
 propriétaire, dans l'ordre causal d'origine.
 
+## Admission adaptative et repli sans threads
+
+À la suite des mesures pilotes sur Dell, le mode de commit parallèle
+passe immédiatement par le moteur séquentiel lorsque le graphe entier
+comprend moins de **4 096 lignes CSR**. Sur un grand graphe, les groupes
+de drives sans conflit sont eux-mêmes traités séquentiellement tant que
+leurs transitions cumulées n'examineraient pas 4 096 lignes de contacts.
+Cela évite une double création de threads pour des groupes de petite
+taille. Les préfixes rejetés sont consommés en ordre, sans modifier la
+sémantique et sans relancer inutilement leur préparation.
+
+Ce seuil de recherche est volontairement explicite, **non calibré** en
+joules et non garanti optimal. Les groupes volumineux continuent à
+utiliser de véritables écritures concurrentes sur des segments disjoints.
+
 ## Bornes et observabilité
 
 - 32 threads au plus, 16 événements par thread et par groupe.
