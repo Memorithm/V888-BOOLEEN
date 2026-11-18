@@ -255,7 +255,10 @@ impl<'g> EventRuntime<'g> {
         profile: &mut DisjointAdmissionProfile,
     ) -> Result<DisjointCommitWork, EventError> {
         self.run_disjoint_parallel_commits_with_admission(
-            max_events, requested_threads, profile, None,
+            max_events,
+            requested_threads,
+            profile,
+            None,
         )
     }
 
@@ -1257,7 +1260,6 @@ mod tests {
         assert_eq!(runtime.last_time, None);
     }
 
-
     #[test]
     fn cached_topology_uses_effective_pairs_not_raw_csr_row_count() {
         // 512 logical CSR rows compress to eight disjoint weighted pairs.
@@ -1269,7 +1271,9 @@ mod tests {
                 .into_iter()
                 .chain(std::iter::repeat_n(512, 8))
                 .collect(),
-            targets: (2..10).flat_map(|target| std::iter::repeat_n(target, 64)).collect(),
+            targets: (2..10)
+                .flat_map(|target| std::iter::repeat_n(target, 64))
+                .collect(),
             counts: vec![1; 512],
         };
         graph.validate().unwrap();
@@ -1306,7 +1310,6 @@ mod tests {
         assert_eq!(cached.audit_incoming(), Ok(true));
         assert_eq!(uncached.audit_incoming(), Ok(true));
     }
-
 
     #[test]
     fn cost_admitted_prefix_preserves_first_queue_capacity_error_and_partial_commit() {
@@ -1352,5 +1355,4 @@ mod tests {
         assert_eq!(modeled.pending_count(), 2);
         assert_eq!(modeled.audit_incoming(), Ok(true));
     }
-
 }
