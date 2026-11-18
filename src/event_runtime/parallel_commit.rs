@@ -238,12 +238,7 @@ impl<'g> EventRuntime<'g> {
         max_events: usize,
         requested_threads: usize,
     ) -> Result<DisjointCommitWork, EventError> {
-        self.run_disjoint_parallel_commits_with_admission(
-            max_events,
-            requested_threads,
-            None,
-            None,
-        )
+        self.run_disjoint_parallel_commits_with_admission(max_events, requested_threads, None, None)
     }
 
     /// Opt-in locally observed admission. Retain measured topology-class
@@ -388,9 +383,7 @@ impl<'g> EventRuntime<'g> {
                     self.consume_one(&mut result.work)?;
                     result.serial_events += 1;
                 }
-                if let (Some(adaptive), Some(started)) =
-                    (profile.as_deref_mut(), serial_started)
-                {
+                if let (Some(adaptive), Some(started)) = (profile.as_deref_mut(), serial_started) {
                     adaptive.observe(topology, false, started.elapsed());
                 }
                 continue;
@@ -490,9 +483,7 @@ impl<'g> EventRuntime<'g> {
             result.max_group_width = result.max_group_width.max(group.len());
             result.target_counters_written += targets_written;
             result.target_writer_threads += writer_threads;
-            if let (Some(adaptive), Some(started)) =
-                (profile.as_deref_mut(), parallel_started)
-            {
+            if let (Some(adaptive), Some(started)) = (profile.as_deref_mut(), parallel_started) {
                 adaptive.observe(topology, true, started.elapsed());
             }
         }
