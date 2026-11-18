@@ -55,6 +55,7 @@ après admission explicite dans son groupe de runners.
 - [Moteur événementiel asynchrone](docs/EVENT_RUNTIME.md)
 - [Préparation parallèle des frontières causales](docs/EVENT_PARALLEL.md)
 - [Commits parallèles des compteurs sans conflit](docs/EVENT_DISJOINT_COMMIT.md)
+- [Banc de mesures appariées des ordonnanceurs asynchrones](docs/EVENT_BENCH.md)
 
 ## Droits
 
