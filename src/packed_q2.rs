@@ -149,15 +149,27 @@ impl PackedQ2 {
     pub fn gf4_mul(&self, other: &Self) -> Result<Self, Q2Error> {
         self.same_length(other)?;
         let mut result = Self::new(self.len);
-        for i in 0..self.low.len() {
-            let p00 = self.low[i] & other.low[i];
-            let p01 = self.low[i] & other.high[i];
-            let p10 = self.high[i] & other.low[i];
-            let p11 = self.high[i] & other.high[i];
-            result.low[i] = p00 ^ p11;
-            result.high[i] = p01 ^ p10 ^ p11;
-        }
+        result.gf4_mul_add_assign(self, other)?;
         Ok(result)
+    }
+
+    /// Fused field multiply-accumulate: self[i] ^= left[i] * right[i] in GF(4).
+    ///
+    /// The addition is GF(4) XOR, not integer addition. This operates on
+    /// packed bitplanes directly without allocating an intermediate product.
+    /// Both operand lengths are checked before any accumulator mutation.
+    pub fn gf4_mul_add_assign(&mut self, left: &Self, right: &Self) -> Result<(), Q2Error> {
+        self.same_length(left)?;
+        self.same_length(right)?;
+        for i in 0..self.low.len() {
+            let p00 = left.low[i] & right.low[i];
+            let p01 = left.low[i] & right.high[i];
+            let p10 = left.high[i] & right.low[i];
+            let p11 = left.high[i] & right.high[i];
+            self.low[i] ^= p00 ^ p11;
+            self.high[i] ^= p01 ^ p10 ^ p11;
+        }
+        Ok(())
     }
 }
 
@@ -265,5 +277,42 @@ mod tests {
         assert_eq!(gf4_ref(2, 2), 3);
         assert_eq!(gf4_ref(2, 3), 1);
         assert_eq!(gf4_ref(3, 3), 2);
+    }
+
+    #[test]
+    fn gf4_fused_multiply_accumulate_is_exact_and_transactional() {
+        for len in [0, 1, 63, 64, 65, 127, 128, 129, 188_508] {
+            let a: Vec<u8> = (0..len).map(|i| ((i * 17 + i / 5) % 4) as u8).collect();
+            let b: Vec<u8> = (0..len).map(|i| ((i * 13 + i / 7 + 1) % 4) as u8).collect();
+            let c: Vec<u8> = (0..len).map(|i| ((i * 19 + i / 11 + 2) % 4) as u8).collect();
+            let left = PackedQ2::from_levels(&a).unwrap();
+            let right = PackedQ2::from_levels(&b).unwrap();
+            let original = PackedQ2::from_levels(&c).unwrap();
+            let mut accumulator = original.clone();
+
+            accumulator.gf4_mul_add_assign(&left, &right).unwrap();
+            let reference = original.gf4_add(&left.gf4_mul(&right).unwrap()).unwrap();
+            assert_eq!(accumulator, reference);
+            for i in 0..len {
+                assert_eq!(accumulator.get(i), Ok(c[i] ^ gf4_ref(a[i], b[i])));
+            }
+
+            // Characteristic two: adding the same product again restores c.
+            accumulator.gf4_mul_add_assign(&left, &right).unwrap();
+            assert_eq!(accumulator, original);
+
+            // Reject either mismatched input before changing any accumulator.
+            let wrong = PackedQ2::new(len + 1);
+            assert_eq!(
+                accumulator.gf4_mul_add_assign(&wrong, &right),
+                Err(Q2Error::LengthMismatch)
+            );
+            assert_eq!(accumulator, original);
+            assert_eq!(
+                accumulator.gf4_mul_add_assign(&left, &wrong),
+                Err(Q2Error::LengthMismatch)
+            );
+            assert_eq!(accumulator, original);
+        }
     }
 }
