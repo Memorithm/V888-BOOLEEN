@@ -119,6 +119,40 @@ mod tests {
     }
 
     #[test]
+    fn all_three_event_engines_match_on_mixed_sorted_and_unsorted_target_runs() {
+        use super::super::EventRuntime;
+
+        let graph = Connectome {
+            ids: vec![10, 20, 30, 40],
+            offsets: vec![0, 8, 11, 11, 11],
+            targets: vec![2, 2, 3, 2, 3, 2, 3, 2, 2, 2, 3],
+            counts: vec![1, 0, 3, 2, 0, 1, 4, 2, 2, 1, 1],
+        };
+        graph.validate().unwrap();
+        let mut serial = EventRuntime::new(&graph, 3, 24).unwrap();
+        let mut frontier = EventRuntime::new(&graph, 3, 24).unwrap();
+        let mut disjoint = EventRuntime::new(&graph, 3, 24).unwrap();
+        for engine in [&mut serial, &mut frontier, &mut disjoint] {
+            engine.schedule_drive(0, 10, true).unwrap();
+            engine.schedule_drive(0, 20, true).unwrap();
+            engine.schedule_drive(3, 10, false).unwrap();
+            engine.schedule_drive(3, 20, false).unwrap();
+        }
+        let expected = serial.run(48).unwrap();
+        assert_eq!(frontier.run_parallel_frontiers(48, 4).unwrap().work, expected);
+        assert_eq!(disjoint.run_disjoint_parallel_commits(48, 4).unwrap().work, expected);
+        for engine in [&frontier, &disjoint] {
+            assert_eq!(engine.state(), serial.state());
+            assert_eq!(engine.incoming, serial.incoming);
+            assert_eq!(engine.pending, serial.pending);
+            assert_eq!(engine.last_processed_time(), serial.last_processed_time());
+            assert_eq!(engine.audit_incoming(), Ok(true));
+        }
+        assert_eq!(serial.audit_incoming(), Ok(true));
+        assert_eq!(serial.pending_count(), 0);
+    }
+
+    #[test]
     fn zero_weight_middle_of_a_run_never_inserts_a_spurious_target() {
         let graph = graph(vec![1, 0, 1, 2], vec![3, 0, 4, 0]);
         assert_eq!(aggregate_outgoing(&graph, 0), Ok(vec![(1, 7)]));
