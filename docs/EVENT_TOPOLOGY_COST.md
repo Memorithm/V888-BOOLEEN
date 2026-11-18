@@ -68,6 +68,40 @@ Les mesures d'énergie et les gains de performance restent à démontrer.
 Un profil favorable peut être moins rapide en production ; sa validation
 requiert des mesures appariées au SHA exact sur RemoteOps.
 
+## Banc apparié du répartiteur à coefficients externes
+
+Le binaire Rust `v888-event-cost-bench` construit une topologie synthétique
+bornée, compare la référence `EventRuntime::run` à
+`run_disjoint_parallel_commits_with_costs`, et **refuse toute différence**
+sur les états booléens, les compteurs d'entrée, la file, le temps logique,
+les huit compteurs de travail ou l'audit intégral du connectome. Il alterne
+l'ordre des mesures série/externe, sans confondre mesures d'exécution et
+préparation du cache. La sortie fournit les médianes en nanosecondes, le
+nombre de writers et les préadmissions/rejets par le profil.
+
+Les douze champs de `--costs`, dans l'ordre, sont :
+`workers,minP,maxP,minC,maxC,minT,maxT,overheadNs,serialContactNs,serialTargetNs,parallelContactNs,parallelTargetNs`.
+Les bornes `P`, `C` et `T` désignent respectivement producteurs,
+itérations effectives (cache inclus) et compteurs distincts.
+Les valeurs positives doivent provenir d'une campagne physique distincte.
+Le binaire ne prétend pas déduire les coefficients d'une mesure globale.
+
+Exemple **uniquement synthétique pour vérifier le chemin logiciel**
+(coefficient fictifs, aucune revendication de performance) :
+
+```bash
+cargo test --offline --all-targets
+cargo run --offline --release --bin v888-event-cost-bench -- \
+  --sources=64 --contacts=64 --targets=4 --repetitions=8 \
+  --workers=4 --cache=off \
+  --costs=4,2,128,1,65536,2,1024,50,15,10,2,3
+```
+
+Ces mesures utilisent `Instant` sur un processus synthétique et ne mesurent
+ni l'énergie, ni les communications matérielles, ni la vitesse d'un modèle
+biologique. Une comparaison exploitable exige profils calibrés, essais
+appariés répétés et attribution explicite du matériel via RemoteOps.
+
 ## Qualification et progression
 
 ```bash
