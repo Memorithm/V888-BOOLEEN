@@ -184,8 +184,8 @@ impl DisjointAdmissionProfile {
             // the disfavored path costs at least 2x the selected path.
             let serial_cost = bucket.serial.ns_per_1024_units;
             let parallel_cost = bucket.parallel.ns_per_1024_units;
-            let parallel_faster = parallel_cost.saturating_mul(100)
-                < serial_cost.saturating_mul(85);
+            let parallel_faster =
+                parallel_cost.saturating_mul(100) < serial_cost.saturating_mul(85);
             let clearly_disfavored = serial_cost > 0
                 && parallel_cost > 0
                 && if parallel_faster {
