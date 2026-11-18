@@ -339,7 +339,12 @@ mod tests {
 
     #[test]
     fn both_shapes_have_exact_parity_for_all_execution_modes() {
-        for shape in [Shape::Disjoint, Shape::Convergent, Shape::WideDisjoint, Shape::HeavyDisjoint] {
+        for shape in [
+            Shape::Disjoint,
+            Shape::Convergent,
+            Shape::WideDisjoint,
+            Shape::HeavyDisjoint,
+        ] {
             let graph = graph(16, shape);
             let baseline = execute(&graph, shape, Mode::Serial, 1).outcome;
             for mode in [Mode::Serial, Mode::Frontier, Mode::Disjoint] {
