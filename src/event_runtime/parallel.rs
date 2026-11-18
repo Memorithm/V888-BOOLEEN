@@ -14,6 +14,9 @@ use crate::BooleanState;
 
 const MAX_WORKER_THREADS: usize = 32;
 const EVENTS_PER_WORKER: usize = 16;
+/// Conservative research admission threshold; benchmark, not energy calibrated.
+const MIN_PARALLEL_CONTACTS: usize = 4096;
+const MIN_PARALLEL_EVENTS: usize = 4;
 
 /// Logical work is comparable with `EventRuntime::run`. Additional fields
 /// count preflight staging, not measured parallel speedup or energy.
@@ -107,14 +110,43 @@ impl<'g> EventRuntime<'g> {
                 ..ParallelFrontierWork::default()
             });
         }
+        // A small entire graph cannot amortize scoped-thread creation.
+        // Skip dependency scans and allocations on this common path.
+        if self.graph.targets.len() < MIN_PARALLEL_CONTACTS {
+            return Ok(ParallelFrontierWork {
+                work: self.run(max_events)?,
+                ..ParallelFrontierWork::default()
+            });
+        }
         let threads = requested_workers.min(MAX_WORKER_THREADS);
         let mut report = ParallelFrontierWork::default();
         while report.work.events_consumed < max_events && !self.pending.is_empty() {
             let allowance = (max_events - report.work.events_consumed)
                 .min(threads.saturating_mul(EVENTS_PER_WORKER));
             let group = self.independent_prefix(allowance);
-            if group.len() <= 1 {
-                self.consume_one(&mut report.work)?;
+            // Admit threads only for real transitions with sufficient total
+            // CSR work. Consume a rejected causal prefix in order, rather
+            // than repeatedly planning it or spawning empty worker groups.
+            let contacts: usize = group
+                .iter()
+                .map(|&((_, phase, source), requested)| {
+                    let current = self.state.get(source).expect("validated neuron index");
+                    let desired = if phase == DRIVE {
+                        requested
+                    } else {
+                        self.incoming[source] >= self.threshold
+                    };
+                    if current == desired {
+                        0
+                    } else {
+                        (self.graph.offsets[source + 1] - self.graph.offsets[source]) as usize
+                    }
+                })
+                .sum();
+            if group.len() < MIN_PARALLEL_EVENTS || contacts < MIN_PARALLEL_CONTACTS {
+                for _ in 0..group.len() {
+                    self.consume_one(&mut report.work)?;
+                }
                 continue;
             }
             let worker_count = threads.min(group.len());
@@ -311,16 +343,23 @@ mod tests {
 
     #[test]
     fn simultaneous_independent_drives_are_prepared_by_multiple_threads() {
+        // Four independent sources, each carrying 1024 contact rows.
+        // The group is large enough to exercise the actual thread path.
         let graph = Connectome {
-            ids: vec![10, 20, 30, 40],
-            offsets: vec![0; 5],
-            targets: vec![],
-            counts: vec![],
+            ids: (10..18).collect(),
+            offsets: (0..=4)
+                .map(|i| i * 1024)
+                .chain(std::iter::repeat_n(4096, 4))
+                .collect(),
+            targets: (0..4)
+                .flat_map(|i| std::iter::repeat_n(4 + i, 1024))
+                .collect(),
+            counts: vec![1; 4096],
         };
         let stats = compare(
             &graph,
             1,
-            &[(0, 40, true), (0, 20, true), (0, 10, true), (0, 30, true)],
+            &[(0, 13, true), (0, 11, true), (0, 10, true), (0, 12, true)],
             16,
             16,
             4,
@@ -329,7 +368,7 @@ mod tests {
         assert_eq!(stats.prepared_events, 4);
         assert_eq!(stats.threads_spawned, 4);
         assert_eq!(stats.max_group_width, 4);
-        assert_eq!(stats.work.state_transitions, 4);
+        assert_eq!(stats.work.state_transitions, 8);
     }
 
     #[test]
@@ -343,11 +382,11 @@ mod tests {
         let stats = compare(&graph, 2, &[(0, 20, true), (0, 10, true)], 10, 10, 3);
         assert_eq!(stats.work.wakeups_inserted, 1);
         assert_eq!(stats.work.wakeups_coalesced, 1);
-        assert!(stats.parallel_groups >= 1);
+        assert_eq!(stats.parallel_groups, 0);
     }
 
     #[test]
-    fn independent_rechecks_are_prepared_in_the_same_parallel_group() {
+    fn independent_rechecks_remain_exact_under_small_graph_fallback() {
         let graph = Connectome {
             ids: vec![10, 20, 30, 40],
             offsets: vec![0, 1, 1, 2, 2],
@@ -356,8 +395,8 @@ mod tests {
         };
         let stats = compare(&graph, 1, &[(0, 10, true), (0, 30, true)], 16, 16, 4);
         assert_eq!(stats.work.state_transitions, 4);
-        assert_eq!(stats.parallel_groups, 2);
-        assert_eq!(stats.prepared_events, 4);
+        assert_eq!(stats.parallel_groups, 0);
+        assert_eq!(stats.prepared_events, 0);
         assert_eq!(stats.work.threshold_checks, 2);
     }
 

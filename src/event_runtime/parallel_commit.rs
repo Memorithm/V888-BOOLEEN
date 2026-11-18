@@ -19,6 +19,8 @@ use super::{EventError, EventKey, EventRuntime, EventWork, DRIVE, RECHECK};
 
 const MAX_COMMIT_THREADS: usize = 32;
 const EVENTS_PER_THREAD: usize = 16;
+/// Preliminary admission threshold: measured runtime cost, not joule calibration.
+const MIN_PARALLEL_CONTACTS: usize = 4096;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DisjointCommitWork {
@@ -73,15 +75,46 @@ impl<'g> EventRuntime<'g> {
                 ..DisjointCommitWork::default()
             });
         }
+        // Work this small cannot amortize the two scoped thread passes.
+        // Direct delegation avoids repeated graph scans and temporary buffers.
+        if self.graph.targets.len() < MIN_PARALLEL_CONTACTS {
+            let work = self.run(max_events)?;
+            return Ok(DisjointCommitWork {
+                serial_events: work.events_consumed,
+                work,
+                ..DisjointCommitWork::default()
+            });
+        }
         let threads = requested_threads.min(MAX_COMMIT_THREADS);
         let mut result = DisjointCommitWork::default();
         while result.work.events_consumed < max_events && !self.pending.is_empty() {
             let allowance = (max_events - result.work.events_consumed)
                 .min(threads.saturating_mul(EVENTS_PER_THREAD));
             let group = self.disjoint_drive_prefix(allowance);
-            if group.len() < 2 {
+            // RECHECK does not enter a DRIVE prefix. Always consume the
+            // earliest event so that a nonempty queue makes progress.
+            if group.is_empty() {
                 self.consume_one(&mut result.work)?;
                 result.serial_events += 1;
+                continue;
+            }
+            let contacts: usize = group
+                .iter()
+                .map(|&((_, _, source), requested)| {
+                    if self.state.get(source).expect("validated neuron index") == requested {
+                        0
+                    } else {
+                        (self.graph.offsets[source + 1] - self.graph.offsets[source]) as usize
+                    }
+                })
+                .sum();
+            if group.len() < 2 || contacts < MIN_PARALLEL_CONTACTS {
+                // A rejected prefix can be consumed in canonical order.
+                // Do not replan the same tiny group after each event.
+                for _ in 0..group.len() {
+                    self.consume_one(&mut result.work)?;
+                    result.serial_events += 1;
+                }
                 continue;
             }
 
@@ -345,11 +378,18 @@ mod tests {
     }
 
     fn eight_disjoint_sources() -> Connectome {
+        // 512 parallel contacts for each of eight distinct sources.
+        // The 4096 contacts deliberately exceed the admission threshold.
         Connectome {
             ids: (10..26).collect(),
-            offsets: (0..=8).chain(std::iter::repeat_n(8, 8)).collect(),
-            targets: (8..16).collect(),
-            counts: vec![1; 8],
+            offsets: (0..=8)
+                .map(|i| i * 512)
+                .chain(std::iter::repeat_n(4096, 8))
+                .collect(),
+            targets: (0..8)
+                .flat_map(|i| std::iter::repeat_n(8 + i, 512))
+                .collect(),
+            counts: vec![1; 4096],
         }
     }
 
@@ -385,8 +425,10 @@ mod tests {
         assert_eq!(report.work.events_consumed, 5);
         assert_eq!(report.work.wakeups_inserted, 2);
         assert_eq!(report.work.wakeups_coalesced, 1);
-        assert_eq!(report.disjoint_groups, 1);
-        assert_eq!(report.grouped_events, 2);
+        // Three-contact graphs now bypass thread admission entirely.
+        assert_eq!(report.disjoint_groups, 0);
+        assert_eq!(report.grouped_events, 0);
+        assert_eq!(report.serial_events, report.work.events_consumed);
     }
 
     #[test]
@@ -399,6 +441,19 @@ mod tests {
         assert_eq!(stats.work.rising_transitions, 16);
         assert_eq!(stats.work.falling_transitions, 16);
         assert_eq!(stats.target_counters_written, 16);
+    }
+
+    #[test]
+    fn isolated_rechecks_always_advance_after_large_graph_serial_fallback() {
+        let graph = eight_disjoint_sources();
+        let mut runtime = EventRuntime::new(&graph, 1, 32).unwrap();
+        runtime.schedule_drive(0, 10, true).unwrap();
+        let first = runtime.run_disjoint_parallel_commits(2, 4).unwrap();
+        assert_eq!(first.work.events_consumed, 2);
+        assert_eq!(first.work.state_transitions, 2);
+        assert_eq!(first.serial_events, 2);
+        assert_eq!(runtime.pending_count(), 0);
+        assert_eq!(runtime.audit_incoming(), Ok(true));
     }
 
     #[test]

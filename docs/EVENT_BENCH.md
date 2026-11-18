@@ -13,6 +13,10 @@ Deux topologies contrôles sont disponibles :
 - `disjoint` : N sources indépendantes alimentent N cibles distinctes ;
 - `convergent` : N sources alimentent seulement quatre cibles ; des
   conflits limitent volontairement la parallélisation.
+- `wide-disjoint` : N sources ciblent N destinations différentes, mais
+  chacune possède **64 lignes CSR parallèles vers la même destination**.
+  Cette topologie augmente les contacts traversés, pas le nombre de
+  neurones ou de destinations distinctes.
 
 Les N sources sont activées à t=0 et désactivées à t=3. Tous les
 `RECHECK` programmés par les transitions sont exécutés avant la
