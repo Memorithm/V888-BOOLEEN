@@ -52,6 +52,35 @@ campagne du 18 novembre 2026, le graphe `wide-disjoint` à 16 384 lignes
 CSR restait environ neuf fois plus lent avec les commits parallèles. Les groupes volumineux continuent à
 utiliser de véritables écritures concurrentes sur des segments disjoints.
 
+## Admission selon les compteurs réellement distincts
+
+Une grande quantité de contacts CSR ne signifie pas que le groupe a beaucoup
+de compteurs d'entrée différents à modifier. Sur les graphes à contacts très
+répétés, créer des threads pour seulement huit destinations pouvait
+multiplier le temps d'exécution malgré 65 536 contacts logiques.
+
+Le préfixe causal suit déjà les cibles non nulles dans un `BTreeSet` pour
+détecter les conflits. Le moteur réutilise maintenant la cardinalité exacte
+de cet ensemble, **sans balayage supplémentaire du graphe**, pour refuser
+l'exécution concurrente lorsque moins de 1 024 compteurs distincts seraient
+écrits. Ce seuil conservateur s'ajoute aux conditions précédentes
+(au moins deux producteurs et 65 536 unités de préparation effective).
+Les contacts non mis en cache restent comptés comme lectures CSR ; les contacts
+mis en cache comme paires de destinations agrégées.
+
+Pour les sources sans cache, les runs adjacents visant la même cible non nulle
+évitent aussi les recherches répétées dans l'ensemble des cibles. Les contacts
+de poids nul et les destinations non triées restent sémantiquement identiques.
+
+Le repli consomme les événements dans l'ordre de référence. Les états,
+réveils, dates et huit compteurs logiques restent inchangés. Un test avec
+1 024 destinations disjointes démontre que les écritures concurrentes sont
+toujours réellement exercées lorsqu'elles peuvent être admises.
+
+Ce seuil n'est pas une estimation d'énergie ni une garantie d'accélération :
+des mesures appariées de temps CPU, mémoire et coût de synchronisation
+restent nécessaires pour en apprécier la pertinence selon la topologie.
+
 ## Bornes et observabilité
 
 - 32 threads au plus, 32 événements par thread et par groupe.
