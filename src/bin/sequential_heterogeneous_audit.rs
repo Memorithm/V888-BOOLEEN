@@ -2,7 +2,6 @@
 //! CSV columns: split,sequence,epoch,gates,cone,full_ns,incremental_ns,refresh_ns,
 //! full_output,incremental_output,full_decision,incremental_decision,vm_hwm_kib
 //! Rows must be ordered by sequence. This tool never trains on holdouts.
-use std::collections::HashSet;
 use std::io::{self, BufRead};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +30,10 @@ fn parse(line: &str) -> Result<Observation, String> {
         equal: fields[8] == fields[9] && fields[10] == fields[11],
         vm_hwm_kib: number(12)?,
     };
+    if !matches!(fields[8], "0" | "1") || !matches!(fields[9], "0" | "1")
+        || !matches!(fields[10], "0" | "1") || !matches!(fields[11], "0" | "1") {
+        return Err("invalid Boolean output or decision".into());
+    }
     if obs.gates == 0 || obs.cone > obs.gates || obs.full_ns == 0 || obs.incremental_ns == 0 {
         return Err("invalid geometry or timing".into());
     }
@@ -42,29 +45,28 @@ struct Totals { count: u64, mismatch: u64, full: u128, selected: u128, max_hwm: 
 
 fn audit<R: BufRead>(reader: R) -> Result<[Totals; 4], String> {
     let mut totals: [Totals; 4] = std::array::from_fn(|_| Totals::default());
-    let mut seen = HashSet::new();
     let mut previous = None;
     for (line_number, line) in reader.lines().enumerate() {
         let line = line.map_err(|e| e.to_string())?;
         if line_number == 0 && line.starts_with("split,") { continue; }
         if line.trim().is_empty() { continue; }
         let o = parse(&line).map_err(|e| format!("line {}: {e}", line_number + 1))?;
-        if !seen.insert(o.sequence) { return Err(format!("duplicate sequence {}", o.sequence)); }
         if let Some((seq, epoch)) = previous {
             if o.sequence <= seq || o.epoch < epoch { return Err("non-monotone sequence or cache epoch".into()); }
         }
         previous = Some((o.sequence, o.epoch));
         let idx = match o.split.as_str() { "TRAIN" => 0, "VALID" => 1, "TEST" => 2, _ => 3 };
         let t = &mut totals[idx];
-        t.count += 1;
-        t.mismatch += u64::from(!o.equal);
-        t.full += u128::from(o.full_ns);
+        t.count = t.count.checked_add(1).ok_or("count overflow")?;
+        t.mismatch = t.mismatch.checked_add(u64::from(!o.equal)).ok_or("mismatch overflow")?;
+        t.full = t.full.checked_add(u128::from(o.full_ns)).ok_or("full timing overflow")?;
         // Conservative retrospective accounting: a mismatch is charged Full.
         // Refresh is charged for every successful Incremental evaluation.
         let incremental_total = u128::from(o.incremental_ns) + u128::from(o.refresh_ns);
-        t.selected += if o.equal && incremental_total < u128::from(o.full_ns) {
+        let selected = if o.equal && incremental_total < u128::from(o.full_ns) {
             incremental_total
         } else { u128::from(o.full_ns) };
+        t.selected = t.selected.checked_add(selected).ok_or("selected timing overflow")?;
         t.max_hwm = t.max_hwm.max(o.vm_hwm_kib);
     }
     Ok(totals)
@@ -98,6 +100,18 @@ mod tests {
     fn duplicate_across_splits_is_rejected() {
         let csv = format!("{HEADER}VALID,1,1,100,2,100,10,20,1,1,1,1,10\nTEST,1,2,100,2,100,10,20,1,1,1,1,10\n");
         assert!(audit(csv.as_bytes()).is_err());
+    }
+    #[test]
+    fn invalid_boolean_is_not_silently_counted_as_oracle_agreement() {
+        assert!(parse("VALID,1,1,100,2,100,10,20,unknown,unknown,1,1,10").is_err());
+        assert!(parse("VALID,1,1,100,2,100,10,20,1,1,2,2,10").is_err());
+    }
+    #[test]
+    fn ordered_stream_requires_no_unbounded_sequence_set() {
+        let csv = format!("{HEADER}TRAIN,1,0,10,1,100,10,0,0,0,1,1,10\nVALID,2,0,10,1,100,10,0,0,0,1,1,10\n");
+        let t = audit(csv.as_bytes()).unwrap();
+        assert_eq!((t[0].count, t[1].count), (1, 1));
+        assert!(audit(format!("{HEADER}TRAIN,2,0,10,1,100,10,0,0,0,1,1,10\nVALID,1,0,10,1,100,10,0,0,0,1,1,10\n").as_bytes()).is_err());
     }
     #[test]
     fn stale_epoch_and_bad_geometry_are_rejected() {
