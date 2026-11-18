@@ -40,6 +40,34 @@ Les circuits cycliques peuvent générer une suite illimitée d'événements ;
 le budget d'exécution constitue une borne explicite, **pas** une preuve de
 convergence.
 
+## Injection atomique de stimuli par lot
+
+`EventRuntime::schedule_drive_batch(&[(time, neuron_id, active), ...])`
+permet de préparer plusieurs commandes indépendantes et de les publier
+sur la file causale **en une transaction**. Le lot entier est refusé avant
+toute mutation si l'un des identifiants est inconnu, si une date n'est
+pas strictement future, si une commande contredit un stimulus déjà en
+file ou un stimulus précédent du même lot, ou si le nombre de nouvelles
+clés distinctes dépasse `max_pending`.
+
+Les répétitions identiques sont idempotentes : elles ne consomment
+aucune place supplémentaire. Le résultat `DriveBatchReport` distingue
+`inserted`, `already_pending` et `repeated_in_batch`. Les clés
+sont publiées dans l'ordre canonique `(date, DRIVE, indice)` ; cette
+opération n'exécute pas elle-même les transitions. Elle peut donc
+alimenter les trois ordonnanceurs sans changer l'oracle séquentiel.
+Ce contrat est celui d'un **producteur unique de file** ; plusieurs
+threads producteurs doivent sérialiser leurs appels au propriétaire
+de `EventRuntime`.
+
+L'opération est entièrement atomique pour l'admission, contrairement à
+une boucle de `schedule_drive` dont les appels déjà réussis restent
+en file si un appel ultérieur échoue. Les tests vérifient notamment
+le rejet sans effet, la capacité saturée, les doublons, les dates,
+l'équivalence au chemin de référence et la compatibilité avec les
+commits disjoints. Aucun gain de débit, de mémoire ou d'énergie n'est
+affirmé sans mesure.
+
 ## Comptabilité logique vers TDI-28
 
 Le résultat `EventWork` renvoie huit compteurs indépendants :
