@@ -197,6 +197,34 @@ mod tests {
     }
 
     #[test]
+    fn gf4_inner_product_is_commutative_and_bilinear() {
+        // GF(4) addition is XOR; the field inner product must distribute
+        // exactly across packed words and a partial final word.
+        for len in [0, 1, 63, 64, 65, 129, 257] {
+            let a = (0..len).map(|i| (i % 4) as u8).collect::<Vec<_>>();
+            let b = (0..len)
+                .map(|i| ((i * 3 + 1) % 4) as u8)
+                .collect::<Vec<_>>();
+            let c = (0..len)
+                .map(|i| ((i * 7 + 2) % 4) as u8)
+                .collect::<Vec<_>>();
+            let x = PackedQ2::from_levels(&a).unwrap();
+            let y = PackedQ2::from_levels(&b).unwrap();
+            let z = PackedQ2::from_levels(&c).unwrap();
+            let sum = x.gf4_add(&y).unwrap();
+            assert_eq!(
+                sum.gf4_dot(&z).unwrap(),
+                x.gf4_dot(&z).unwrap() ^ y.gf4_dot(&z).unwrap()
+            );
+            assert_eq!(x.gf4_dot(&z), z.gf4_dot(&x));
+            assert_eq!(
+                z.gf4_dot(&sum).unwrap(),
+                z.gf4_dot(&x).unwrap() ^ z.gf4_dot(&y).unwrap()
+            );
+        }
+    }
+
+    #[test]
     fn scalar_oracles_exhaustive_algebra_and_many_lengths() {
         for len in [0, 1, 2, 31, 63, 64, 65, 127, 128, 129, 188_508] {
             for seed in 0..4_usize {
