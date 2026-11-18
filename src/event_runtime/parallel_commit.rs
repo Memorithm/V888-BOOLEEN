@@ -153,7 +153,6 @@ impl DisjointAdmissionProfile {
         self.scope = Some(scope);
     }
 
-
     /// Returns the number of recorded serial and parallel group measurements.
     #[must_use]
     pub fn observation_counts(&self) -> (usize, usize) {
