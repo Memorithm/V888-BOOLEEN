@@ -729,4 +729,117 @@ mod tests {
         assert_eq!(report.work.events_consumed, 5);
         assert_eq!(report.work.state_transitions, 3);
     }
+
+    fn small_disjoint_graph() -> Connectome {
+        Connectome {
+            ids: (10..20).collect(),
+            offsets: [0, 4, 8]
+                .into_iter()
+                .chain(std::iter::repeat_n(8, 8))
+                .collect(),
+            targets: (2..10).collect(),
+            counts: vec![1; 8],
+        }
+    }
+
+    fn small_measured_costs() -> MeasuredDisjointCosts {
+        // Synthetic positive coefficients prove selection logic, not speedup.
+        MeasuredDisjointCosts {
+            workers: 2,
+            min_producers: 2,
+            max_producers: 2,
+            min_effective_contacts: 8,
+            max_effective_contacts: 8,
+            min_distinct_targets: 8,
+            max_distinct_targets: 8,
+            two_pass_overhead_ns: 100,
+            serial_contact_ns: 15,
+            serial_target_ns: 10,
+            parallel_contact_ns: 2,
+            parallel_target_ns: 3,
+        }
+    }
+
+    #[test]
+    fn favorable_measured_profile_admits_small_topology_without_changing_results() {
+        let graph = small_disjoint_graph();
+        graph.validate().unwrap();
+        let mut baseline = EventRuntime::new(&graph, 1, 32).unwrap();
+        let mut measured = EventRuntime::new(&graph, 1, 32).unwrap();
+        for runtime in [&mut baseline, &mut measured] {
+            runtime.schedule_drive(0, 10, true).unwrap();
+            runtime.schedule_drive(0, 11, true).unwrap();
+        }
+        let expected = baseline.run(32).unwrap();
+        let actual = measured
+            .run_disjoint_parallel_commits_with_costs(32, 2, small_measured_costs())
+            .unwrap();
+        assert_eq!(actual.work, expected);
+        assert_eq!(actual.disjoint_groups, 1);
+        assert_eq!(actual.target_writer_threads, 2);
+        assert_eq!(actual.target_counters_written, 8);
+        assert_eq!(measured.state(), baseline.state());
+        assert_eq!(measured.incoming, baseline.incoming);
+        assert_eq!(measured.pending, baseline.pending);
+        assert_eq!(measured.last_time, baseline.last_time);
+        assert_eq!(measured.audit_incoming(), Ok(true));
+    }
+
+    #[test]
+    fn expensive_or_unmatched_profile_falls_back_without_changing_results() {
+        let graph = small_disjoint_graph();
+        let mut baseline = EventRuntime::new(&graph, 1, 32).unwrap();
+        let mut expensive = EventRuntime::new(&graph, 1, 32).unwrap();
+        for runtime in [&mut baseline, &mut expensive] {
+            runtime.schedule_drive(0, 10, true).unwrap();
+            runtime.schedule_drive(0, 11, true).unwrap();
+        }
+        let expected = baseline.run(32).unwrap();
+        let mut costs = small_measured_costs();
+        costs.two_pass_overhead_ns = 1_000_000;
+        let report = expensive
+            .run_disjoint_parallel_commits_with_costs(32, 2, costs)
+            .unwrap();
+        assert_eq!(report.work, expected);
+        assert_eq!(report.disjoint_groups, 0);
+        assert_eq!(report.target_writer_threads, 0);
+        assert_eq!(expensive.incoming, baseline.incoming);
+        assert_eq!(expensive.pending, baseline.pending);
+        assert_eq!(expensive.state(), baseline.state());
+
+        let mut out_of_envelope = EventRuntime::new(&graph, 1, 32).unwrap();
+        out_of_envelope.schedule_drive(0, 10, true).unwrap();
+        out_of_envelope.schedule_drive(0, 11, true).unwrap();
+        let mut costs = small_measured_costs();
+        costs.min_effective_contacts = 9;
+        costs.max_effective_contacts = 12;
+        let report = out_of_envelope
+            .run_disjoint_parallel_commits_with_costs(32, 2, costs)
+            .unwrap();
+        assert_eq!(report.work, expected);
+        assert_eq!(report.disjoint_groups, 0);
+        assert_eq!(out_of_envelope.incoming, baseline.incoming);
+    }
+
+    #[test]
+    fn invalid_cost_profile_is_rejected_atomically() {
+        let graph = small_disjoint_graph();
+        let mut runtime = EventRuntime::new(&graph, 1, 32).unwrap();
+        runtime.schedule_drive(0, 10, true).unwrap();
+        let mut invalid = small_measured_costs();
+        invalid.serial_contact_ns = 0;
+        assert_eq!(
+            runtime.run_disjoint_parallel_commits_with_costs(32, 2, invalid),
+            Err(EventError::InvalidCostProfile)
+        );
+        assert_eq!(
+            runtime.run_disjoint_parallel_commits_with_costs(32, 3, small_measured_costs()),
+            Err(EventError::InvalidCostProfile)
+        );
+        assert_eq!(runtime.state().active_count(), 0);
+        assert_eq!(runtime.pending_count(), 1);
+        assert_eq!(runtime.next_event_time(), Some(0));
+        assert_eq!(runtime.last_time, None);
+    }
+
 }
