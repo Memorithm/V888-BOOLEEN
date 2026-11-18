@@ -11,7 +11,9 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use v888_booleen::connectome::Connectome;
-use v888_booleen::event_runtime::{ContactCacheReport, EventRuntime, EventWork};
+use v888_booleen::event_runtime::{
+    ContactCacheReport, DisjointAdmissionProfile, EventRuntime, EventWork,
+};
 use v888_booleen::BooleanState;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -215,6 +217,24 @@ struct Sample {
 }
 
 fn execute(graph: &Connectome, shape: Shape, mode: Mode, workers: usize, cache: bool) -> Sample {
+    execute_with_profile(
+        graph,
+        shape,
+        mode,
+        workers,
+        cache,
+        &mut DisjointAdmissionProfile::default(),
+    )
+}
+
+fn execute_with_profile(
+    graph: &Connectome,
+    shape: Shape,
+    mode: Mode,
+    workers: usize,
+    cache: bool,
+    profile: &mut DisjointAdmissionProfile,
+) -> Sample {
     let sources = graph.ids.len() / 2;
     let mut runtime =
         EventRuntime::new(graph, shape.threshold(), 4 * sources + 16).expect("valid bounded graph");
@@ -249,7 +269,7 @@ fn execute(graph: &Connectome, shape: Shape, mode: Mode, workers: usize, cache: 
         ),
         Mode::Disjoint => {
             let report = runtime
-                .run_disjoint_parallel_commits(usize::MAX, workers)
+                .run_disjoint_parallel_commits_with_profile(usize::MAX, workers, profile)
                 .expect("disjoint run");
             (report.work, report.target_writer_threads)
         }
@@ -300,12 +320,14 @@ fn report(config: Config) {
     assert!(reference.complete_audit);
     assert_eq!(reference.pending, 0);
     // Warm up exactly the chosen execution mode; exclude warmup from timing.
-    let warmup = execute(
+    let mut profile = DisjointAdmissionProfile::default();
+    let warmup = execute_with_profile(
         &graph,
         config.shape,
         config.mode,
         config.workers,
         config.cache,
+        &mut profile,
     );
     assert_eq!(warmup.outcome, reference);
     let ticks_before = proc_cpu_ticks();
@@ -315,12 +337,13 @@ fn report(config: Config) {
     let mut retained_pairs = 0_usize;
     let mut covered_rows = 0_usize;
     for _ in 0..config.repetitions {
-        let sample = execute(
+        let sample = execute_with_profile(
             &graph,
             config.shape,
             config.mode,
             config.workers,
             config.cache,
+            &mut profile,
         );
         assert_eq!(sample.outcome, reference, "scheduler parity failure");
         durations.push(sample.elapsed.as_nanos());
@@ -330,6 +353,7 @@ fn report(config: Config) {
         covered_rows = sample.cache_report.covered_contact_rows;
     }
     let ticks_after = proc_cpu_ticks();
+    let (serial_samples, parallel_samples) = profile.observation_counts();
     durations.sort_unstable();
     let total_ns: u128 = durations.iter().sum();
     let peak_rss = proc_status_kib("VmHWM:")
@@ -344,7 +368,7 @@ fn report(config: Config) {
         "V888_EVENT_BENCH mode={} shape={} sources={} repetitions={} workers={} cache={} \
          scope=event_run_only min_ns={} median_ns={} max_ns={} total_ns={} \
          events_per_run={} transitions_per_run={} contacts_per_run={} \
-         writer_threads_total={} cache_pairs={} cache_covered_rows={} cache_build_total_ns={} peak_rss_kib={} current_rss_kib={} \
+         writer_threads_total={} calibration_serial_groups={} calibration_parallel_groups={} cache_pairs={} cache_covered_rows={} cache_build_total_ns={} peak_rss_kib={} current_rss_kib={} \
          cpu_ticks_process={} exact_parity=true host_energy_attribution=false",
         config.mode.label(),
         config.shape.label(),
@@ -360,6 +384,8 @@ fn report(config: Config) {
         reference.work.state_transitions,
         reference.work.contacts_examined,
         writers,
+        serial_samples,
+        parallel_samples,
         retained_pairs,
         covered_rows,
         cache_build_total_ns,
