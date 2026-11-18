@@ -155,7 +155,9 @@ impl<'g> EventRuntime<'g> {
                         chunk
                             .iter()
                             .map(|&(key, requested)| {
-                                prepare_one(graph, cache, state, incoming, threshold, key, requested)
+                                prepare_one(
+                                    graph, cache, state, incoming, threshold, key, requested,
+                                )
                             })
                             .collect::<Vec<_>>()
                     }));
