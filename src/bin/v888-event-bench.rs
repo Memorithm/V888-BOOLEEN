@@ -300,7 +300,13 @@ fn report(config: Config) {
     assert!(reference.complete_audit);
     assert_eq!(reference.pending, 0);
     // Warm up exactly the chosen execution mode; exclude warmup from timing.
-    let warmup = execute(&graph, config.shape, config.mode, config.workers, config.cache);
+    let warmup = execute(
+        &graph,
+        config.shape,
+        config.mode,
+        config.workers,
+        config.cache,
+    );
     assert_eq!(warmup.outcome, reference);
     let ticks_before = proc_cpu_ticks();
     let mut durations = Vec::new();
@@ -309,7 +315,13 @@ fn report(config: Config) {
     let mut retained_pairs = 0_usize;
     let mut covered_rows = 0_usize;
     for _ in 0..config.repetitions {
-        let sample = execute(&graph, config.shape, config.mode, config.workers, config.cache);
+        let sample = execute(
+            &graph,
+            config.shape,
+            config.mode,
+            config.workers,
+            config.cache,
+        );
         assert_eq!(sample.outcome, reference, "scheduler parity failure");
         durations.push(sample.elapsed.as_nanos());
         writers = writers.saturating_add(sample.writers);
