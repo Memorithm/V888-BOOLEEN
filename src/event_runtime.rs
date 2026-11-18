@@ -16,12 +16,14 @@ use crate::BooleanState;
 
 mod admission;
 mod contacts;
+mod drive_batch;
 mod parallel;
 mod parallel_commit;
 
 pub use admission::MeasuredDisjointCosts;
 pub use contacts::ContactCacheReport;
 use contacts::{aggregate_outgoing, build_contact_cache, ContactCache};
+pub use drive_batch::DriveBatchReport;
 pub use parallel::ParallelFrontierWork;
 pub use parallel_commit::DisjointCommitWork;
 
