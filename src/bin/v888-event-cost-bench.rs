@@ -262,10 +262,10 @@ fn report(config: Config) {
     external_times.sort_unstable();
     let median_index = (config.repetitions - 1) / 2;
     println!(
-        "V888_COST_BENCH sources={} contacts_per_source={} targets_per_source={} \\
-         repetitions={} workers={} cache={} serial_median_ns={} external_median_ns={} \\
-         writer_threads_total={} admission_accepted={} admission_rejected={} \\
-         events={} contacts={} exact_parity=true externally_supplied_costs=true \\
+        "V888_COST_BENCH sources={} contacts_per_source={} targets_per_source={} \
+         repetitions={} workers={} cache={} serial_median_ns={} external_median_ns={} \
+         writer_threads_total={} admission_accepted={} admission_rejected={} \
+         events={} contacts={} exact_parity=true externally_supplied_costs=true \
          physical_calibration_unverified=true energy_measured=false",
         config.sources,
         config.contacts_per_source,
