@@ -46,3 +46,35 @@ The arithmetic is exact for its documented code interpretation. It does not impl
 5. Only then consider reusing this module in SciRust GF(4) experiments and SML / FLAT exploratory kernels; require independently benchmarked evidence.
 
 This is classical deterministic bit-sliced execution, not quantum computation, magic-state simulation or an intrinsic QML speedup.
+
+## Paired scalar/packed GF(4) inner-product probe
+
+The optional CPU binary `v888-gf4-bench` compares a scalar GF(4)
+reference against `PackedQ2::gf4_dot` on identical deterministic
+four-level inputs. It requires exact field-code equality for every
+measured repetition and aborts otherwise. It alternates the order of
+the two modes and reports median nanoseconds independently. Its
+measurements exclude input generation, packing, warmup and result
+verification; the resulting times do **not** describe an end-to-end
+inference workload or a Boolean graph-propagation speedup.
+
+The output reports input payload bytes for both implementations:
+two scalar bytes per input pair versus two packed bitplanes per vector,
+each rounded to complete `u64` words. It excludes vector capacity
+over-allocation, allocator metadata, thread/runtime costs and other
+data structures. Synthetic input coefficients are not anatomical
+parameters or calibrated workloads.
+
+CPU-only example:
+
+```bash
+cargo test --offline --all-targets
+cargo run --offline --release --bin v888-gf4-bench -- \
+  --lanes=188508 --repetitions=11
+```
+
+The bounded CLI accepts 1..1,048,576 lanes and 3..64 paired
+repetitions. A credible performance claim additionally requires
+several independently pinned physical runs, noise/CPU-affinity
+documentation and an end-to-end packing-inclusive comparator.
+Energy is not measured.
