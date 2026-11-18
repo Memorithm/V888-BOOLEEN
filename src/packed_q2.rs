@@ -314,4 +314,5 @@ mod tests {
             );
             assert_eq!(accumulator, original);
         }
-    }}
+    }
+}
