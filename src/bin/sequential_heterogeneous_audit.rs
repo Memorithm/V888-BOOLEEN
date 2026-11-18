@@ -2,7 +2,10 @@
 //! CSV columns: split,sequence,epoch,gates,cone,full_ns,incremental_ns,refresh_ns,
 //! full_output,incremental_output,full_decision,incremental_decision,vm_hwm_kib
 //! Rows must be ordered by sequence. This tool never trains on holdouts.
-use std::io::{self, BufRead};
+use std::io::{self, BufRead, Read};
+
+// Reject oversized CSV records before allocating unbounded input memory.
+const MAX_RECORD_BYTES: u64 = 4096;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Observation {
@@ -43,16 +46,23 @@ fn parse(line: &str) -> Result<Observation, String> {
 #[derive(Default)]
 struct Totals { count: u64, mismatch: u64, full: u128, selected: u128, incremental: u128, refresh: u128, epoch_transitions: u64, max_hwm: u64, geometry_transitions: u64, min_cone: Option<u64>, max_cone: u64, max_refresh_ns: u64 }
 
-fn audit<R: BufRead>(reader: R) -> Result<[Totals; 4], String> {
+fn audit<R: BufRead>(mut reader: R) -> Result<[Totals; 4], String> {
     let mut totals: [Totals; 4] = std::array::from_fn(|_| Totals::default());
     let mut previous = None;
     let mut previous_epoch_by_split: [Option<u64>; 4] = [None; 4];
     let mut previous_geometry_by_split: [Option<(u64, u64)>; 4] = [None; 4];
-    for (line_number, line) in reader.lines().enumerate() {
-        let line = line.map_err(|e| e.to_string())?;
-        if line_number == 0 && line.starts_with("split,") { continue; }
+    let mut line_number = 0usize;
+    loop {
+        let mut bytes = Vec::new();
+        let read = reader.by_ref().take(MAX_RECORD_BYTES + 1).read_until(b'\n', &mut bytes)
+            .map_err(|e| e.to_string())?;
+        if read == 0 { break; }
+        line_number += 1;
+        if read as u64 > MAX_RECORD_BYTES { return Err(format!("line {line_number}: record exceeds 4096 bytes")); }
+        let line = std::str::from_utf8(&bytes).map_err(|_| format!("line {line_number}: invalid UTF-8"))?;
+        if line_number == 1 && line.starts_with("split,") { continue; }
         if line.trim().is_empty() { continue; }
-        let o = parse(&line).map_err(|e| format!("line {}: {e}", line_number + 1))?;
+        let o = parse(&line).map_err(|e| format!("line {}: {e}", line_number))?;
         if let Some((seq, epoch)) = previous {
             if o.sequence <= seq || o.epoch < epoch { return Err("non-monotone sequence or cache epoch".into()); }
         }
@@ -148,6 +158,17 @@ mod tests {
         assert_eq!((t[0].geometry_transitions, t[0].min_cone, t[0].max_cone, t[0].max_refresh_ns), (1, Some(2), 7, 50));
         assert_eq!((t[1].geometry_transitions, t[1].min_cone, t[1].max_cone, t[1].max_refresh_ns), (0, Some(9), 9, 30));
         assert_eq!((t[2].geometry_transitions, t[2].min_cone), (0, None));
+    }
+    #[test]
+    fn oversized_record_is_rejected_without_unbounded_allocation() {
+        let csv = format!("{HEADER}{}\n", "x".repeat(5000));
+        assert!(audit(csv.as_bytes()).unwrap_err().contains("record exceeds"));
+    }
+    #[test]
+    fn invalid_utf8_record_is_rejected() {
+        let mut csv = HEADER.as_bytes().to_vec();
+        csv.extend_from_slice(&[0xff, b'\n']);
+        assert!(audit(csv.as_slice()).unwrap_err().contains("invalid UTF-8"));
     }
     #[test]
     fn stale_epoch_and_bad_geometry_are_rejected() {
