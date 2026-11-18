@@ -11,7 +11,7 @@
 //! When any preflight fails, replay one reference event at a time to keep
 //! the original first-error and partial-commit semantics.
 
-use std::collections::BTreeSet;
+use std::collections::{btree_map::Entry, BTreeMap};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -543,7 +543,11 @@ impl<'g> EventRuntime<'g> {
         if phase != DRIVE {
             return (Vec::new(), 0);
         }
-        let mut touched = BTreeSet::new();
+        // Record which candidate owns each nonzero destination. Repeated
+        // destinations within one source are legal; a different source is
+        // a true causal conflict. Inserting on the first scan removes the
+        // redundant second pass over large, repeated CSR fanouts.
+        let mut touched = BTreeMap::<usize, usize>::new();
         let mut selected = Vec::new();
         for (&key, &requested) in self.pending.iter().take(limit) {
             if key.0 != time || key.1 != DRIVE {
@@ -551,41 +555,36 @@ impl<'g> EventRuntime<'g> {
             }
             let source = key.2;
             if self.state.get(source).expect("validated source") != requested {
-                if let Some(reduced) = self.contact_cache.as_ref().and_then(|c| c.get(&source)) {
-                    // Exact nonzero target set; no repeated CSR fanout scan.
-                    if reduced.iter().any(|(target, _)| touched.contains(target)) {
-                        break;
+                // If a later source conflicts, discard its tentative targets
+                // together with this local map; only the prior prefix is
+                // returned. This preserves the exact distinct-target count.
+                let prefix_targets = touched.len();
+                let mut claim = |target: usize| match touched.entry(target) {
+                    Entry::Vacant(vacant) => {
+                        vacant.insert(source);
+                        true
                     }
-                    for &(target, _) in reduced {
-                        touched.insert(target);
+                    Entry::Occupied(existing) => *existing.get() == source,
+                };
+                if let Some(reduced) = self.contact_cache.as_ref().and_then(|c| c.get(&source)) {
+                    if reduced.iter().any(|&(target, _)| !claim(target)) {
+                        return (selected, prefix_targets);
                     }
                 } else {
                     let first = self.graph.offsets[source] as usize;
                     let last = self.graph.offsets[source + 1] as usize;
-                    // Avoid repeated BTreeSet lookups for adjacent CSR rows
-                    // with the same nonzero target. Zeros do not create writes.
                     let mut last_target = None;
-                    if (first..last).any(|edge| {
+                    for edge in first..last {
                         if self.graph.counts[edge] == 0 {
-                            return false;
+                            continue;
                         }
                         let target = self.graph.targets[edge] as usize;
                         if last_target == Some(target) {
-                            return false;
+                            continue;
                         }
                         last_target = Some(target);
-                        touched.contains(&target)
-                    }) {
-                        break;
-                    }
-                    let mut last_target = None;
-                    for edge in first..last {
-                        if self.graph.counts[edge] != 0 {
-                            let target = self.graph.targets[edge] as usize;
-                            if last_target != Some(target) {
-                                touched.insert(target);
-                                last_target = Some(target);
-                            }
+                        if !claim(target) {
+                            return (selected, prefix_targets);
                         }
                     }
                 }
@@ -1009,6 +1008,112 @@ mod tests {
         };
         assert!(!single_producer.probe_eligible());
         assert!(!too_few_targets.probe_eligible());
+    }
+
+    #[test]
+    fn single_pass_prefix_allows_unsorted_self_duplicates_and_zero_rows() {
+        let graph = Connectome {
+            ids: (10..18).collect(),
+            offsets: vec![0, 5, 9, 11, 11, 11, 11, 11, 11],
+            targets: vec![2, 3, 2, 3, 2, 4, 5, 4, 5, 6, 6],
+            counts: vec![1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        };
+        graph.validate().unwrap();
+        let mut runtime = EventRuntime::new(&graph, 1, 32).unwrap();
+        for id in [10, 11, 12] {
+            runtime.schedule_drive(0, id, true).unwrap();
+        }
+        let (group, distinct) = runtime.disjoint_drive_prefix(3);
+        assert_eq!(group.len(), 3);
+        assert_eq!(distinct, 5);
+        assert_eq!(group.iter().map(|(key, _)| key.2).collect::<Vec<_>>(), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn single_pass_cached_and_uncached_prefixes_claim_identical_targets() {
+        let graph = Connectome {
+            ids: (10..20).collect(),
+            offsets: [0, 256, 512]
+                .into_iter()
+                .chain(std::iter::repeat_n(512, 8))
+                .collect(),
+            targets: (2..10)
+                .flat_map(|target| std::iter::repeat_n(target, 64))
+                .collect(),
+            counts: vec![1; 512],
+        };
+        graph.validate().unwrap();
+        let mut cached = EventRuntime::new(&graph, 1, 32).unwrap();
+        let mut uncached = EventRuntime::new(&graph, 1, 32).unwrap();
+        let mut reference = EventRuntime::new(&graph, 1, 32).unwrap();
+        let report = cached.prepare_contact_cache(16).unwrap();
+        assert_eq!(report.cached_sources, 2);
+        assert_eq!(report.cached_pairs, 8);
+        for runtime in [&mut cached, &mut uncached, &mut reference] {
+            runtime.schedule_drive(0, 10, true).unwrap();
+            runtime.schedule_drive(0, 11, true).unwrap();
+        }
+        let cached_prefix = cached.disjoint_drive_prefix(2);
+        let uncached_prefix = uncached.disjoint_drive_prefix(2);
+        assert_eq!(cached_prefix, uncached_prefix);
+        assert_eq!(cached_prefix.0.len(), 2);
+        assert_eq!(cached_prefix.1, 8);
+
+        // Execute actual parallel counter writes in both branches, rather
+        // than merely comparing the prefix detector to a serial scheduler.
+        let mut costs = small_measured_costs();
+        costs.max_effective_contacts = 512;
+        let expected = reference.run(64).unwrap();
+        let cached_work = cached
+            .run_disjoint_parallel_commits_with_costs(64, 2, costs)
+            .unwrap();
+        let uncached_work = uncached
+            .run_disjoint_parallel_commits_with_costs(64, 2, costs)
+            .unwrap();
+        assert_eq!(cached_work.work, expected);
+        assert_eq!(uncached_work.work, expected);
+        assert!(cached_work.target_writer_threads >= 2);
+        assert!(uncached_work.target_writer_threads >= 2);
+        for runtime in [&cached, &uncached] {
+            assert_eq!(runtime.state(), reference.state());
+            assert_eq!(runtime.incoming, reference.incoming);
+            assert_eq!(runtime.pending, reference.pending);
+            assert_eq!(runtime.audit_incoming(), Ok(true));
+        }
+    }
+
+    #[test]
+    fn single_pass_prefix_discards_partial_claims_on_inter_source_conflict() {
+        let graph = Connectome {
+            ids: (10..18).collect(),
+            offsets: vec![0, 3, 6, 8, 8, 8, 8, 8, 8],
+            targets: vec![2, 3, 3, 5, 6, 2, 7, 7],
+            counts: vec![1; 8],
+        };
+        graph.validate().unwrap();
+        let mut runtime = EventRuntime::new(&graph, 1, 32).unwrap();
+        for id in [10, 11, 12] {
+            runtime.schedule_drive(0, id, true).unwrap();
+        }
+        // Source 11 tentatively claims targets 5 and 6, then conflicts
+        // with source 10 at target 2. Neither tentative claim is counted.
+        let (group, distinct) = runtime.disjoint_drive_prefix(3);
+        assert_eq!(group.len(), 1);
+        assert_eq!(group[0].0, (0, DRIVE, 0));
+        assert_eq!(distinct, 2);
+        let mut oracle = EventRuntime::new(&graph, 1, 32).unwrap();
+        for id in [10, 11, 12] {
+            oracle.schedule_drive(0, id, true).unwrap();
+        }
+        let expected = oracle.run(128).unwrap();
+        let actual = runtime
+            .run_disjoint_parallel_commits_with_costs(128, 2, small_measured_costs())
+            .unwrap();
+        assert_eq!(actual.work, expected);
+        assert_eq!(runtime.state(), oracle.state());
+        assert_eq!(runtime.incoming, oracle.incoming);
+        assert_eq!(runtime.pending, oracle.pending);
+        assert_eq!(runtime.audit_incoming(), Ok(true));
     }
 
     #[test]
