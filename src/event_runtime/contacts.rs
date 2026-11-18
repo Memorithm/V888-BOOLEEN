@@ -58,6 +58,79 @@ pub(super) fn aggregate_outgoing(
     Ok(totals.into_iter().collect())
 }
 
+/// Immutable, source-indexed cached reductions. Only worthwhile sources
+/// are retained; a missing key selects the normal CSR reference path.
+pub(super) type ContactCache = BTreeMap<usize, Vec<(usize, u128)>>;
+
+/// Construction statistics, not measured saved joules or memory traffic.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ContactCacheReport {
+    /// Number of distinct sources retained (never more than pair budget).
+    pub cached_sources: usize,
+    /// Total retained (source,target) weighted pairs.
+    pub cached_pairs: usize,
+    /// Logical raw CSR contact rows covered by retained sources.
+    pub covered_contact_rows: usize,
+    /// Sources with enough outgoing rows to be considered for compression.
+    pub candidate_sources: usize,
+}
+
+/// Build a bounded retained cache outside event execution.
+///
+/// Only sources with >=64 CSR rows and at least 4x reduction in the number
+/// of distinct nonzero targets are included. No source is partially cached.
+/// max_pairs=0 selects the uncached path. Retained pairs are bounded, but
+/// temporary aggregation during construction can allocate more.
+pub(super) fn build_contact_cache(
+    graph: &Connectome,
+    max_pairs: usize,
+) -> Result<(Option<ContactCache>, ContactCacheReport), EventError> {
+    let mut cache = ContactCache::new();
+    let mut report = ContactCacheReport::default();
+    if max_pairs == 0 {
+        return Ok((None, report));
+    }
+    for source in 0..graph.ids.len() {
+        let first = graph.offsets[source] as usize;
+        let last = graph.offsets[source + 1] as usize;
+        let fanout = last - first;
+        if fanout < 64 {
+            continue;
+        }
+        report.candidate_sources += 1;
+        let pairs = aggregate_outgoing(graph, source)?;
+        if pairs.is_empty() || pairs.len().saturating_mul(4) > fanout {
+            continue;
+        }
+        if pairs.len() > max_pairs - report.cached_pairs {
+            continue;
+        }
+        report.cached_pairs += pairs.len();
+        report.cached_sources += 1;
+        report.covered_contact_rows += fanout;
+        cache.insert(source, pairs);
+    }
+    if cache.is_empty() {
+        Ok((None, report))
+    } else {
+        Ok((Some(cache), report))
+    }
+}
+
+/// Get a cached reduction when present, otherwise fall back to exact CSR
+/// reduction. Parallel preflight owns a Vec so it clones only compressed
+/// weighted destination pairs, never the original large CSR run.
+pub(super) fn outgoing_with_cache(
+    graph: &Connectome,
+    cache: Option<&ContactCache>,
+    source: usize,
+) -> Result<Vec<(usize, u128)>, EventError> {
+    match cache.and_then(|stored| stored.get(&source)) {
+        Some(deltas) => Ok(deltas.clone()),
+        None => aggregate_outgoing(graph, source),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
