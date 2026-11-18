@@ -76,6 +76,11 @@ Ce second chemin peut explorer les préfixes sous les anciens seuils, mais
 il peut être plus coûteux sur certaines topologies ; aucune accélération
 n'est garantie. Le profil appartient à l'appelant ; il n'existe ni état
 global mutable, ni fichier de calibration, ni modification du graphe.
+Les mesures en mémoire sont liées au **nombre effectif de workers** et à
+l'**activation du cache de contacts** : changer l'un de ces paramètres
+invalide les anciennes observations avant toute nouvelle admission.
+Une configuration inchangée conserve la calibration entre tranches et
+exécutions indépendantes.
 
 Chaque **préfixe causal DRIVE sans cible commune** est décrit par des données
 du graphe réellement parcouru :
