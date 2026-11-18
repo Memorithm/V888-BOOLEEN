@@ -7,7 +7,7 @@
 
 use std::collections::BTreeSet;
 
-use super::contacts::aggregate_outgoing;
+use super::contacts::{outgoing_with_cache, ContactCache};
 use std::thread;
 
 use super::{EventError, EventKey, EventRuntime, EventWork, DRIVE, RECHECK};
@@ -41,6 +41,7 @@ pub(super) struct PreparedEvent {
 
 pub(super) fn prepare_one(
     graph: &Connectome,
+    cache: Option<&ContactCache>,
     state: &BooleanState,
     incoming: &[u128],
     threshold: u128,
@@ -59,7 +60,7 @@ pub(super) fn prepare_one(
     } else {
         let first = graph.offsets[source] as usize;
         let last = graph.offsets[source + 1] as usize;
-        (last - first, aggregate_outgoing(graph, source)?)
+        (last - first, outgoing_with_cache(graph, cache, source)?)
     };
     Ok(PreparedEvent {
         key,
@@ -143,6 +144,7 @@ impl<'g> EventRuntime<'g> {
             let worker_count = threads.min(group.len());
             let chunk_size = group.len().div_ceil(worker_count);
             let graph = self.graph;
+            let cache = self.contact_cache.as_ref();
             let state = &self.state;
             let incoming = &self.incoming;
             let threshold = self.threshold;
@@ -153,7 +155,7 @@ impl<'g> EventRuntime<'g> {
                         chunk
                             .iter()
                             .map(|&(key, requested)| {
-                                prepare_one(graph, state, incoming, threshold, key, requested)
+                                prepare_one(graph, cache, state, incoming, threshold, key, requested)
                             })
                             .collect::<Vec<_>>()
                     }));
