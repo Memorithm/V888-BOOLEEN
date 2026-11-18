@@ -7,7 +7,7 @@
 
 use std::collections::BTreeSet;
 
-use super::contacts::{outgoing_with_cache, ContactCache};
+use super::contacts::{effective_outgoing_work, outgoing_with_cache, ContactCache};
 use std::thread;
 
 use super::{EventError, EventKey, EventRuntime, EventWork, DRIVE, RECHECK};
@@ -116,8 +116,10 @@ impl<'g> EventRuntime<'g> {
             let allowance = (max_events - report.work.events_consumed)
                 .min(threads.saturating_mul(EVENTS_PER_WORKER));
             let group = self.independent_prefix(allowance);
-            // Admit threads only for real transitions with sufficient total
-            // CSR work. Consume a rejected causal prefix in order, rather
+            // Admit threads only for real transitions with sufficient actual
+            // preparation work (cached pairs or uncached CSR rows). A large
+            // logical fanout need not justify threads after compression.
+            // Consume a rejected causal prefix in order, rather
             // than repeatedly planning it or spawning empty worker groups.
             let contacts: usize = group
                 .iter()
@@ -131,7 +133,7 @@ impl<'g> EventRuntime<'g> {
                     if current == desired {
                         0
                     } else {
-                        (self.graph.offsets[source + 1] - self.graph.offsets[source]) as usize
+                        effective_outgoing_work(self.graph, self.contact_cache.as_ref(), source)
                     }
                 })
                 .sum();
