@@ -428,12 +428,7 @@ mod tests {
         ] {
             let graph = graph(16, shape);
             let baseline = execute(&graph, shape, Mode::Serial, 1, false).outcome;
-            for mode in [
-                Mode::Serial,
-                Mode::Frontier,
-                Mode::Disjoint,
-                Mode::Adaptive,
-            ] {
+            for mode in [Mode::Serial, Mode::Frontier, Mode::Disjoint, Mode::Adaptive] {
                 for cache in [false, true] {
                     let sample = execute(&graph, shape, mode, 4, cache);
                     assert_eq!(sample.outcome, baseline);
