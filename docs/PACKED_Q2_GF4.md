@@ -1,0 +1,85 @@
+# Packed 2-bit arithmetic: experimental kernel (Q2 / GF(4))
+
+This research module is separate from BANC V888 connectivity, biological modeling, and the active event runtime. It makes no inference about synaptic types or weights. No speed or model-quality improvement is claimed.
+
+## Representations and semantics
+
+A pair of `u64` bitplanes (`low`, `high`) carries 64 lanes of two-bit codes. A Q2 code is `low_bit + 2*high_bit`. Two words are 16 bytes for 64 values: exactly two payload bits per value. This is not a one-word/64-value representation, and all memory estimates must count **both** planes, vector capacities, ancillary graph data and access patterns.
+
+- Unsigned numeric Q2: 0,1,2,3.
+- Signed numeric Q2 (two's complement): 0,1,-2,-1 for codes 0,1,2,3.
+- GF(4) polynomial codes: 0,1,x,1+x with x²=x+1; addition is XOR, multiplication is not ordinary numeric multiplication or multiplication modulo four.
+
+For `a=a0+2a1` and `b=b0+2b1`, the unsigned dot product over all lanes is
+
+```text
+popcnt(a0 & b0)
++ 2 * popcnt(a0 & b1)
++ 2 * popcnt(a1 & b0)
++ 4 * popcnt(a1 & b1)
+```
+
+For two-bit signed codes `a=a0-2a1`, `b=b0-2b1`, the same four popcounts use coefficients +1,-2,-2,+4.
+
+GF(4) multiplication uses the basis x²+x+1: `c0=(a0&b0) XOR (a1&b1)` and `c1=(a0&b1) XOR (a1&b0) XOR (a1&b1)`.
+
+The exact GF(4) inner product is **the field sum of field products**:
+`⊕_i (a_i · b_i)`. For each 64-lane bitplane pair the implementation
+computes the two polynomial components via AND/XOR and reduces each
+component with the parity of `count_ones()`; it then XOR-accumulates
+the two resulting bits across words. The result is a field code in
+`0..=3`, not a numeric dot product. No heap allocation is required
+for `gf4_dot` beyond the existing packed vectors.
+
+### Fused multiply-accumulate
+
+`PackedQ2::gf4_mul_add_assign(&mut accumulator, &left, &right)` computes
+`accumulator[i] = accumulator[i] + left[i] * right[i]` over GF(4) (field
+addition is XOR). The kernel updates existing packed accumulator planes in
+place without allocating a temporary product, making it suitable as a
+bounded building block for future GF(4) matrix rows and recurrent state
+updates. Operand length checks happen before any mutation.
+
+The existing `gf4_mul` is expressed using this fused primitive to maintain
+a single definition of polynomial multiplication. Tests compare the fused
+operation to the independent scalar GF(4) oracle at 0/1/63/64/65/127/128/129
+and 188,508 lanes, check cancellation after a second accumulation, and
+assert unchanged state on both operand-length errors. No matrix-model speed
+or memory-traffic reduction has been measured.
+
+## Correctness scope
+
+`PackedQ2` rejects invalid levels and mismatched lengths. The tests cover empty buffers, 63/64/65 and 127/128/129 lane boundaries, a BANC-sized 188,508-lane synthetic buffer, numeric reference dots, scalar-oracle GF(4) inner products including incomplete last words, elementwise GF(4) scalar references and all 16 single-lane GF(4) input pairs. Padding is initialized to zero and cannot be modified through the safe public interface.
+
+The arithmetic is exact for its documented code interpretation. It does not imply equivalence to the Boolean V888 runtime because the latter uses exact graph contact counts, thresholds and event ordering.
+
+## Bounded synthetic reference benchmark
+
+Run `cargo run --offline --release --bin v888-q2-bench` in the
+SHA-pinned RemoteOps offline Rust container. This standalone binary generates
+identical deterministic four-level vectors for packed and scalar execution,
+checks the GF(4) dot and fused multiply-accumulate results before reporting
+timings, and checks equality again after timed repeated updates.
+
+The report includes separate packing cost for three vectors, scalar and
+packed GF(4) dot nanoseconds per call, scalar and packed in-place
+multiply-accumulate nanoseconds per call, and packed payload bytes for
+three vectors. Shapes range from the empty case and word boundaries to
+188,508 synthetic lanes. Both arithmetic modes are compared on equivalent
+pre-encoded inputs; the packing measurement is **reported separately** and
+must be included in end-to-end cost comparisons when data arrives unpacked.
+
+Single-process wall-clock observations are not statistically controlled
+speedups. No RAPL joules, DRAM transactions, graph propagation or model
+accuracy are measured by this binary. Host and exact SHA must be recorded
+before claiming a result.
+
+## Qualification and promotion gates
+
+1. Format, Clippy, compile and unit tests on the **exact branch SHA**. No hardware-dependent tuning in the reference module.
+2. Establish end-to-end baselines and representative data distributions; compare against scalar Q2 and existing Boolean kernels. Record unpacking/packing costs, memory allocation, cache misses if available and complete wall time.
+3. Profile on Dell Xeon AVX2; do not infer throughput from bit density or extrapolate from isolated kernels to graph propagation.
+4. Keep the default V888 event runtime unchanged until deterministic equivalence or a separately authorized non-equivalent research mode has been established.
+5. Only then consider reusing this module in SciRust GF(4) experiments and SML / FLAT exploratory kernels; require independently benchmarked evidence.
+
+This is classical deterministic bit-sliced execution, not quantum computation, magic-state simulation or an intrinsic QML speedup.
