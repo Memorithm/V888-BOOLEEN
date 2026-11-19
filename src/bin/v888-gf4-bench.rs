@@ -51,9 +51,7 @@ impl Config {
 /// GF(4) product in the polynomial basis x²+x+1 for codes 0,1,x,1+x.
 fn scalar_mul(a: u8, b: u8) -> u8 {
     let low = (a & 1) & (b & 1) ^ ((a >> 1) & (b >> 1));
-    let high = ((a & 1) & (b >> 1))
-        ^ ((a >> 1) & (b & 1))
-        ^ ((a >> 1) & (b >> 1));
+    let high = ((a & 1) & (b >> 1)) ^ ((a >> 1) & (b & 1)) ^ ((a >> 1) & (b >> 1));
     low | (high << 1)
 }
 
@@ -76,7 +74,10 @@ fn fixture(lanes: usize) -> (Vec<u8>, Vec<u8>) {
 }
 
 fn median_ns(values: &mut [u128]) -> u128 {
-    assert!(!values.is_empty(), "median requires at least one observation");
+    assert!(
+        !values.is_empty(),
+        "median requires at least one observation"
+    );
     values.sort_unstable();
     let upper = values.len() / 2;
     if values.len() % 2 == 1 {
@@ -113,12 +114,18 @@ fn benchmark(config: Config) -> Evidence {
     let packed_a = PackedQ2::from_levels(&a).expect("four-level fixture");
     let packed_b = PackedQ2::from_levels(&b).expect("four-level fixture");
     let scalar = scalar_dot(&a, &b);
-    let packed = packed_a.gf4_dot(&packed_b).expect("matching packed lengths");
+    let packed = packed_a
+        .gf4_dot(&packed_b)
+        .expect("matching packed lengths");
     assert_eq!(scalar, packed, "independent GF(4) reference mismatch");
 
     // Warmups and reference comparison are outside the timed trials.
     black_box(scalar_dot(black_box(&a), black_box(&b)));
-    black_box(packed_a.gf4_dot(black_box(&packed_b)).expect("warmup parity"));
+    black_box(
+        packed_a
+            .gf4_dot(black_box(&packed_b))
+            .expect("warmup parity"),
+    );
     let warm_a = PackedQ2::from_levels(black_box(&a)).expect("warmup pack A");
     let warm_b = PackedQ2::from_levels(black_box(&b)).expect("warmup pack B");
     assert_eq!(warm_a.gf4_dot(&warm_b), Ok(scalar));
@@ -136,8 +143,7 @@ fn benchmark(config: Config) -> Evidence {
                     scalar_ns.push(ns);
                 }
                 1 => {
-                    let (code, ns) =
-                        measure(|| packed_a.gf4_dot(black_box(&packed_b)).unwrap());
+                    let (code, ns) = measure(|| packed_a.gf4_dot(black_box(&packed_b)).unwrap());
                     assert_eq!(code, scalar);
                     packed_ns.push(ns);
                 }
@@ -259,10 +265,7 @@ mod tests {
             });
             assert_eq!(evidence.scalar_field_code, evidence.packed_field_code);
             assert_eq!(evidence.scalar_payload_bytes, lanes * 2);
-            assert_eq!(
-                evidence.packed_payload_bytes,
-                lanes.div_ceil(64) * 32
-            );
+            assert_eq!(evidence.packed_payload_bytes, lanes.div_ceil(64) * 32);
         }
     }
 }
