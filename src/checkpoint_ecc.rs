@@ -169,10 +169,7 @@ impl ProtectedBooleanSnapshot {
     /// The bound is enforced before allocating the destination BooleanState.
     /// The protected snapshot has already been loaded into memory; callers
     /// must separately limit encoded input size and authenticate its framing.
-    pub fn recover_bounded(
-        &self,
-        max_neurons: usize,
-    ) -> Result<RecoveredState, SnapshotError> {
+    pub fn recover_bounded(&self, max_neurons: usize) -> Result<RecoveredState, SnapshotError> {
         if self.blocks.len() != block_count(self.len) || self.tags.len() != self.blocks.len() {
             return Err(SnapshotError::InvalidShape);
         }
