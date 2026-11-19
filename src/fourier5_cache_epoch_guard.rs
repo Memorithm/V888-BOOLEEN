@@ -59,8 +59,7 @@ impl CacheEpochGuard {
         cache: &mut C,
         intervention: I,
         rebuild: B,
-        full: F,
-        incremental: D,
+        oracles: (F, D),
     ) -> Result<Option<u64>, EpochError>
     where
         S: Clone,
@@ -79,6 +78,7 @@ impl CacheEpochGuard {
             return Ok(None);
         }
         let candidate_cache = rebuild(&candidate);
+        let (full, incremental) = oracles;
         let expected = full(&candidate);
         let observed = incremental(&candidate, &candidate_cache);
         if expected != observed {
@@ -207,8 +207,10 @@ mod tests {
                     true
                 },
                 |s| s.iter().filter(|&&bit| bit).count(),
-                |s| (s.iter().any(|&bit| bit), s.iter().all(|&bit| bit)),
-                |s, c| (*c > 0, *c == s.len()),
+                (
+                    |s| (s.iter().any(|&bit| bit), s.iter().all(|&bit| bit)),
+                    |s: &Vec<bool>, c: &usize| (*c > 0, *c == s.len()),
+                ),
             );
             assert_eq!(result, Ok(Some(epoch + 1)));
             assert!(guard.cache_current());
@@ -233,8 +235,7 @@ mod tests {
                 true
             },
             |s| usize::from(s[0]),
-            |_| (true, true),
-            |_, _| (true, false),
+            (|_| (true, true), |_, _| (true, false)),
         );
         assert_eq!(result, Err(EpochError::OracleMismatch));
         assert_eq!(state, vec![false]);
@@ -255,8 +256,7 @@ mod tests {
                 &mut cache,
                 |_| panic!("stale intervention ran"),
                 |_| panic!("stale rebuild ran"),
-                |_| (false, false),
-                |_, _| (false, false),
+                (|_| (false, false), |_, _| (false, false)),
             ),
             Err(EpochError::StaleProposal)
         );
@@ -267,8 +267,7 @@ mod tests {
                 &mut cache,
                 |_| false,
                 |_| panic!("declined rebuild ran"),
-                |_| (false, false),
-                |_, _| (false, false),
+                (|_| (false, false), |_, _| (false, false)),
             ),
             Ok(None)
         );
@@ -290,13 +289,15 @@ mod tests {
                 true
             },
             |candidate| NonCloneCache(*candidate),
-            |candidate| (*candidate > 0, *candidate == 2),
-            |candidate, candidate_cache| {
-                (
-                    candidate_cache.0 > 0,
-                    candidate_cache.0 == *candidate && *candidate == 2,
-                )
-            },
+            (
+                |candidate: &u8| (*candidate > 0, *candidate == 2),
+                |candidate: &u8, candidate_cache: &NonCloneCache| {
+                    (
+                        candidate_cache.0 > 0,
+                        candidate_cache.0 == *candidate && *candidate == 2,
+                    )
+                },
+            ),
         );
         assert_eq!(result, Ok(Some(1)));
         assert_eq!(state, 2);
@@ -319,8 +320,10 @@ mod tests {
             &mut cache,
             |_| panic!("overflow ran intervention"),
             |_| panic!("overflow ran rebuild"),
-            |_| panic!("overflow ran Full oracle"),
-            |_, _| panic!("overflow ran Incremental oracle"),
+            (
+                |_| panic!("overflow ran Full oracle"),
+                |_, _| panic!("overflow ran Incremental oracle"),
+            ),
         );
         assert_eq!(result, Err(EpochError::Overflow));
         assert_eq!((state, cache), (1, 1));
