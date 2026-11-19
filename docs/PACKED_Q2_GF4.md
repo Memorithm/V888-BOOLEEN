@@ -53,6 +53,27 @@ or memory-traffic reduction has been measured.
 
 The arithmetic is exact for its documented code interpretation. It does not imply equivalence to the Boolean V888 runtime because the latter uses exact graph contact counts, thresholds and event ordering.
 
+## Bounded synthetic reference benchmark
+
+Run `cargo run --offline --release --bin v888-q2-bench` in the
+SHA-pinned RemoteOps offline Rust container. This standalone binary generates
+identical deterministic four-level vectors for packed and scalar execution,
+checks the GF(4) dot and fused multiply-accumulate results before reporting
+timings, and checks equality again after timed repeated updates.
+
+The report includes separate packing cost for three vectors, scalar and
+packed GF(4) dot nanoseconds per call, scalar and packed in-place
+multiply-accumulate nanoseconds per call, and packed payload bytes for
+three vectors. Shapes range from the empty case and word boundaries to
+188,508 synthetic lanes. Both arithmetic modes are compared on equivalent
+pre-encoded inputs; the packing measurement is **reported separately** and
+must be included in end-to-end cost comparisons when data arrives unpacked.
+
+Single-process wall-clock observations are not statistically controlled
+speedups. No RAPL joules, DRAM transactions, graph propagation or model
+accuracy are measured by this binary. Host and exact SHA must be recorded
+before claiming a result.
+
 ## Qualification and promotion gates
 
 1. Format, Clippy, compile and unit tests on the **exact branch SHA**. No hardware-dependent tuning in the reference module.

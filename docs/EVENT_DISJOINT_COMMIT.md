@@ -21,6 +21,18 @@ distinctes. Un conflit coupe le préfixe, sans reporter ni réordonner
 l'événement. Les `RECHECK` sont traités séquentiellement car ils peuvent
 se lire et s'écrire mutuellement à la même date logique.
 
+Le détecteur de conflit utilise une carte locale `destination -> source`.
+Chaque ligne CSR non nulle est parcourue **une seule fois par tentative de
+préfixe**, plutôt que deux passages (détection puis insertion) : répéter une
+destination dans la même source reste autorisé, mais un autre producteur
+visant cette destination coupe immédiatement le préfixe. Les cibles
+provisoirement rencontrées dans la source conflictuelle sont écartées
+avec la carte locale ; la cardinalité renvoyée ne concerne que le
+préfixe accepté. Les mêmes règles s'appliquent aux paires de contacts
+agrégées en cache. Cette transformation vise le coût de préparation,
+sans prétendre démontrer un gain sur la durée totale ni changer les
+contributions, événements ou compteurs logiques.
+
 Les contributions de chaque source sont préparées depuis un instantané
 immuable. Chaque événement est ensuite prévalidé, dans son ordre
 original, pour les dépassements `u128`, le temps logique et la
@@ -108,8 +120,7 @@ Ici `T` est le nombre de cibles distinctes et `S` celui des sources
 actives ; le coefficient 8 est **un poids heuristique**, non une constante
 physique mesurée. Pour une classe avec au moins deux observations de chaque
 chemin, l'admission privilégie le parallèle seulement si
-`100 × coût_parallèle < 85 × coût_séquentiel`. Un sondage du chemin temporairement défavorisé tous les 32 candidats
-réactualise alternativement le coût séquentiel ou parallèle lorsque les conditions changent.
+`100 × coût_parallèle < 85 × coût_séquentiel`. Un sondage du chemin temporairement défavorisé tous les **32 candidats** maintient une mesure des deux voies lorsque leurs coûts sont proches. Si le coût observé du chemin perdant vaut au moins le double de celui du chemin sélectionné, la cadence passe à **256 candidats** pour amortir la création de threads inutiles. Ce repli reste borné : aucun chemin n'est abandonné définitivement, les deux sens peuvent être réévalués, et les coûts sont réappris après changement de workers ou de cache.
 Les mesures de groupe n'incluent pas le calcul du préfixe, commun aux deux
 chemins ; elles ne justifient pas à elles seules de déclarer un gain global.
 
