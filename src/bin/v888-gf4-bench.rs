@@ -215,6 +215,21 @@ mod tests {
     }
 
     #[test]
+    fn synthetic_fixture_covers_all_sixteen_field_products() {
+        // A flat or degenerate fixture could make a fast, incorrect kernel
+        // appear correct. Ensure both inputs exercise all GF(4) pairs.
+        let (a, b) = fixture(65);
+        assert_eq!(a.len(), 65);
+        assert_eq!(b.len(), 65);
+        assert_eq!(fixture(65), (a.clone(), b.clone()));
+        let mut pairs_seen = [false; 16];
+        for (x, y) in a.into_iter().zip(b) {
+            pairs_seen[usize::from(x) * 4 + usize::from(y)] = true;
+        }
+        assert!(pairs_seen.into_iter().all(|present| present));
+    }
+
+    #[test]
     fn paired_benchmark_is_bit_exact_and_payload_is_bounded() {
         for lanes in [1, 2, 63, 64, 65, 129, 257] {
             let evidence = benchmark(Config {
