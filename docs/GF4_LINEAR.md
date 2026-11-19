@@ -36,8 +36,11 @@ deux couches GF(4) déterministes et mesure le coût d'une composition
 matricielle exécutée une seule fois. Le banc compare ensuite les
 applications successives aux applications de la matrice précomposée,
 avec sept mesures appariées en ordre alterné et médiane par chemin.
-Les entrées ont des tailles de 63, 65, 129 et 256 éléments, pour des
-couches intermédiaires et sorties traversant les frontières 64 bits.
+Les entrées ont des tailles de 63, 65, 129, 256 et 1 024 éléments,
+pour des couches intermédiaires et sorties traversant les frontières
+64 bits. Le cas N=1 024, K=8, M=128 constitue un contre-exemple
+volontairement défavorable à la fusion : la couche intermédiaire
+est étroite, mais la matrice précomposée devient beaucoup plus dense.
 
 Avant chaque mesure, l'identité algébrique des deux chemins est
 vérifiée. Les coûts de construction des matrices d'entrée et de
