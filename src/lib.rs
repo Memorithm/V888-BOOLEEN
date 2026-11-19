@@ -321,3 +321,6 @@ pub mod fourier5_sequential_refresh;
 
 /// Transactional delta cache refresh, independently checked against Full.
 pub mod fourier5_delta_refresh;
+
+/// Split-isolated measured accounting for sequential cache refresh.
+pub mod fourier5_delta_physical_audit;
