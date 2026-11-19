@@ -79,7 +79,7 @@ fn parse(line: &str) -> Result<Observation, String> {
     Ok(obs)
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct Totals {
     count: u64,
     mismatch: u64,
