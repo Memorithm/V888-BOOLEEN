@@ -40,9 +40,13 @@ impl ValidDispatch {
         }
         let size = if gates < 1_024 { 0 } else if gates < 65_536 { 1 }
             else if gates < 1_048_576 { 2 } else { 3 };
-        let ratio = (u128::from(cone) * 100) / u128::from(gates);
-        let coverage = if ratio <= 1 { 0 } else if ratio <= 10 { 1 }
-            else if ratio <= 50 { 2 } else { 3 };
+        // Compare exact rational coverage: integer truncation incorrectly
+        // classified e.g. 199/10_000 as <=1%, despite being 1.99%.
+        let scaled_cone = u128::from(cone) * 100;
+        let total = u128::from(gates);
+        let coverage = if scaled_cone <= total { 0 }
+            else if scaled_cone <= total * 10 { 1 }
+            else if scaled_cone <= total * 50 { 2 } else { 3 };
         Ok(size * 4 + coverage)
     }
 
@@ -141,6 +145,23 @@ mod tests {
         assert_eq!(policy.choose(10_000, 50), EngineChoice::Incremental);
         policy.observe_valid(10_000, 50, 100, 90, true).unwrap();
         assert_eq!(policy.choose(10_000, 50), EngineChoice::Full);
+    }
+
+    #[test]
+    fn fractional_cone_boundaries_never_leak_valid_calibration() {
+        let mut policy = ValidDispatch::new(1, 0);
+        policy.observe_valid(10_000, 100, 100, 10, true).unwrap();
+        assert_eq!(policy.choose(10_000, 100), EngineChoice::Incremental);
+        // 1.01% and 1.99% are not in the <=1% bucket.
+        for cone in [101, 199] {
+            assert_eq!(policy.choose(10_000, cone), EngineChoice::Full);
+        }
+        policy.observe_valid(10_000, 1_000, 100, 10, true).unwrap();
+        assert_eq!(policy.choose(10_000, 1_000), EngineChoice::Incremental);
+        assert_eq!(policy.choose(10_000, 1_001), EngineChoice::Full);
+        policy.observe_valid(10_000, 5_000, 100, 10, true).unwrap();
+        assert_eq!(policy.choose(10_000, 5_000), EngineChoice::Incremental);
+        assert_eq!(policy.choose(10_000, 5_001), EngineChoice::Full);
     }
 
     #[test]
