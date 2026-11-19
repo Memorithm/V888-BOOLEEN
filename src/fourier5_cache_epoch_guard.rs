@@ -48,7 +48,6 @@ impl CacheEpochGuard {
         Ok(())
     }
 
-
     /// Atomically apply a sequential intervention and publish its refreshed cache.
     /// Both Boolean output and downstream decision must agree with an independent
     /// Full oracle. A stale proposal is rejected before any candidate work.
@@ -169,17 +168,28 @@ mod tests {
     fn rejected_and_stale_proposals_are_transactional() {
         let mut guard = CacheEpochGuard::new();
         guard.certify_rebuild(0).unwrap();
-        assert_eq!(guard.accept_verified(0, false, true), Err(EpochError::OracleMismatch));
-        assert_eq!(guard.accept_verified(0, true, false), Err(EpochError::OracleMismatch));
-        assert_eq!(guard.accept_verified(1, true, true), Err(EpochError::StaleProposal));
+        assert_eq!(
+            guard.accept_verified(0, false, true),
+            Err(EpochError::OracleMismatch)
+        );
+        assert_eq!(
+            guard.accept_verified(0, true, false),
+            Err(EpochError::OracleMismatch)
+        );
+        assert_eq!(
+            guard.accept_verified(1, true, true),
+            Err(EpochError::StaleProposal)
+        );
         assert_eq!(guard.generation(), 0);
         assert!(guard.cache_current());
         guard.accept_verified(0, true, true).unwrap();
-        assert_eq!(guard.accept_verified(0, true, true), Err(EpochError::StaleProposal));
+        assert_eq!(
+            guard.accept_verified(0, true, true),
+            Err(EpochError::StaleProposal)
+        );
         assert_eq!(guard.generation(), 1);
         assert!(!guard.cache_current());
     }
-
 
     #[test]
     fn verified_refresh_commits_cache_and_epoch_as_one_transaction() {
@@ -189,8 +199,13 @@ mod tests {
         for index in [0, 1] {
             let epoch = guard.generation();
             let result = guard.verified_refresh(
-                epoch, &mut state, &mut cache,
-                |s| { s[index] = true; true },
+                epoch,
+                &mut state,
+                &mut cache,
+                |s| {
+                    s[index] = true;
+                    true
+                },
                 |s| s.iter().filter(|&&bit| bit).count(),
                 |s| (s.iter().any(|&bit| bit), s.iter().all(|&bit| bit)),
                 |s, c| (*c > 0, *c == s.len()),
@@ -210,8 +225,13 @@ mod tests {
         let mut state = vec![false];
         let mut cache = 0_usize;
         let result = guard.verified_refresh(
-            0, &mut state, &mut cache,
-            |s| { s[0] = true; true },
+            0,
+            &mut state,
+            &mut cache,
+            |s| {
+                s[0] = true;
+                true
+            },
             |s| usize::from(s[0]),
             |_| (true, true),
             |_, _| (true, false),
@@ -228,20 +248,30 @@ mod tests {
         let mut guard = CacheEpochGuard::new();
         let mut state = 0_u8;
         let mut cache = 0_u8;
-        assert_eq!(guard.verified_refresh(
-            1, &mut state, &mut cache,
-            |_| panic!("stale intervention ran"),
-            |_| panic!("stale rebuild ran"),
-            |_| (false, false),
-            |_, _| (false, false),
-        ), Err(EpochError::StaleProposal));
-        assert_eq!(guard.verified_refresh(
-            0, &mut state, &mut cache,
-            |_| false,
-            |_| panic!("declined rebuild ran"),
-            |_| (false, false),
-            |_, _| (false, false),
-        ), Ok(None));
+        assert_eq!(
+            guard.verified_refresh(
+                1,
+                &mut state,
+                &mut cache,
+                |_| panic!("stale intervention ran"),
+                |_| panic!("stale rebuild ran"),
+                |_| (false, false),
+                |_, _| (false, false),
+            ),
+            Err(EpochError::StaleProposal)
+        );
+        assert_eq!(
+            guard.verified_refresh(
+                0,
+                &mut state,
+                &mut cache,
+                |_| false,
+                |_| panic!("declined rebuild ran"),
+                |_| (false, false),
+                |_, _| (false, false),
+            ),
+            Ok(None)
+        );
         assert_eq!((state, cache, guard.generation()), (0, 0, 0));
     }
 
@@ -255,13 +285,18 @@ mod tests {
             0,
             &mut state,
             &mut cache,
-            |candidate| { *candidate = 2; true },
+            |candidate| {
+                *candidate = 2;
+                true
+            },
             |candidate| NonCloneCache(*candidate),
             |candidate| (*candidate > 0, *candidate == 2),
-            |candidate, candidate_cache| (
-                candidate_cache.0 > 0,
-                candidate_cache.0 == *candidate && *candidate == 2,
-            ),
+            |candidate, candidate_cache| {
+                (
+                    candidate_cache.0 > 0,
+                    candidate_cache.0 == *candidate && *candidate == 2,
+                )
+            },
         );
         assert_eq!(result, Ok(Some(1)));
         assert_eq!(state, 2);
