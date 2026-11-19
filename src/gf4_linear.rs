@@ -34,6 +34,15 @@ impl PackedGf4Linear {
         self.rows.len()
     }
 
+    /// Packed coefficient payload only, excluding Vec metadata/capacity.
+    #[must_use]
+    pub fn coefficient_payload_bytes(&self) -> usize {
+        self.rows
+            .iter()
+            .map(PackedQ2::allocated_payload_bytes)
+            .sum()
+    }
+
     /// Compose this map with an earlier map: self(previous(input)).
     ///
     /// If self is M×K and previous is K×N, the result is an M×N GF(4)
