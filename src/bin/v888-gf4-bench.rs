@@ -75,6 +75,18 @@ fn fixture(lanes: usize) -> (Vec<u8>, Vec<u8>) {
     (a, b)
 }
 
+fn median_ns(values: &mut [u128]) -> u128 {
+    assert!(!values.is_empty(), "median requires at least one observation");
+    values.sort_unstable();
+    let upper = values.len() / 2;
+    if values.len() % 2 == 1 {
+        values[upper]
+    } else {
+        // Sorted difference avoids overflow near u128::MAX.
+        values[upper - 1] + (values[upper] - values[upper - 1]) / 2
+    }
+}
+
 fn measure<T>(work: impl FnOnce() -> T) -> (T, u128) {
     let started = Instant::now();
     let value = black_box(work());
@@ -141,10 +153,9 @@ fn benchmark(config: Config) -> Evidence {
             }
         }
     }
-    scalar_ns.sort_unstable();
-    packed_ns.sort_unstable();
-    packed_inclusive_ns.sort_unstable();
-    let idx = (config.repetitions - 1) / 2;
+    let scalar_median_ns = median_ns(&mut scalar_ns);
+    let packed_median_ns = median_ns(&mut packed_ns);
+    let packed_inclusive_median_ns = median_ns(&mut packed_inclusive_ns);
     Evidence {
         lanes: config.lanes,
         scalar_field_code: scalar,
@@ -152,9 +163,9 @@ fn benchmark(config: Config) -> Evidence {
         scalar_payload_bytes: a.len() + b.len(),
         packed_payload_bytes: packed_a.allocated_payload_bytes()
             + packed_b.allocated_payload_bytes(),
-        scalar_median_ns: scalar_ns[idx],
-        packed_median_ns: packed_ns[idx],
-        packed_inclusive_median_ns: packed_inclusive_ns[idx],
+        scalar_median_ns,
+        packed_median_ns,
+        packed_inclusive_median_ns,
     }
 }
 
@@ -212,6 +223,16 @@ mod tests {
         assert_eq!(scalar_mul(2, 2), 3);
         assert_eq!(scalar_mul(2, 3), 1);
         assert_eq!(scalar_mul(3, 3), 2);
+    }
+
+    #[test]
+    fn paired_median_uses_both_middle_samples_without_overflow() {
+        let mut odd = [7_u128, 1, 9];
+        assert_eq!(median_ns(&mut odd), 7);
+        let mut even = [8_u128, 2, 4, 10];
+        assert_eq!(median_ns(&mut even), 6);
+        let mut large = [u128::MAX - 3, u128::MAX - 1];
+        assert_eq!(median_ns(&mut large), u128::MAX - 2);
     }
 
     #[test]
