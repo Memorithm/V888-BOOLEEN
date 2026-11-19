@@ -34,6 +34,32 @@ impl PackedGf4Linear {
         self.rows.len()
     }
 
+    /// Compose this map with an earlier map: self(previous(input)).
+    ///
+    /// If self is M×K and previous is K×N, the result is an M×N GF(4)
+    /// matrix. A single packed K-lane column is reused across N columns,
+    /// avoiding a full transposed coefficient matrix.
+    pub fn compose(&self, previous: &Self) -> Result<Self, Q2Error> {
+        if self.input_len != previous.output_len() {
+            return Err(Q2Error::LengthMismatch);
+        }
+
+        let mut rows = vec![PackedQ2::new(previous.input_len); self.output_len()];
+        let mut column = PackedQ2::new(self.input_len);
+        for col in 0..previous.input_len {
+            for (row, coefficients) in previous.rows.iter().enumerate() {
+                column.set(row, coefficients.get(col)?)?;
+            }
+            for (index, weights) in self.rows.iter().enumerate() {
+                rows[index].set(col, weights.gf4_dot(&column)?)?;
+            }
+        }
+        Ok(Self {
+            input_len: previous.input_len,
+            rows,
+        })
+    }
+
     /// y = W*x over GF(4). Each output lane is the exact field inner product
     /// of one packed coefficient row and the packed input vector.
     pub fn apply(&self, input: &PackedQ2) -> Result<PackedQ2, Q2Error> {
@@ -164,6 +190,100 @@ mod tests {
         .unwrap();
         assert_eq!(zero_input_rows.apply(&PackedQ2::new(0)),
             Ok(PackedQ2::from_levels(&[0, 0]).unwrap()));
+    }
+
+    #[test]
+    fn composition_matches_two_passes_and_scalar_oracle() {
+        for input_width in [0, 1, 63, 64, 65, 129] {
+            for hidden_width in [0, 1, 2, 65] {
+                let output_width = 3;
+                let input_values: Vec<u8> = (0..input_width)
+                    .map(|i| ((i * 17 + i / 5 + 1) % 4) as u8)
+                    .collect();
+                let prev_rows: Vec<Vec<u8>> = (0..hidden_width)
+                    .map(|r| {
+                        (0..input_width)
+                            .map(|i| ((i * 13 + r * 7 + i / 3) % 4) as u8)
+                            .collect()
+                    })
+                    .collect();
+                let last_rows: Vec<Vec<u8>> = (0..output_width)
+                    .map(|r| {
+                        (0..hidden_width)
+                            .map(|i| ((i * 19 + r * 5 + i / 7) % 4) as u8)
+                            .collect()
+                    })
+                    .collect();
+                let previous = PackedGf4Linear::from_rows(
+                    input_width,
+                    prev_rows
+                        .iter()
+                        .map(|row| PackedQ2::from_levels(row).unwrap())
+                        .collect(),
+                )
+                .unwrap();
+                let last = PackedGf4Linear::from_rows(
+                    hidden_width,
+                    last_rows
+                        .iter()
+                        .map(|row| PackedQ2::from_levels(row).unwrap())
+                        .collect(),
+                )
+                .unwrap();
+                let composed = last.compose(&previous).unwrap();
+                let input = PackedQ2::from_levels(&input_values).unwrap();
+                assert_eq!(composed.input_len(), input_width);
+                assert_eq!(composed.output_len(), output_width);
+                assert_eq!(
+                    composed.apply(&input),
+                    last.apply(&previous.apply(&input).unwrap())
+                );
+                for (row_index, row) in last_rows.iter().enumerate() {
+                    let scalar_hidden: Vec<u8> = prev_rows
+                        .iter()
+                        .map(|prev| scalar_dot(prev, &input_values))
+                        .collect();
+                    assert_eq!(
+                        composed.apply(&input).unwrap().get(row_index),
+                        Ok(scalar_dot(row, &scalar_hidden))
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn composition_checks_dimensions_and_does_not_mutate_operands() {
+        let earlier = PackedGf4Linear::from_rows(
+            65,
+            vec![PackedQ2::new(65); 3],
+        )
+        .unwrap();
+        let later = PackedGf4Linear::from_rows(
+            2,
+            vec![PackedQ2::new(2); 4],
+        )
+        .unwrap();
+        let before_earlier = earlier.clone();
+        let before_later = later.clone();
+        assert_eq!(later.compose(&earlier), Err(Q2Error::LengthMismatch));
+        assert_eq!(earlier, before_earlier);
+        assert_eq!(later, before_later);
+
+        let identity = PackedGf4Linear::from_rows(
+            3,
+            (0..3)
+                .map(|i| {
+                    let mut row = PackedQ2::new(3);
+                    row.set(i, 1).unwrap();
+                    row
+                })
+                .collect(),
+        )
+        .unwrap();
+        let composed = identity.compose(&earlier).unwrap();
+        let input = PackedQ2::from_levels(&vec![3; 65]).unwrap();
+        assert_eq!(composed.apply(&input), earlier.apply(&input));
     }
 
     #[test]

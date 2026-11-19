@@ -11,6 +11,23 @@ The first implementation is intentionally sequential and CPU-only. It does not a
 
 Tests exercise 0/1/63/64/65/129 and 188,508 input lanes, more than one 64-bit output word, an identity transform, an independent scalar field oracle, field linearity, cancellation of duplicate accumulations, and shape-error fail-closed behavior. They do not prove biological learning or a performance/energy advantage.
 
+## Composition de couches GF(4)
+
+`PackedGf4Linear::compose(&previous)` produit une matrice compacte
+équivalente à `self(previous(x))` sur le corps GF(4). Pour deux matrices
+M×K et K×N, la composition M×N calcule chacune de ses colonnes avec
+un unique vecteur de travail de K symboles à deux bits, réutilisé au fil des
+N colonnes. Il n'existe pas de matrice transposée complète temporaire.
+Les dimensions incompatibles sont rejetées sans modifier les deux
+matrices initiales.
+
+Les tests comparent la composition à deux applications consécutives,
+et à un oracle scalaire indépendant, pour des dimensions vides,
+impaires et franchissant 63/64/65/129 symboles. Le gain éventuel ne
+concerne que la réutilisation d'une même composition sur plusieurs
+inférences ; aucune accélération n'est affirmée sans mesures du coût
+de composition, des allocations et de l'exécution complète.
+
 ## Qualification
 
 Require Rust 1.89 `cargo fmt --all -- --check`, `cargo clippy --offline --all-targets -- -D warnings`, `cargo test --offline --all-targets` and exact-head RemoteOps physical qualification before merge. If later benchmarked, compare complete packed matrix-plus-input costs against a scalar GF(4) baseline at identical dimensions and distributions; record packing, memory footprint, latency and CPU separately. No performance or energy gain is claimed.
