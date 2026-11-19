@@ -25,9 +25,7 @@ fn scalar_mul_add_assign(output: &mut [u8], left: &[u8], right: &[u8]) {
 fn run_case(len: usize, repeats: usize) {
     assert!(repeats > 0);
     let a: Vec<u8> = (0..len).map(|i| ((i * 17 + i / 5) % 4) as u8).collect();
-    let b: Vec<u8> = (0..len)
-        .map(|i| ((i * 13 + i / 7 + 1) % 4) as u8)
-        .collect();
+    let b: Vec<u8> = (0..len).map(|i| ((i * 13 + i / 7 + 1) % 4) as u8).collect();
     let initial: Vec<u8> = (0..len)
         .map(|i| ((i * 19 + i / 11 + 2) % 4) as u8)
         .collect();
