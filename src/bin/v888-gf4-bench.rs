@@ -1,0 +1,268 @@
+//! Paired synthetic CPU timings for the exact packed GF(4) inner product.
+//! This is a classical Rust kernel benchmark, not an energy measurement or
+//! evidence of faster Boolean graph propagation. All data stay in memory.
+use std::env;
+use std::hint::black_box;
+use std::time::Instant;
+
+use v888_booleen::packed_q2::PackedQ2;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Config {
+    lanes: usize,
+    repetitions: usize,
+}
+
+impl Config {
+    fn parse(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
+        let mut config = Self {
+            lanes: 188_508,
+            repetitions: 11,
+        };
+        for arg in args {
+            let (name, value) = arg
+                .strip_prefix("--")
+                .and_then(|s| s.split_once('='))
+                .ok_or_else(|| format!("invalid option: {arg}"))?;
+            match name {
+                "lanes" => {
+                    config.lanes = value
+                        .parse()
+                        .map_err(|_| format!("invalid lane count: {value}"))?;
+                }
+                "repetitions" => {
+                    config.repetitions = value
+                        .parse()
+                        .map_err(|_| format!("invalid repetitions: {value}"))?;
+                }
+                _ => return Err(format!("unrecognized option: {name}")),
+            }
+        }
+        if !(1..=1_048_576).contains(&config.lanes) {
+            return Err("lanes must be within 1..=1048576".to_owned());
+        }
+        if !(3..=64).contains(&config.repetitions) {
+            return Err("repetitions must be within 3..=64".to_owned());
+        }
+        Ok(config)
+    }
+}
+
+/// GF(4) product in the polynomial basis x²+x+1 for codes 0,1,x,1+x.
+fn scalar_mul(a: u8, b: u8) -> u8 {
+    let low = (a & 1) & (b & 1) ^ ((a >> 1) & (b >> 1));
+    let high = ((a & 1) & (b >> 1))
+        ^ ((a >> 1) & (b & 1))
+        ^ ((a >> 1) & (b >> 1));
+    low | (high << 1)
+}
+
+fn scalar_dot(a: &[u8], b: &[u8]) -> u8 {
+    assert_eq!(a.len(), b.len());
+    a.iter()
+        .zip(b)
+        .fold(0_u8, |total, (&x, &y)| total ^ scalar_mul(x, y))
+}
+
+/// Synthetic and deterministic four-level data; no anatomical interpretation.
+fn fixture(lanes: usize) -> (Vec<u8>, Vec<u8>) {
+    let a = (0..lanes)
+        .map(|i| ((i.wrapping_mul(17) ^ i.rotate_left(3) ^ (i >> 5)) & 3) as u8)
+        .collect();
+    let b = (0..lanes)
+        .map(|i| ((i.wrapping_mul(13) ^ i.rotate_left(1) ^ (i >> 3) ^ 3) & 3) as u8)
+        .collect();
+    (a, b)
+}
+
+fn median_ns(values: &mut [u128]) -> u128 {
+    assert!(!values.is_empty(), "median requires at least one observation");
+    values.sort_unstable();
+    let upper = values.len() / 2;
+    if values.len() % 2 == 1 {
+        values[upper]
+    } else {
+        // Sorted difference avoids overflow near u128::MAX.
+        values[upper - 1] + (values[upper] - values[upper - 1]) / 2
+    }
+}
+
+fn measure<T>(work: impl FnOnce() -> T) -> (T, u128) {
+    let started = Instant::now();
+    let value = black_box(work());
+    (value, started.elapsed().as_nanos())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct Evidence {
+    lanes: usize,
+    scalar_field_code: u8,
+    packed_field_code: u8,
+    scalar_payload_bytes: usize,
+    packed_payload_bytes: usize,
+    scalar_median_ns: u128,
+    packed_median_ns: u128,
+    packed_inclusive_median_ns: u128,
+}
+
+fn benchmark(config: Config) -> Evidence {
+    let (a, b) = fixture(config.lanes);
+    // Measure two separate scopes: a reused packed representation and a
+    // fresh input-pack-plus-compute path. The scalar comparator consumes
+    // the original byte lanes. Memory payloads exclude allocator metadata.
+    let packed_a = PackedQ2::from_levels(&a).expect("four-level fixture");
+    let packed_b = PackedQ2::from_levels(&b).expect("four-level fixture");
+    let scalar = scalar_dot(&a, &b);
+    let packed = packed_a.gf4_dot(&packed_b).expect("matching packed lengths");
+    assert_eq!(scalar, packed, "independent GF(4) reference mismatch");
+
+    // Warmups and reference comparison are outside the timed trials.
+    black_box(scalar_dot(black_box(&a), black_box(&b)));
+    black_box(packed_a.gf4_dot(black_box(&packed_b)).expect("warmup parity"));
+    let warm_a = PackedQ2::from_levels(black_box(&a)).expect("warmup pack A");
+    let warm_b = PackedQ2::from_levels(black_box(&b)).expect("warmup pack B");
+    assert_eq!(warm_a.gf4_dot(&warm_b), Ok(scalar));
+    let mut scalar_ns = Vec::with_capacity(config.repetitions);
+    let mut packed_ns = Vec::with_capacity(config.repetitions);
+    let mut packed_inclusive_ns = Vec::with_capacity(config.repetitions);
+    for rep in 0..config.repetitions {
+        // Rotate all three modes to avoid a fixed first/last-mode bias.
+        // Every trial uses exactly the same synthetic lanes and field oracle.
+        for pass in 0..3 {
+            match (rep + pass) % 3 {
+                0 => {
+                    let (code, ns) = measure(|| scalar_dot(black_box(&a), black_box(&b)));
+                    assert_eq!(code, scalar);
+                    scalar_ns.push(ns);
+                }
+                1 => {
+                    let (code, ns) =
+                        measure(|| packed_a.gf4_dot(black_box(&packed_b)).unwrap());
+                    assert_eq!(code, scalar);
+                    packed_ns.push(ns);
+                }
+                _ => {
+                    let (code, ns) = measure(|| {
+                        let x = PackedQ2::from_levels(black_box(&a)).unwrap();
+                        let y = PackedQ2::from_levels(black_box(&b)).unwrap();
+                        x.gf4_dot(&y).unwrap()
+                    });
+                    assert_eq!(code, scalar);
+                    packed_inclusive_ns.push(ns);
+                }
+            }
+        }
+    }
+    let scalar_median_ns = median_ns(&mut scalar_ns);
+    let packed_median_ns = median_ns(&mut packed_ns);
+    let packed_inclusive_median_ns = median_ns(&mut packed_inclusive_ns);
+    Evidence {
+        lanes: config.lanes,
+        scalar_field_code: scalar,
+        packed_field_code: packed,
+        scalar_payload_bytes: a.len() + b.len(),
+        packed_payload_bytes: packed_a.allocated_payload_bytes()
+            + packed_b.allocated_payload_bytes(),
+        scalar_median_ns,
+        packed_median_ns,
+        packed_inclusive_median_ns,
+    }
+}
+
+fn main() {
+    let config = match Config::parse(env::args().skip(1)) {
+        Ok(config) => config,
+        Err(message) => {
+            eprintln!("{message}");
+            std::process::exit(2);
+        }
+    };
+    let report = benchmark(config);
+    println!(
+        "V888_GF4_BENCH lanes={} repetitions={} scalar_median_ns={} \
+         packed_median_ns={} packed_inclusive_median_ns={} \
+         scalar_payload_bytes={} packed_payload_bytes={} \
+         scalar_code={} packed_code={} exact_parity=true \
+         hot_path_excludes_packing=true inclusive_path_includes_packing=true \
+         synthetic_data=true energy_measured=false",
+        report.lanes,
+        config.repetitions,
+        report.scalar_median_ns,
+        report.packed_median_ns,
+        report.packed_inclusive_median_ns,
+        report.scalar_payload_bytes,
+        report.packed_payload_bytes,
+        report.scalar_field_code,
+        report.packed_field_code,
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_bounds_are_strict() {
+        assert!(Config::parse(["--lanes=0".to_string()]).is_err());
+        assert!(Config::parse(["--lanes=1048577".to_string()]).is_err());
+        assert!(Config::parse(["--repetitions=2".to_string()]).is_err());
+        assert!(Config::parse(["--repetitions=65".to_string()]).is_err());
+        assert!(Config::parse(["--unknown=12".to_string()]).is_err());
+        assert!(Config::parse(["--lanes=no".to_string()]).is_err());
+    }
+
+    #[test]
+    fn scalar_field_products_cover_all_sixteen_pairs() {
+        for a in 0..4_u8 {
+            for b in 0..4_u8 {
+                let x = PackedQ2::from_levels(&[a]).unwrap();
+                let y = PackedQ2::from_levels(&[b]).unwrap();
+                assert_eq!(x.gf4_dot(&y), Ok(scalar_mul(a, b)));
+            }
+        }
+        assert_eq!(scalar_mul(2, 2), 3);
+        assert_eq!(scalar_mul(2, 3), 1);
+        assert_eq!(scalar_mul(3, 3), 2);
+    }
+
+    #[test]
+    fn paired_median_uses_both_middle_samples_without_overflow() {
+        let mut odd = [7_u128, 1, 9];
+        assert_eq!(median_ns(&mut odd), 7);
+        let mut even = [8_u128, 2, 4, 10];
+        assert_eq!(median_ns(&mut even), 6);
+        let mut large = [u128::MAX - 3, u128::MAX - 1];
+        assert_eq!(median_ns(&mut large), u128::MAX - 2);
+    }
+
+    #[test]
+    fn synthetic_fixture_covers_all_sixteen_field_products() {
+        // A flat or degenerate fixture could make a fast, incorrect kernel
+        // appear correct. Ensure both inputs exercise all GF(4) pairs.
+        let (a, b) = fixture(65);
+        assert_eq!(a.len(), 65);
+        assert_eq!(b.len(), 65);
+        assert_eq!(fixture(65), (a.clone(), b.clone()));
+        let mut pairs_seen = [false; 16];
+        for (x, y) in a.into_iter().zip(b) {
+            pairs_seen[usize::from(x) * 4 + usize::from(y)] = true;
+        }
+        assert!(pairs_seen.into_iter().all(|present| present));
+    }
+
+    #[test]
+    fn paired_benchmark_is_bit_exact_and_payload_is_bounded() {
+        for lanes in [1, 2, 63, 64, 65, 129, 257] {
+            let evidence = benchmark(Config {
+                lanes,
+                repetitions: 3,
+            });
+            assert_eq!(evidence.scalar_field_code, evidence.packed_field_code);
+            assert_eq!(evidence.scalar_payload_bytes, lanes * 2);
+            assert_eq!(
+                evidence.packed_payload_bytes,
+                lanes.div_ceil(64) * 32
+            );
+        }
+    }
+}
