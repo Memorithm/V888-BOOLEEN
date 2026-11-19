@@ -7,7 +7,7 @@ use std::time::Duration;
 pub enum Split { Train, Valid, Test, Ood }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AuditError { ZeroFullTime, Overflow, InvalidGeometry, OutOfOrder }
+pub enum AuditError { ZeroFullTime, Overflow, InvalidGeometry, OutOfOrder, InconsistentTiming, InvalidDecline }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Counters {
@@ -66,6 +66,22 @@ impl SequentialAudit {
             && sample.measure.full == Duration::ZERO {
             return Err(AuditError::ZeroFullTime);
         }
+        // Phase timings must fit the wall-clock measurement; otherwise the
+        // reported throughput and verified cost cannot be trusted.
+        let m = &sample.measure;
+        let phases = m.refresh.as_nanos()
+            .checked_add(m.full.as_nanos())
+            .and_then(|v| v.checked_add(m.incremental.as_nanos()))
+            .ok_or(AuditError::Overflow)?;
+        if phases > m.elapsed.as_nanos() {
+            return Err(AuditError::InconsistentTiming);
+        }
+        if m.outcome == DeltaOutcome::Declined
+            && (m.full != Duration::ZERO || m.refresh != Duration::ZERO
+                || m.incremental != Duration::ZERO)
+        {
+            return Err(AuditError::InvalidDecline);
+        }
         let mut next = self.totals[i];
         next.attempted = next.attempted.checked_add(1).ok_or(AuditError::Overflow)?;
         match sample.measure.outcome {
@@ -80,6 +96,24 @@ impl SequentialAudit {
         next.peak_vm_hwm_kib = next.peak_vm_hwm_kib.max(sample.vm_hwm_kib);
         self.totals[i] = next;
         self.last_sequence[i] = Some(sample.sequence);
+        Ok(())
+    }
+
+    /// Commit a heterogeneous sequential trace as one accounting transaction.
+    /// A late invalid sample must not partially publish earlier measurements.
+    /// Split-local sequence ordering is enforced across the entire batch.
+    pub fn record_batch(
+        &mut self,
+        samples: impl IntoIterator<Item = PhysicalSample>,
+    ) -> Result<(), AuditError> {
+        let mut candidate = Self {
+            totals: self.totals,
+            last_sequence: self.last_sequence,
+        };
+        for sample in samples {
+            candidate.record(sample)?;
+        }
+        *self = candidate;
         Ok(())
     }
 }
@@ -141,6 +175,45 @@ mod tests {
         assert_eq!(audit.totals(Split::Valid), before);
         audit.record(sample(Split::Valid, 5, DeltaOutcome::Committed)).unwrap();
         assert_eq!(audit.totals(Split::Valid).attempted, 2);
+    }
+
+    #[test]
+    fn batch_is_atomic_across_splits_and_late_invalid_timing() {
+        let mut audit = SequentialAudit::default();
+        let mut bad = sample(Split::Valid, 1, DeltaOutcome::Committed);
+        bad.measure.elapsed = Duration::from_nanos(16);
+        assert_eq!(
+            audit.record_batch([
+                sample(Split::Train, 0, DeltaOutcome::Committed),
+                sample(Split::Valid, 0, DeltaOutcome::Committed),
+                bad,
+            ]),
+            Err(AuditError::InconsistentTiming)
+        );
+        assert_eq!(audit.totals(Split::Train).attempted, 0);
+        assert_eq!(audit.totals(Split::Valid).attempted, 0);
+        audit.record_batch([
+            sample(Split::Train, 0, DeltaOutcome::Committed),
+            sample(Split::Valid, 0, DeltaOutcome::Committed),
+            sample(Split::Valid, 1, DeltaOutcome::Committed),
+        ]).unwrap();
+        assert_eq!(audit.totals(Split::Train).attempted, 1);
+        assert_eq!(audit.totals(Split::Valid).attempted, 2);
+    }
+
+    #[test]
+    fn declined_sample_must_not_claim_oracle_work() {
+        let mut audit = SequentialAudit::default();
+        assert_eq!(
+            audit.record(sample(Split::Ood, 0, DeltaOutcome::Declined)),
+            Err(AuditError::InvalidDecline)
+        );
+        let mut declined = sample(Split::Ood, 0, DeltaOutcome::Declined);
+        declined.measure.full = Duration::ZERO;
+        declined.measure.refresh = Duration::ZERO;
+        declined.measure.incremental = Duration::ZERO;
+        audit.record(declined).unwrap();
+        assert_eq!(audit.totals(Split::Ood).declined, 1);
     }
 
     #[test]
