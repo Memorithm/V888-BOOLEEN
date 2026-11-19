@@ -125,7 +125,7 @@ fn audit<R: BufRead>(mut reader: R) -> Result<[Totals; 4], String> {
         if line.trim().is_empty() {
             continue;
         }
-        let o = parse(&line).map_err(|e| format!("line {}: {e}", line_number))?;
+        let o = parse(line).map_err(|e| format!("line {}: {e}", line_number))?;
         if let Some((seq, epoch)) = previous {
             if o.sequence <= seq || o.epoch < epoch {
                 return Err("non-monotone sequence or cache epoch".into());
