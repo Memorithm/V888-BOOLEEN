@@ -427,3 +427,137 @@ mod fallible_verified_dispatch_tests {
         }
     }
 }
+
+
+/// Runtime quarantine for a frozen VALID policy. A failed oracle check
+/// disables Incremental for the entire geometry bucket for this session.
+/// Quarantine is independent of VALID calibration and never trains on holdouts.
+#[derive(Clone, Debug)]
+pub struct QuarantinedDispatch {
+    frozen: FrozenValidDispatch,
+    quarantined: [bool; 16],
+}
+
+impl FrozenValidDispatch {
+    /// Start a new evaluation session with no quarantined buckets.
+    #[must_use]
+    pub fn with_runtime_quarantine(self) -> QuarantinedDispatch {
+        QuarantinedDispatch {
+            frozen: self,
+            quarantined: [false; 16],
+        }
+    }
+}
+
+impl QuarantinedDispatch {
+    /// Select Full for any invalid, uncalibrated or quarantined geometry.
+    #[must_use]
+    pub fn choose(&self, gates: u64, cone: u64) -> EngineChoice {
+        let Ok(bucket) = ValidDispatch::bucket(gates, cone) else {
+            return EngineChoice::Full;
+        };
+        if self.quarantined[bucket] {
+            EngineChoice::Full
+        } else {
+            self.frozen.choose(gates, cone)
+        }
+    }
+
+    /// Execute with an independent Full oracle. A mismatch or Incremental
+    /// error permanently quarantines the bucket until a new session is made.
+    /// Full failures propagate without publishing an unverified result.
+    /// This is a safety mechanism, not a throughput optimization.
+    pub fn try_execute<T, E, F, I>(
+        &mut self,
+        gates: u64,
+        cone: u64,
+        full: F,
+        incremental: I,
+    ) -> Result<(T, FallibleVerifiedPath), E>
+    where
+        T: Eq,
+        F: FnOnce() -> Result<T, E>,
+        I: FnOnce() -> Result<T, E>,
+    {
+        if self.choose(gates, cone) == EngineChoice::Full {
+            return full().map(|value| (value, FallibleVerifiedPath::Full));
+        }
+        let candidate = incremental();
+        let reference = full()?;
+        let bucket = ValidDispatch::bucket(gates, cone)
+            .expect("incremental selection requires valid geometry");
+        match candidate {
+            Ok(value) if value == reference => {
+                Ok((value, FallibleVerifiedPath::IncrementalVerified))
+            }
+            Ok(_) => {
+                self.quarantined[bucket] = true;
+                Ok((reference, FallibleVerifiedPath::FullAfterMismatch))
+            }
+            Err(_) => {
+                self.quarantined[bucket] = true;
+                Ok((reference, FallibleVerifiedPath::FullAfterIncrementalError))
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod quarantine_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    fn session() -> QuarantinedDispatch {
+        let mut valid = ValidDispatch::new(1, 10);
+        valid.observe_valid(10_000, 100, 100, 20, true).unwrap();
+        valid.observe_valid(10_000, 500, 100, 20, true).unwrap();
+        valid.freeze().with_runtime_quarantine()
+    }
+
+    #[test]
+    fn mismatch_quarantines_bucket_and_preserves_full_result() {
+        let mut session = session();
+        let (value, path) = session.try_execute(
+            10_000, 100, || Ok::<_, ()>(9_u8), || Ok::<_, ()>(8_u8),
+        ).unwrap();
+        assert_eq!((value, path), (9, FallibleVerifiedPath::FullAfterMismatch));
+        assert_eq!(session.choose(10_000, 100), EngineChoice::Full);
+        assert_eq!(session.choose(10_000, 99), EngineChoice::Full);
+        assert_eq!(session.choose(10_000, 500), EngineChoice::Incremental);
+        let called = Cell::new(false);
+        let (_, path) = session.try_execute(
+            10_000, 100, || Ok::<_, ()>(9_u8),
+            || { called.set(true); Ok::<_, ()>(8_u8) },
+        ).unwrap();
+        assert_eq!(path, FallibleVerifiedPath::Full);
+        assert!(!called.get());
+    }
+
+    #[test]
+    fn incremental_error_quarantines_but_full_error_does_not() {
+        let mut session = session();
+        let result = session.try_execute(
+            10_000, 100, || Err::<u8, _>("full failed"),
+            || Ok::<_, &str>(3_u8),
+        );
+        assert_eq!(result, Err("full failed"));
+        assert_eq!(session.choose(10_000, 100), EngineChoice::Incremental);
+        let (value, path) = session.try_execute(
+            10_000, 100, || Ok::<_, &str>(7_u8),
+            || Err::<u8, _>("incremental failed"),
+        ).unwrap();
+        assert_eq!((value, path), (7, FallibleVerifiedPath::FullAfterIncrementalError));
+        assert_eq!(session.choose(10_000, 100), EngineChoice::Full);
+    }
+
+    #[test]
+    fn matching_outputs_leave_bucket_enabled() {
+        let mut session = session();
+        let (value, path) = session.try_execute(
+            10_000, 100, || Ok::<_, ()>(7_u8), || Ok::<_, ()>(7_u8),
+        ).unwrap();
+        assert_eq!((value, path), (7, FallibleVerifiedPath::IncrementalVerified));
+        assert_eq!(session.choose(10_000, 100), EngineChoice::Incremental);
+        assert_eq!(session.choose(0, 0), EngineChoice::Full);
+    }
+}
