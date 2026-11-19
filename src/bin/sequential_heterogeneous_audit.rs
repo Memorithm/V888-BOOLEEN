@@ -403,7 +403,7 @@ mod tests {
     #[test]
     fn paid_full_oracle_cost_is_additive_and_split_local() {
         let csv = format!(
-            "{HEADER}TRAIN,1,0,128,4,100,10,5,1,1,1,1,10\nTRAIN,2,1,128,4,90,20,3,1,0,1,1,10\nVALID,3,0,128,4,80,40,4,1,1,1,1,10\n"
+            "{HEADER}TRAIN,1,0,128,4,100,10,5,1,1,1,1,10\nTRAIN,2,1,128,4,90,20,3,1,0,1,1,10\nVALID,3,1,128,4,80,40,4,1,1,1,1,10\n"
         );
         let t = audit(csv.as_bytes()).unwrap();
         assert_eq!((t[0].count, t[0].fallback_count), (2, 1));
