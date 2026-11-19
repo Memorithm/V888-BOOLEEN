@@ -236,3 +236,124 @@ mod fallible_tests {
         }
     }
 }
+
+
+/// A sequence is published atomically: even a late mismatch or declined edit
+/// discards every earlier candidate commit. Each accepted step is independently
+/// checked against Full before the next edit observes the updated candidate cache.
+#[derive(Clone, Debug)]
+pub struct DeltaBatchMeasure {
+    pub outcome: DeltaOutcome,
+    pub steps: Vec<DeltaMeasure>,
+}
+
+/// Apply an ordered heterogeneous edit batch without exposing intermediate states.
+/// An error from any stage leaves both live objects untouched. Timings include
+/// oracle verification, not merely the cheaper incremental path.
+pub fn try_verified_delta_batch<S, C, O, E, T, I, R, F, D>(
+    state: &mut S,
+    cache: &mut C,
+    edits: impl IntoIterator<Item = T>,
+    mut intervene: I,
+    mut refresh: R,
+    mut full: F,
+    mut incremental: D,
+) -> Result<DeltaBatchMeasure, E>
+where
+    S: Clone,
+    C: Clone,
+    O: Eq,
+    I: FnMut(&mut S, T) -> Result<bool, E>,
+    R: FnMut(&S, &mut C) -> Result<(), E>,
+    F: FnMut(&S) -> Result<O, E>,
+    D: FnMut(&S, &C) -> Result<O, E>,
+{
+    let mut candidate_state = state.clone();
+    let mut candidate_cache = cache.clone();
+    let mut steps = Vec::new();
+    for edit in edits {
+        let measure = try_verified_delta(
+            &mut candidate_state,
+            &mut candidate_cache,
+            |s| intervene(s, edit),
+            |s, c| refresh(s, c),
+            |s| full(s),
+            |s, c| incremental(s, c),
+        )?;
+        let outcome = measure.outcome;
+        steps.push(measure);
+        if outcome != DeltaOutcome::Committed {
+            return Ok(DeltaBatchMeasure { outcome, steps });
+        }
+    }
+    if steps.is_empty() {
+        return Ok(DeltaBatchMeasure {
+            outcome: DeltaOutcome::Declined,
+            steps,
+        });
+    }
+    *state = candidate_state;
+    *cache = candidate_cache;
+    Ok(DeltaBatchMeasure {
+        outcome: DeltaOutcome::Committed,
+        steps,
+    })
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+
+    fn run(edits: &[usize], corrupt_at: Option<usize>) -> (DeltaBatchMeasure, Vec<bool>, usize) {
+        let mut state = vec![false; 5];
+        let mut cache = 0_usize;
+        let mut step = 0_usize;
+        let result = try_verified_delta_batch(
+            &mut state,
+            &mut cache,
+            edits.iter().copied(),
+            |bits, index| {
+                bits[index] = !bits[index];
+                Ok::<_, ()>(true)
+            },
+            |bits, count| {
+                *count = bits.iter().filter(|&&bit| bit).count();
+                step += 1;
+                if corrupt_at == Some(step) {
+                    *count += 1;
+                }
+                Ok::<_, ()>(())
+            },
+            |bits| Ok::<_, ()>(bits.iter().filter(|&&bit| bit).count()),
+            |_, count| Ok::<_, ()>(*count),
+        ).unwrap();
+        (result, state, cache)
+    }
+
+    #[test]
+    fn sequential_batch_commits_exact_cache_and_state() {
+        let (result, state, cache) = run(&[0, 2, 0, 4], None);
+        assert_eq!(result.outcome, DeltaOutcome::Committed);
+        assert_eq!(result.steps.len(), 4);
+        assert_eq!(state, vec![false, false, true, false, true]);
+        assert_eq!(cache, 2);
+    }
+
+    #[test]
+    fn late_mismatch_rolls_back_every_earlier_step() {
+        let (result, state, cache) = run(&[0, 2, 4], Some(3));
+        assert_eq!(result.outcome, DeltaOutcome::OracleMismatch);
+        assert_eq!(result.steps.len(), 3);
+        assert_eq!(state, vec![false; 5]);
+        assert_eq!(cache, 0);
+    }
+
+    #[test]
+    fn empty_batch_does_not_publish() {
+        let (result, state, cache) = run(&[], None);
+        assert_eq!(result.outcome, DeltaOutcome::Declined);
+        assert!(result.steps.is_empty());
+        assert_eq!(state, vec![false; 5]);
+        assert_eq!(cache, 0);
+    }
+}
