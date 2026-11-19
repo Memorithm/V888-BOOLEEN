@@ -88,7 +88,20 @@ fn run_case(inputs: usize, hidden: usize, outputs: usize, repetitions: usize) {
     assert_eq!(fused.apply(&input), Ok(expected));
 
     println!(
-        "V888_GF4_LINEAR inputs={inputs} hidden={hidden} outputs={outputs} repetitions={repetitions} trials=7 compose_once_ns={compose_ns} two_pass_median_ns_per_call={baseline_ns} precomposed_median_ns_per_call={composed_ns} separate_coeff_payload_bytes={} composed_coeff_payload_bytes={} intermediate_payload_bytes={}",
+        concat!(
+            "V888_GF4_LINEAR inputs={} hidden={} outputs={} ",
+            "repetitions={} trials=7 compose_once_ns={} ",
+            "two_pass_median_ns_per_call={} precomposed_median_ns_per_call={} ",
+            "separate_coeff_payload_bytes={} composed_coeff_payload_bytes={} ",
+            "intermediate_payload_bytes={}"
+        ),
+        inputs,
+        hidden,
+        outputs,
+        repetitions,
+        compose_ns,
+        baseline_ns,
+        composed_ns,
         first.coefficient_payload_bytes() + second.coefficient_payload_bytes(),
         fused.coefficient_payload_bytes(),
         intermediate.allocated_payload_bytes(),
@@ -102,6 +115,8 @@ fn main() {
         (65, 65, 63, 128),
         (129, 64, 65, 128),
         (256, 128, 64, 64),
+        // A low-rank bottleneck can make the composed matrix much larger.
+        (1024, 8, 128, 32),
     ] {
         run_case(inputs, hidden, outputs, repetitions);
     }
