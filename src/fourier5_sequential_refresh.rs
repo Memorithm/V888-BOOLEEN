@@ -69,7 +69,6 @@ where
     }
 }
 
-
 /// Execute a bounded sequence of interventions, rebuilding and independently
 /// verifying the cache after every accepted step. Stop at the first rejection;
 /// later interventions are never evaluated. The live state remains at the last
@@ -131,7 +130,6 @@ pub struct SequenceMeasure {
 mod tests {
     use super::*;
 
-
     #[test]
     fn sequence_rebuilds_each_committed_generation_and_stops_on_mismatch() {
         let mut state = vec![false; 4];
@@ -182,8 +180,12 @@ mod tests {
         let mut cache = 0_usize;
         for index in [0, 2, 1] {
             let result = verified_step(
-                &mut state, &mut cache,
-                |s| { s[index] = true; true },
+                &mut state,
+                &mut cache,
+                |s| {
+                    s[index] = true;
+                    true
+                },
                 |s| s.iter().filter(|&&b| b).count(),
                 |s| s.iter().filter(|&&b| b).count(),
                 |_, c| *c,
@@ -200,8 +202,12 @@ mod tests {
         let mut state = vec![false];
         let mut cache = 0_usize;
         let result = verified_step(
-            &mut state, &mut cache,
-            |s| { s[0] = true; true },
+            &mut state,
+            &mut cache,
+            |s| {
+                s[0] = true;
+                true
+            },
             |_| 0,
             |s| usize::from(s[0]),
             |_, c| *c,
@@ -217,7 +223,8 @@ mod tests {
         let mut state = 0_u8;
         let mut cache = 0_u8;
         let result = verified_step(
-            &mut state, &mut cache,
+            &mut state,
+            &mut cache,
             |_| false,
             |_| panic!("rebuild on declined intervention"),
             |_| 0_u8,
@@ -238,10 +245,22 @@ mod tests {
         let measure = verified_step(
             &mut state,
             &mut cache,
-            |candidate| { *candidate = 2; true },
-            |candidate| { phases.borrow_mut().push("rebuild"); *candidate },
-            |candidate| { phases.borrow_mut().push("full"); *candidate },
-            |_, refreshed| { phases.borrow_mut().push("incremental"); *refreshed },
+            |candidate| {
+                *candidate = 2;
+                true
+            },
+            |candidate| {
+                phases.borrow_mut().push("rebuild");
+                *candidate
+            },
+            |candidate| {
+                phases.borrow_mut().push("full");
+                *candidate
+            },
+            |_, refreshed| {
+                phases.borrow_mut().push("incremental");
+                *refreshed
+            },
         );
         assert_eq!(*phases.borrow(), ["rebuild", "full", "incremental"]);
         assert!(measure.accepted);
@@ -256,7 +275,10 @@ mod tests {
             let result = verified_step(
                 &mut state,
                 &mut cache,
-                |candidate| { *candidate = true; true },
+                |candidate| {
+                    *candidate = true;
+                    true
+                },
                 |candidate| *candidate,
                 |candidate| (*candidate, *candidate),
                 |_, _| observed,
@@ -276,7 +298,10 @@ mod tests {
         let first = verified_step(
             &mut state,
             &mut cache,
-            |candidate| { *candidate = 1; true },
+            |candidate| {
+                *candidate = 1;
+                true
+            },
             |candidate| NonCloneCache(*candidate),
             |candidate| *candidate,
             |_, candidate_cache| candidate_cache.0,
@@ -286,7 +311,10 @@ mod tests {
         let rejected = verified_step(
             &mut state,
             &mut cache,
-            |candidate| { *candidate = 2; true },
+            |candidate| {
+                *candidate = 2;
+                true
+            },
             |_| NonCloneCache(99),
             |candidate| *candidate,
             |_, candidate_cache| candidate_cache.0,
@@ -294,9 +322,7 @@ mod tests {
         assert!(!rejected.accepted);
         assert_eq!((state, cache.0), (1, 1));
     }
-
 }
-
 
 /// Resource observations taken in the same process as the sequential workload.
 /// VmHWM is a Linux process-wide high-water mark, not per-step allocated bytes.
@@ -328,7 +354,13 @@ where
     D: FnMut(&S, &C) -> O,
 {
     let sequence = verified_sequence(
-        state, cache, interventions, intervene, rebuild, full, incremental,
+        state,
+        cache,
+        interventions,
+        intervene,
+        rebuild,
+        full,
+        incremental,
     );
     let nanos = sequence.elapsed.as_nanos();
     let committed_per_second = if nanos == 0 {
@@ -375,7 +407,10 @@ mod resource_tests {
 
     #[test]
     fn vm_hwm_parser_rejects_missing_or_wrong_units() {
-        assert_eq!(parse_vm_hwm_kib("Name:\ttest\nVmHWM:\t2048 kB\n"), Some(2048));
+        assert_eq!(
+            parse_vm_hwm_kib("Name:\ttest\nVmHWM:\t2048 kB\n"),
+            Some(2048)
+        );
         assert_eq!(parse_vm_hwm_kib("VmHWM: 2048 MB"), None);
         assert_eq!(parse_vm_hwm_kib("VmHWM: invalid kB"), None);
         assert_eq!(parse_vm_hwm_kib("VmRSS: 2048 kB"), None);
@@ -389,12 +424,24 @@ mod resource_tests {
             &mut state,
             &mut cache,
             &[1_u8, 2_u8],
-            |candidate, value| { *candidate = *value; true },
+            |candidate, value| {
+                *candidate = *value;
+                true
+            },
             |candidate| *candidate,
             |candidate| *candidate,
-            |_, candidate_cache| if *candidate_cache == 2 { 99 } else { *candidate_cache },
+            |_, candidate_cache| {
+                if *candidate_cache == 2 {
+                    99
+                } else {
+                    *candidate_cache
+                }
+            },
         );
-        assert_eq!((result.sequence.attempted, result.sequence.committed), (2, 1));
+        assert_eq!(
+            (result.sequence.attempted, result.sequence.committed),
+            (2, 1)
+        );
         assert!(result.sequence.stopped_on_rejection);
         assert_eq!((state, cache), (1, 1));
         assert!(result.committed_per_second.is_some());
