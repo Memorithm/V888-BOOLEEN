@@ -324,3 +324,6 @@ pub mod fourier5_delta_refresh;
 
 /// Split-isolated measured accounting for sequential cache refresh.
 pub mod fourier5_delta_physical_audit;
+
+/// Conservative VALID-calibrated Full/Incremental dispatch.
+pub mod fourier5_valid_dispatch;
