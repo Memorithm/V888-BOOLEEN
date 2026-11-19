@@ -177,3 +177,57 @@ mod tests {
         assert_eq!(policy.choose(10_000, 10_001), EngineChoice::Full);
     }
 }
+
+
+/// Immutable calibration artifact. Its API deliberately exposes no VALID ingestion,
+/// so holdout evaluation cannot mutate dispatch decisions after calibration.
+#[derive(Clone, Debug)]
+pub struct FrozenValidDispatch {
+    policy: ValidDispatch,
+}
+
+impl ValidDispatch {
+    /// End calibration before TEST/OOD. Consumes the mutable policy.
+    #[must_use]
+    pub fn freeze(self) -> FrozenValidDispatch {
+        FrozenValidDispatch { policy: self }
+    }
+}
+
+impl FrozenValidDispatch {
+    /// Select a path without permitting holdout feedback into the calibration.
+    #[must_use]
+    pub fn choose(&self, gates: u64, cone: u64) -> EngineChoice {
+        self.policy.choose(gates, cone)
+    }
+}
+
+#[cfg(test)]
+mod frozen_dispatch_tests {
+    use super::*;
+
+    #[test]
+    fn frozen_decisions_match_calibration_across_geometry() {
+        let mut calibration = ValidDispatch::new(2, 10);
+        calibration.observe_valid(10_000, 100, 100, 20, true).unwrap();
+        calibration.observe_valid(10_000, 100, 100, 30, true).unwrap();
+        let geometries = [(10_000, 100), (10_000, 101), (10_000, 5_000),
+                          (0, 0), (10_000, 10_001)];
+        let expected: Vec<_> = geometries.iter()
+            .map(|&(gates, cone)| calibration.choose(gates, cone)).collect();
+        let frozen = calibration.freeze();
+        let actual: Vec<_> = geometries.iter()
+            .map(|&(gates, cone)| frozen.choose(gates, cone)).collect();
+        assert_eq!(actual, expected);
+        assert_eq!(frozen.choose(10_000, 100), EngineChoice::Incremental);
+        assert_eq!(frozen.choose(10_000, 101), EngineChoice::Full);
+    }
+
+    #[test]
+    fn freeze_keeps_fail_closed_mismatch_decision() {
+        let mut calibration = ValidDispatch::new(1, 0);
+        calibration.observe_valid(10_000, 100, 100, 1, false).unwrap();
+        let frozen = calibration.freeze();
+        assert_eq!(frozen.choose(10_000, 100), EngineChoice::Full);
+    }
+}
