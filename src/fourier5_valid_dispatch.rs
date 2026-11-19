@@ -326,3 +326,104 @@ mod verified_dispatch_tests {
         assert_eq!((full_calls.get(), inc_calls.get()), (1, 1));
     }
 }
+
+
+/// Result of a fallible verified dispatch. An Incremental failure is never
+/// published: the independent Full oracle becomes the authoritative result.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FallibleVerifiedPath {
+    Full,
+    IncrementalVerified,
+    FullAfterMismatch,
+    FullAfterIncrementalError,
+}
+
+impl FrozenValidDispatch {
+    /// Fail-closed fallible execution. Full errors propagate; Incremental
+    /// errors fall back to Full. Neither error nor mismatch changes calibration.
+    ///
+    /// This diagnostic path executes Full for every Incremental selection;
+    /// it must not be used to claim Incremental-only throughput.
+    pub fn try_execute_verified<T, E, F, I>(
+        &self,
+        gates: u64,
+        cone: u64,
+        full: F,
+        incremental: I,
+    ) -> Result<(T, FallibleVerifiedPath), E>
+    where
+        T: Eq,
+        F: FnOnce() -> Result<T, E>,
+        I: FnOnce() -> Result<T, E>,
+    {
+        if self.choose(gates, cone) == EngineChoice::Full {
+            return full().map(|value| (value, FallibleVerifiedPath::Full));
+        }
+        let candidate = incremental();
+        let reference = full()?;
+        match candidate {
+            Ok(value) if value == reference => {
+                Ok((value, FallibleVerifiedPath::IncrementalVerified))
+            }
+            Ok(_) => Ok((reference, FallibleVerifiedPath::FullAfterMismatch)),
+            Err(_) => Ok((reference, FallibleVerifiedPath::FullAfterIncrementalError)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod fallible_verified_dispatch_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    fn policy() -> FrozenValidDispatch {
+        let mut p = ValidDispatch::new(1, 10);
+        p.observe_valid(10_000, 100, 100, 20, true).unwrap();
+        p.freeze()
+    }
+
+    #[test]
+    fn incremental_failure_falls_back_to_independent_full() {
+        let (value, path) = policy().try_execute_verified(
+            10_000, 100, || Ok::<_, &'static str>(vec![false, true]),
+            || Err::<Vec<bool>, _>("incremental failure"),
+        ).unwrap();
+        assert_eq!(value, vec![false, true]);
+        assert_eq!(path, FallibleVerifiedPath::FullAfterIncrementalError);
+        assert_eq!(policy().choose(10_000, 100), EngineChoice::Incremental);
+    }
+
+    #[test]
+    fn full_error_propagates_even_when_incremental_succeeds() {
+        let result = policy().try_execute_verified(
+            10_000, 100, || Err::<u8, _>("oracle failed"),
+            || Ok::<_, &'static str>(7_u8),
+        );
+        assert_eq!(result, Err("oracle failed"));
+    }
+
+    #[test]
+    fn uncalibrated_path_skips_incremental_even_if_full_fails() {
+        let called = Cell::new(false);
+        let result = policy().try_execute_verified(
+            10_000, 101, || Err::<u8, _>("full failed"),
+            || { called.set(true); Ok::<_, &'static str>(7) },
+        );
+        assert_eq!(result, Err("full failed"));
+        assert!(!called.get());
+    }
+
+    #[test]
+    fn equality_and_mismatch_return_correct_paths() {
+        for (incremental, expected) in [
+            (42_u8, FallibleVerifiedPath::IncrementalVerified),
+            (43_u8, FallibleVerifiedPath::FullAfterMismatch),
+        ] {
+            let (value, path) = policy().try_execute_verified(
+                10_000, 100, || Ok::<_, ()>(42_u8),
+                || Ok::<_, ()>(incremental),
+            ).unwrap();
+            assert_eq!((value, path), (42, expected));
+        }
+    }
+}
