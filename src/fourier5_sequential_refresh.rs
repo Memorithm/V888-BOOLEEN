@@ -330,6 +330,11 @@ mod tests {
 pub struct SequenceResourceMeasure {
     pub sequence: SequenceMeasure,
     pub vm_hwm_kib: Option<u64>,
+    /// Process high-water mark before executing the sequence (not per-step RSS).
+    pub vm_hwm_before_kib: Option<u64>,
+    /// Nonnegative increase in process high-water mark during this sequence.
+    /// Zero does not imply no allocation: previously reached peaks are invisible.
+    pub vm_hwm_growth_kib: Option<u64>,
     pub committed_per_second: Option<u64>,
 }
 
@@ -353,6 +358,7 @@ where
     F: FnMut(&S) -> O,
     D: FnMut(&S, &C) -> O,
 {
+    let vm_hwm_before_kib = read_process_vm_hwm_kib();
     let sequence = verified_sequence(
         state,
         cache,
@@ -372,9 +378,16 @@ where
             .map(|rate| rate / nanos)
             .and_then(|rate| u64::try_from(rate).ok())
     };
+    let vm_hwm_kib = read_process_vm_hwm_kib();
+    let vm_hwm_growth_kib = match (vm_hwm_before_kib, vm_hwm_kib) {
+        (Some(before), Some(after)) => after.checked_sub(before),
+        _ => None,
+    };
     SequenceResourceMeasure {
         sequence,
-        vm_hwm_kib: read_process_vm_hwm_kib(),
+        vm_hwm_kib,
+        vm_hwm_before_kib,
+        vm_hwm_growth_kib,
         committed_per_second,
     }
 }
@@ -445,5 +458,12 @@ mod resource_tests {
         assert!(result.sequence.stopped_on_rejection);
         assert_eq!((state, cache), (1, 1));
         assert!(result.committed_per_second.is_some());
+        if let (Some(before), Some(after), Some(growth)) = (
+            result.vm_hwm_before_kib,
+            result.vm_hwm_kib,
+            result.vm_hwm_growth_kib,
+        ) {
+            assert_eq!(after.checked_sub(before), Some(growth));
+        }
     }
 }
