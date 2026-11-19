@@ -53,6 +53,7 @@ pub mod fourier5_wide;
 pub mod fourier5_wide_learning;
 pub mod full_synapse;
 pub mod gates;
+pub mod gf4_linear;
 pub mod generalization_bench;
 pub mod graded_reward;
 pub mod heldout_ablation;
