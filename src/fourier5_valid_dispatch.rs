@@ -231,3 +231,98 @@ mod frozen_dispatch_tests {
         assert_eq!(frozen.choose(10_000, 100), EngineChoice::Full);
     }
 }
+
+
+/// Exact-output verification mode for frozen VALID dispatch.
+/// This is a correctness guard, NOT a speed benchmark: when Incremental is
+/// selected it deliberately runs Full as an independent oracle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VerifiedPath {
+    Full,
+    IncrementalVerified,
+    FullAfterMismatch,
+}
+
+impl FrozenValidDispatch {
+    /// Execute the selected engine and return an oracle-verified decision.
+    ///
+    /// `full` must be an independent implementation, not a wrapper around
+    /// `incremental`. Closures are evaluated at most once each. This API
+    /// never learns from TEST/OOD outputs and cannot mutate the frozen policy.
+    pub fn execute_verified<T, F, I>(
+        &self,
+        gates: u64,
+        cone: u64,
+        full: F,
+        incremental: I,
+    ) -> (T, VerifiedPath)
+    where
+        T: Eq,
+        F: FnOnce() -> T,
+        I: FnOnce() -> T,
+    {
+        if self.choose(gates, cone) == EngineChoice::Full {
+            return (full(), VerifiedPath::Full);
+        }
+        let candidate = incremental();
+        let reference = full();
+        if candidate == reference {
+            (candidate, VerifiedPath::IncrementalVerified)
+        } else {
+            (reference, VerifiedPath::FullAfterMismatch)
+        }
+    }
+}
+
+#[cfg(test)]
+mod verified_dispatch_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    fn calibrated() -> FrozenValidDispatch {
+        let mut policy = ValidDispatch::new(1, 10);
+        policy.observe_valid(10_000, 100, 100, 20, true).unwrap();
+        policy.freeze()
+    }
+
+    #[test]
+    fn verified_incremental_preserves_full_oracle_decision() {
+        let (result, path) = calibrated().execute_verified(
+            10_000, 100, || vec![true, false], || vec![true, false],
+        );
+        assert_eq!(result, vec![true, false]);
+        assert_eq!(path, VerifiedPath::IncrementalVerified);
+    }
+
+    #[test]
+    fn mismatch_returns_independent_full_output() {
+        let (result, path) = calibrated().execute_verified(
+            10_000, 100, || vec![false, true], || vec![true, false],
+        );
+        assert_eq!(result, vec![false, true]);
+        assert_eq!(path, VerifiedPath::FullAfterMismatch);
+    }
+
+    #[test]
+    fn uncalibrated_geometry_never_runs_incremental() {
+        let called = Cell::new(false);
+        let (result, path) = calibrated().execute_verified(
+            10_000, 101, || 7_u64, || { called.set(true); 99_u64 },
+        );
+        assert_eq!((result, path), (7, VerifiedPath::Full));
+        assert!(!called.get());
+    }
+
+    #[test]
+    fn verification_executes_each_engine_once() {
+        let full_calls = Cell::new(0);
+        let inc_calls = Cell::new(0);
+        let (_, path) = calibrated().execute_verified(
+            10_000, 100,
+            || { full_calls.set(full_calls.get() + 1); 3 },
+            || { inc_calls.set(inc_calls.get() + 1); 4 },
+        );
+        assert_eq!(path, VerifiedPath::FullAfterMismatch);
+        assert_eq!((full_calls.get(), inc_calls.get()), (1, 1));
+    }
+}
