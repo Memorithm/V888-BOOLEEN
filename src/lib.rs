@@ -310,3 +310,9 @@ pub mod fourier5_sequential_physical_step;
 
 /// Provenance guard against synthetic VALID and holdout sample reuse.
 pub mod fourier5_split_guard;
+
+/// Transactional cache epoch admission for verified sequential synthetic interventions.
+pub mod fourier5_cache_epoch_guard;
+
+/// Measured transactional sequential cache rebuild with Full-oracle rollback.
+pub mod fourier5_sequential_refresh;
