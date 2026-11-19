@@ -12,6 +12,7 @@ struct Bin {
     full_ns: u128,
     incremental_ns: u128,
     mismatches: u64,
+    slow_samples: u64,
 }
 
 /// Conservative bucket policy; each bucket must have enough VALID samples,
@@ -63,6 +64,14 @@ impl ValidDispatch {
         next.incremental_ns = next.incremental_ns
             .checked_add(u128::from(incremental_with_refresh_ns))
             .ok_or(PolicyError::Overflow)?;
+        // Averages alone can hide expensive heterogeneous refreshes. Require
+        // every VALID sample to satisfy the margin, not only the pooled sum.
+        let fast_enough = u128::from(incremental_with_refresh_ns) * 100
+            < u128::from(full_ns) * u128::from(100 - self.margin_percent);
+        if !fast_enough {
+            next.slow_samples = next.slow_samples.checked_add(1)
+                .ok_or(PolicyError::Overflow)?;
+        }
         if !equal {
             next.mismatches = next.mismatches.checked_add(1)
                 .ok_or(PolicyError::Overflow)?;
@@ -78,7 +87,7 @@ impl ValidDispatch {
             return EngineChoice::Full;
         };
         let bin = self.bins[index];
-        if bin.samples < self.min_samples || bin.mismatches != 0 {
+        if bin.samples < self.min_samples || bin.mismatches != 0 || bin.slow_samples != 0 {
             return EngineChoice::Full;
         }
         // Division-free comparison, with checked arithmetic and fail-closed overflow.
@@ -111,6 +120,26 @@ mod tests {
     fn oracle_mismatch_disables_entire_geometry_bucket() {
         let mut policy = ValidDispatch::new(1, 0);
         policy.observe_valid(10_000, 50, 100, 1, false).unwrap();
+        assert_eq!(policy.choose(10_000, 50), EngineChoice::Full);
+    }
+
+    #[test]
+    fn heterogeneous_slow_tail_disables_average_speedup() {
+        let mut policy = ValidDispatch::new(3, 10);
+        policy.observe_valid(10_000, 50, 1000, 10, true).unwrap();
+        policy.observe_valid(10_000, 50, 1000, 10, true).unwrap();
+        policy.observe_valid(10_000, 50, 100, 150, true).unwrap();
+        // The pooled incremental average is faster, but one VALID case regresses.
+        assert_eq!(policy.choose(10_000, 50), EngineChoice::Full);
+    }
+
+    #[test]
+    fn all_valid_samples_must_clear_configured_margin() {
+        let mut policy = ValidDispatch::new(2, 10);
+        policy.observe_valid(10_000, 50, 100, 89, true).unwrap();
+        policy.observe_valid(10_000, 50, 100, 89, true).unwrap();
+        assert_eq!(policy.choose(10_000, 50), EngineChoice::Incremental);
+        policy.observe_valid(10_000, 50, 100, 90, true).unwrap();
         assert_eq!(policy.choose(10_000, 50), EngineChoice::Full);
     }
 
