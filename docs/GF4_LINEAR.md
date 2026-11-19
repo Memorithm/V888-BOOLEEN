@@ -28,6 +28,30 @@ concerne que la réutilisation d'une même composition sur plusieurs
 inférences ; aucune accélération n'est affirmée sans mesures du coût
 de composition, des allocations et de l'exécution complète.
 
+
+## Banc de comparaison des couches
+
+`cargo run --offline --release --bin v888-gf4-linear-bench` construit
+deux couches GF(4) déterministes et mesure le coût d'une composition
+matricielle exécutée une seule fois. Le banc compare ensuite les
+applications successives aux applications de la matrice précomposée,
+avec sept mesures appariées en ordre alterné et médiane par chemin.
+Les entrées ont des tailles de 63, 65, 129 et 256 éléments, pour des
+couches intermédiaires et sorties traversant les frontières 64 bits.
+
+Avant chaque mesure, l'identité algébrique des deux chemins est
+vérifiée. Les coûts de construction des matrices d'entrée et de
+packing du vecteur d'entrée sont exclus des latences d'inférence ;
+le coût de composition est affiché séparément. Les volumes mémoire
+des coefficients compacts, des coefficients précomposés et du
+vecteur intermédiaire sont rapportés pour exposer les cas où
+la composition augmente la densité et le trafic mémoire.
+
+Le benchmark est un probe CPU synthétique borné ; ses valeurs
+observées ne permettent pas d'affirmer un gain en production ou
+une économie d'énergie sans qualification physique et analyse de
+rentabilité sur des charges et distributions représentatives.
+
 ## Qualification
 
 Require Rust 1.89 `cargo fmt --all -- --check`, `cargo clippy --offline --all-targets -- -D warnings`, `cargo test --offline --all-targets` and exact-head RemoteOps physical qualification before merge. If later benchmarked, compare complete packed matrix-plus-input costs against a scalar GF(4) baseline at identical dimensions and distributions; record packing, memory footprint, latency and CPU separately. No performance or energy gain is claimed.
