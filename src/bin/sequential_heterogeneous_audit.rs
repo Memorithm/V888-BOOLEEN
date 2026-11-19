@@ -87,6 +87,8 @@ struct Totals {
     decision_mismatch: u64,
     full: u128,
     selected: u128,
+    verified_sequential: u128,
+    fallback_count: u64,
     incremental: u128,
     refresh: u128,
     epoch_transitions: u64,
@@ -182,6 +184,10 @@ fn audit<R: BufRead>(mut reader: R) -> Result<[Totals; 4], String> {
             .mismatch
             .checked_add(u64::from(!equal))
             .ok_or("mismatch overflow")?;
+        t.fallback_count = t
+            .fallback_count
+            .checked_add(u64::from(!equal))
+            .ok_or("fallback overflow")?;
         t.full = t
             .full
             .checked_add(u128::from(o.full_ns))
@@ -189,6 +195,16 @@ fn audit<R: BufRead>(mut reader: R) -> Result<[Totals; 4], String> {
         // Conservative retrospective accounting: a mismatch is charged Full.
         // Refresh is charged for every successful Incremental evaluation.
         let incremental_total = u128::from(o.incremental_ns) + u128::from(o.refresh_ns);
+        // Every verified sequential probe pays the independent Full oracle,
+        // the Incremental evaluation and cache refresh, including mismatches.
+        // Input timing sums are not physical wall-clock measurements.
+        let paid = u128::from(o.full_ns)
+            .checked_add(incremental_total)
+            .ok_or("verified cost overflow")?;
+        t.verified_sequential = t
+            .verified_sequential
+            .checked_add(paid)
+            .ok_or("verified sum overflow")?;
         let selected = if equal && incremental_total < u128::from(o.full_ns) {
             incremental_total
         } else {
@@ -222,15 +238,20 @@ fn main() {
                 Some(rate) => eprintln!("PHYSICAL_AUDITOR_ROWS_PER_SECOND={rate}"),
                 None => eprintln!("PHYSICAL_AUDITOR_ROWS_PER_SECOND=unavailable"),
             }
-            println!("split,count,mismatches,output_mismatches,decision_mismatches,full_ns,oracle_safe_lower_bound_ns,incremental_ns,refresh_ns,epoch_transitions,oracle_bound_ops_per_second,vm_hwm_kib,geometry_transitions,min_cone,max_cone,max_refresh_ns");
+            println!("split,count,mismatches,output_mismatches,decision_mismatches,full_ns,oracle_safe_lower_bound_ns,incremental_ns,refresh_ns,epoch_transitions,oracle_bound_ops_per_second,vm_hwm_kib,geometry_transitions,min_cone,max_cone,max_refresh_ns,verified_sequential_ns,verified_ops_per_second,oracle_mismatch_fallback_count");
             for (name, t) in ["TRAIN", "VALID", "TEST", "OOD"].iter().zip(totals.iter()) {
                 let throughput = if t.selected == 0 {
                     0
                 } else {
                     u128::from(t.count).saturating_mul(1_000_000_000) / t.selected
                 };
+                let verified_ops_per_second = if t.verified_sequential == 0 {
+                    0
+                } else {
+                    u128::from(t.count).saturating_mul(1_000_000_000) / t.verified_sequential
+                };
                 println!(
-                    "{name},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                    "{name},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                     t.count,
                     t.mismatch,
                     t.output_mismatch,
@@ -245,14 +266,17 @@ fn main() {
                     t.geometry_transitions,
                     t.min_cone.unwrap_or(0),
                     t.max_cone,
-                    t.max_refresh_ns
+                    t.max_refresh_ns,
+                    t.verified_sequential,
+                    verified_ops_per_second,
+                    t.fallback_count
                 );
             }
             match physical_process_vm_hwm_kib() {
                 Some(kib) => eprintln!("PHYSICAL_AUDITOR_PROCESS_VM_HWM_KIB={kib}"),
                 None => eprintln!("PHYSICAL_AUDITOR_PROCESS_VM_HWM_KIB=unavailable"),
             }
-            eprintln!("NOTE: PHYSICAL_AUDITOR_* measures only CSV ingestion and accounting, NOT engine throughput or end-to-end inference. oracle_safe_lower_bound_ns and oracle_bound_ops_per_second are retrospective optimistic bounds using oracle outcomes, NOT measured wall-clock throughput, deployable latency or trained policy. incremental_ns and refresh_ns are input-reported sums, not physical measurements made by this program.");
+            eprintln!("NOTE: PHYSICAL_AUDITOR_* measures only CSV ingestion and accounting, NOT engine throughput or end-to-end inference. oracle_safe_lower_bound_ns and oracle_bound_ops_per_second are retrospective optimistic bounds using oracle outcomes, NOT measured wall-clock throughput, deployable latency or trained policy. verified_sequential_ns adds Full + Incremental + refresh for every input row: a model of reported timings, NOT measured end-to-end throughput. incremental_ns and refresh_ns are input-reported sums, not physical measurements made by this program.");
         }
         Err(e) => {
             eprintln!("audit rejected: {e}");
@@ -376,6 +400,33 @@ mod tests {
         assert_eq!(t[1].selected, 315); // Three rejected probes use Full; only the agreement uses Incremental + refresh.
         assert_eq!(t[0].mismatch, 0); // Holdout split counters never leak into TRAIN.
     }
+    #[test]
+    fn paid_full_oracle_cost_is_additive_and_split_local() {
+        let csv = format!(
+            "{HEADER}TRAIN,1,0,128,4,100,10,5,1,1,1,1,10\nTRAIN,2,1,128,4,90,20,3,1,0,1,1,10\nVALID,3,1,128,4,80,40,4,1,1,1,1,10\n"
+        );
+        let t = audit(csv.as_bytes()).unwrap();
+        assert_eq!((t[0].count, t[0].fallback_count), (2, 1));
+        assert_eq!(t[0].full, 190);
+        assert_eq!(t[0].verified_sequential, 228);
+        assert_eq!(t[0].selected, 105);
+        assert_eq!(t[1].verified_sequential, 124);
+        assert_eq!(t[1].fallback_count, 0);
+        assert_eq!(t[2].verified_sequential, 0);
+        assert_eq!(t[3].verified_sequential, 0);
+    }
+
+    #[test]
+    fn verified_sequential_cost_exceeds_paid_full_on_each_positive_probe() {
+        let csv = format!(
+            "{HEADER}VALID,1,0,100,2,100,10,5,0,0,1,1,10\nVALID,2,1,100,2,100,20,30,1,1,1,1,10\n"
+        );
+        let t = audit(csv.as_bytes()).unwrap();
+        assert_eq!(t[1].verified_sequential, 265);
+        assert!(t[1].verified_sequential > t[1].full);
+        assert_eq!(t[1].fallback_count, 1);
+    }
+
     #[test]
     fn stale_epoch_and_bad_geometry_are_rejected() {
         let csv = format!(
