@@ -465,7 +465,7 @@ impl QuarantinedDispatch {
 
     /// Execute with an independent Full oracle. A mismatch or Incremental
     /// error permanently quarantines the bucket until a new session is made.
-    /// Full failures propagate without publishing an unverified result.
+    /// Full failures propagate without publishing an unverified result and\n    /// quarantine the bucket because the candidate cannot be certified.
     /// This is a safety mechanism, not a throughput optimization.
     pub fn try_execute<T, E, F, I>(
         &mut self,
@@ -482,10 +482,18 @@ impl QuarantinedDispatch {
         if self.choose(gates, cone) == EngineChoice::Full {
             return full().map(|value| (value, FallibleVerifiedPath::Full));
         }
-        let candidate = incremental();
-        let reference = full()?;
         let bucket = ValidDispatch::bucket(gates, cone)
             .expect("incremental selection requires valid geometry");
+        let candidate = incremental();
+        // An unavailable Full oracle cannot certify the candidate. Quarantine
+        // this geometry until a fresh session, even when Incremental succeeded.
+        let reference = match full() {
+            Ok(value) => value,
+            Err(error) => {
+                self.quarantined[bucket] = true;
+                return Err(error);
+            }
+        };
         match candidate {
             Ok(value) if value == reference => {
                 Ok((value, FallibleVerifiedPath::IncrementalVerified))
@@ -534,20 +542,22 @@ mod quarantine_tests {
     }
 
     #[test]
-    fn incremental_error_quarantines_but_full_error_does_not() {
+    fn incremental_and_full_oracle_errors_quarantine_bucket() {
         let mut session = session();
         let result = session.try_execute(
             10_000, 100, || Err::<u8, _>("full failed"),
             || Ok::<_, &str>(3_u8),
         );
         assert_eq!(result, Err("full failed"));
-        assert_eq!(session.choose(10_000, 100), EngineChoice::Incremental);
+        assert_eq!(session.choose(10_000, 100), EngineChoice::Full);
+        // Another calibrated geometry remains available independently.
+        assert_eq!(session.choose(10_000, 500), EngineChoice::Incremental);
         let (value, path) = session.try_execute(
-            10_000, 100, || Ok::<_, &str>(7_u8),
+            10_000, 500, || Ok::<_, &str>(7_u8),
             || Err::<u8, _>("incremental failed"),
         ).unwrap();
         assert_eq!((value, path), (7, FallibleVerifiedPath::FullAfterIncrementalError));
-        assert_eq!(session.choose(10_000, 100), EngineChoice::Full);
+        assert_eq!(session.choose(10_000, 500), EngineChoice::Full);
     }
 
     #[test]
