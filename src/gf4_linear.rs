@@ -282,7 +282,7 @@ mod tests {
         )
         .unwrap();
         let composed = identity.compose(&earlier).unwrap();
-        let input = PackedQ2::from_levels(&vec![3; 65]).unwrap();
+        let input = PackedQ2::from_levels(&[3; 65]).unwrap();
         assert_eq!(composed.apply(&input), earlier.apply(&input));
     }
 
