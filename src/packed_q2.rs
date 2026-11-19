@@ -73,8 +73,7 @@ impl PackedQ2 {
         }
         let word = index / 64;
         let bit = index % 64;
-        Ok(((self.low[word] >> bit) & 1) as u8
-            | ((((self.high[word] >> bit) & 1) as u8) << 1))
+        Ok(((self.low[word] >> bit) & 1) as u8 | ((((self.high[word] >> bit) & 1) as u8) << 1))
     }
 
     fn same_length(&self, other: &Self) -> Result<(), Q2Error> {
@@ -139,8 +138,18 @@ impl PackedQ2 {
         self.same_length(other)?;
         Ok(Self {
             len: self.len,
-            low: self.low.iter().zip(&other.low).map(|(a, b)| a ^ b).collect(),
-            high: self.high.iter().zip(&other.high).map(|(a, b)| a ^ b).collect(),
+            low: self
+                .low
+                .iter()
+                .zip(&other.low)
+                .map(|(a, b)| a ^ b)
+                .collect(),
+            high: self
+                .high
+                .iter()
+                .zip(&other.high)
+                .map(|(a, b)| a ^ b)
+                .collect(),
         })
     }
 
@@ -183,8 +192,7 @@ mod tests {
 
     fn gf4_ref(a: u8, b: u8) -> u8 {
         let (a0, a1, b0, b1) = (a & 1, a >> 1, b & 1, b >> 1);
-        ((a0 & b0) ^ (a1 & b1))
-            | (((a0 & b1) ^ (a1 & b0) ^ (a1 & b1)) << 1)
+        ((a0 & b0) ^ (a1 & b1)) | (((a0 & b1) ^ (a1 & b0) ^ (a1 & b1)) << 1)
     }
 
     #[test]
@@ -240,16 +248,23 @@ mod tests {
     fn scalar_oracles_exhaustive_algebra_and_many_lengths() {
         for len in [0, 1, 2, 31, 63, 64, 65, 127, 128, 129, 188_508] {
             for seed in 0..4_usize {
-                let a: Vec<u8> = (0..len).map(|i| ((i * 17 + i / 5 + seed) % 4) as u8).collect();
-                let b: Vec<u8> = (0..len).map(|i| ((i * 13 + i / 7 + seed * 3) % 4) as u8).collect();
+                let a: Vec<u8> = (0..len)
+                    .map(|i| ((i * 17 + i / 5 + seed) % 4) as u8)
+                    .collect();
+                let b: Vec<u8> = (0..len)
+                    .map(|i| ((i * 13 + i / 7 + seed * 3) % 4) as u8)
+                    .collect();
                 let x = PackedQ2::from_levels(&a).unwrap();
                 let y = PackedQ2::from_levels(&b).unwrap();
                 assert_eq!(x.is_empty(), len == 0);
                 assert_eq!(x.len(), len);
-                let expected_unsigned: u128 = a.iter().zip(&b)
-                    .map(|(&p, &q)| u128::from(p) * u128::from(q)).sum();
-                let expected_signed: i128 = a.iter().zip(&b)
-                    .map(|(&p, &q)| signed(p) * signed(q)).sum();
+                let expected_unsigned: u128 = a
+                    .iter()
+                    .zip(&b)
+                    .map(|(&p, &q)| u128::from(p) * u128::from(q))
+                    .sum();
+                let expected_signed: i128 =
+                    a.iter().zip(&b).map(|(&p, &q)| signed(p) * signed(q)).sum();
                 assert_eq!(x.dot_unsigned(&y), Ok(expected_unsigned));
                 assert_eq!(x.dot_signed(&y), Ok(expected_signed));
                 let expected_gf4_dot = a
@@ -284,7 +299,9 @@ mod tests {
         for len in [0, 1, 63, 64, 65, 127, 128, 129, 188_508] {
             let a: Vec<u8> = (0..len).map(|i| ((i * 17 + i / 5) % 4) as u8).collect();
             let b: Vec<u8> = (0..len).map(|i| ((i * 13 + i / 7 + 1) % 4) as u8).collect();
-            let c: Vec<u8> = (0..len).map(|i| ((i * 19 + i / 11 + 2) % 4) as u8).collect();
+            let c: Vec<u8> = (0..len)
+                .map(|i| ((i * 19 + i / 11 + 2) % 4) as u8)
+                .collect();
             let left = PackedQ2::from_levels(&a).unwrap();
             let right = PackedQ2::from_levels(&b).unwrap();
             let original = PackedQ2::from_levels(&c).unwrap();
