@@ -318,3 +318,12 @@ pub mod fourier5_cache_epoch_guard;
 
 /// Measured transactional sequential cache rebuild with Full-oracle rollback.
 pub mod fourier5_sequential_refresh;
+
+/// Transactional delta cache refresh, independently checked against Full.
+pub mod fourier5_delta_refresh;
+
+/// Split-isolated measured accounting for sequential cache refresh.
+pub mod fourier5_delta_physical_audit;
+
+/// Conservative VALID-calibrated Full/Incremental dispatch.
+pub mod fourier5_valid_dispatch;

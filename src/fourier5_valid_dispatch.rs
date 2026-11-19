@@ -1,0 +1,233 @@
+//! Conservative VALID-only dispatch for synthetic Full/Incremental evaluations.
+//! An uncalibrated geometry always selects Full. TEST/OOD never update policy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EngineChoice { Full, Incremental }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PolicyError { InvalidGeometry, ZeroDuration, Overflow }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Bin {
+    samples: u64,
+    full_ns: u128,
+    incremental_ns: u128,
+    mismatches: u64,
+    slow_samples: u64,
+}
+
+/// Conservative bucket policy; each bucket must have enough VALID samples,
+/// no oracle mismatches, and an observed cost margin before dispatch.
+#[derive(Clone, Debug)]
+pub struct ValidDispatch {
+    bins: [Bin; 16],
+    min_samples: u64,
+    margin_percent: u64,
+}
+
+impl ValidDispatch {
+    #[must_use]
+    pub fn new(min_samples: u64, margin_percent: u64) -> Self {
+        Self {
+            bins: [Bin::default(); 16],
+            min_samples: min_samples.max(1),
+            margin_percent: margin_percent.min(99),
+        }
+    }
+
+    fn bucket(gates: u64, cone: u64) -> Result<usize, PolicyError> {
+        if gates == 0 || cone > gates {
+            return Err(PolicyError::InvalidGeometry);
+        }
+        let size = if gates < 1_024 { 0 } else if gates < 65_536 { 1 }
+            else if gates < 1_048_576 { 2 } else { 3 };
+        // Compare exact rational coverage: integer truncation incorrectly
+        // classified e.g. 199/10_000 as <=1%, despite being 1.99%.
+        let scaled_cone = u128::from(cone) * 100;
+        let total = u128::from(gates);
+        let coverage = if scaled_cone <= total { 0 }
+            else if scaled_cone <= total * 10 { 1 }
+            else if scaled_cone <= total * 50 { 2 } else { 3 };
+        Ok(size * 4 + coverage)
+    }
+
+    /// Ingest a measured VALID observation, including refresh and cache build.
+    /// The equality flag must compare all outputs and protected decisions.
+    /// TRAIN, TEST and OOD must never call this method.
+    pub fn observe_valid(
+        &mut self, gates: u64, cone: u64, full_ns: u64,
+        incremental_with_refresh_ns: u64, equal: bool,
+    ) -> Result<(), PolicyError> {
+        let index = Self::bucket(gates, cone)?;
+        if full_ns == 0 || incremental_with_refresh_ns == 0 {
+            return Err(PolicyError::ZeroDuration);
+        }
+        let mut next = self.bins[index];
+        next.samples = next.samples.checked_add(1).ok_or(PolicyError::Overflow)?;
+        next.full_ns = next.full_ns.checked_add(u128::from(full_ns))
+            .ok_or(PolicyError::Overflow)?;
+        next.incremental_ns = next.incremental_ns
+            .checked_add(u128::from(incremental_with_refresh_ns))
+            .ok_or(PolicyError::Overflow)?;
+        // Averages alone can hide expensive heterogeneous refreshes. Require
+        // every VALID sample to satisfy the margin, not only the pooled sum.
+        let fast_enough = u128::from(incremental_with_refresh_ns) * 100
+            < u128::from(full_ns) * u128::from(100 - self.margin_percent);
+        if !fast_enough {
+            next.slow_samples = next.slow_samples.checked_add(1)
+                .ok_or(PolicyError::Overflow)?;
+        }
+        if !equal {
+            next.mismatches = next.mismatches.checked_add(1)
+                .ok_or(PolicyError::Overflow)?;
+        }
+        self.bins[index] = next;
+        Ok(())
+    }
+
+    /// Dispatch from a frozen VALID calibration; no holdout feedback.
+    #[must_use]
+    pub fn choose(&self, gates: u64, cone: u64) -> EngineChoice {
+        let Ok(index) = Self::bucket(gates, cone) else {
+            return EngineChoice::Full;
+        };
+        let bin = self.bins[index];
+        if bin.samples < self.min_samples || bin.mismatches != 0 || bin.slow_samples != 0 {
+            return EngineChoice::Full;
+        }
+        // Division-free comparison, with checked arithmetic and fail-closed overflow.
+        let Some(lhs) = bin.incremental_ns.checked_mul(100) else {
+            return EngineChoice::Full;
+        };
+        let Some(rhs) = bin.full_ns.checked_mul(u128::from(100 - self.margin_percent)) else {
+            return EngineChoice::Full;
+        };
+        if lhs < rhs { EngineChoice::Incremental } else { EngineChoice::Full }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn requires_valid_evidence_and_sufficient_margin() {
+        let mut policy = ValidDispatch::new(2, 10);
+        assert_eq!(policy.choose(10_000, 50), EngineChoice::Full);
+        policy.observe_valid(10_000, 50, 100, 40, true).unwrap();
+        assert_eq!(policy.choose(10_000, 50), EngineChoice::Full);
+        policy.observe_valid(10_000, 50, 100, 50, true).unwrap();
+        assert_eq!(policy.choose(10_000, 50), EngineChoice::Incremental);
+        assert_eq!(policy.choose(10_000, 9_000), EngineChoice::Full);
+    }
+
+    #[test]
+    fn oracle_mismatch_disables_entire_geometry_bucket() {
+        let mut policy = ValidDispatch::new(1, 0);
+        policy.observe_valid(10_000, 50, 100, 1, false).unwrap();
+        assert_eq!(policy.choose(10_000, 50), EngineChoice::Full);
+    }
+
+    #[test]
+    fn heterogeneous_slow_tail_disables_average_speedup() {
+        let mut policy = ValidDispatch::new(3, 10);
+        policy.observe_valid(10_000, 50, 1000, 10, true).unwrap();
+        policy.observe_valid(10_000, 50, 1000, 10, true).unwrap();
+        policy.observe_valid(10_000, 50, 100, 150, true).unwrap();
+        // The pooled incremental average is faster, but one VALID case regresses.
+        assert_eq!(policy.choose(10_000, 50), EngineChoice::Full);
+    }
+
+    #[test]
+    fn all_valid_samples_must_clear_configured_margin() {
+        let mut policy = ValidDispatch::new(2, 10);
+        policy.observe_valid(10_000, 50, 100, 89, true).unwrap();
+        policy.observe_valid(10_000, 50, 100, 89, true).unwrap();
+        assert_eq!(policy.choose(10_000, 50), EngineChoice::Incremental);
+        policy.observe_valid(10_000, 50, 100, 90, true).unwrap();
+        assert_eq!(policy.choose(10_000, 50), EngineChoice::Full);
+    }
+
+    #[test]
+    fn fractional_cone_boundaries_never_leak_valid_calibration() {
+        let mut policy = ValidDispatch::new(1, 0);
+        policy.observe_valid(10_000, 100, 100, 10, true).unwrap();
+        assert_eq!(policy.choose(10_000, 100), EngineChoice::Incremental);
+        // 1.01% and 1.99% are not in the <=1% bucket.
+        for cone in [101, 199] {
+            assert_eq!(policy.choose(10_000, cone), EngineChoice::Full);
+        }
+        policy.observe_valid(10_000, 1_000, 100, 10, true).unwrap();
+        assert_eq!(policy.choose(10_000, 1_000), EngineChoice::Incremental);
+        assert_eq!(policy.choose(10_000, 1_001), EngineChoice::Full);
+        policy.observe_valid(10_000, 5_000, 100, 10, true).unwrap();
+        assert_eq!(policy.choose(10_000, 5_000), EngineChoice::Incremental);
+        assert_eq!(policy.choose(10_000, 5_001), EngineChoice::Full);
+    }
+
+    #[test]
+    fn invalid_observation_is_atomic_and_fails_closed() {
+        let mut policy = ValidDispatch::new(1, 10);
+        assert_eq!(policy.observe_valid(0, 0, 100, 1, true),
+            Err(PolicyError::InvalidGeometry));
+        assert_eq!(policy.observe_valid(10_000, 50, 0, 1, true),
+            Err(PolicyError::ZeroDuration));
+        assert_eq!(policy.choose(10_000, 50), EngineChoice::Full);
+        policy.observe_valid(10_000, 50, 100, 20, true).unwrap();
+        assert_eq!(policy.choose(10_000, 50), EngineChoice::Incremental);
+        assert_eq!(policy.choose(10_000, 10_001), EngineChoice::Full);
+    }
+}
+
+
+/// Immutable calibration artifact. Its API deliberately exposes no VALID ingestion,
+/// so holdout evaluation cannot mutate dispatch decisions after calibration.
+#[derive(Clone, Debug)]
+pub struct FrozenValidDispatch {
+    policy: ValidDispatch,
+}
+
+impl ValidDispatch {
+    /// End calibration before TEST/OOD. Consumes the mutable policy.
+    #[must_use]
+    pub fn freeze(self) -> FrozenValidDispatch {
+        FrozenValidDispatch { policy: self }
+    }
+}
+
+impl FrozenValidDispatch {
+    /// Select a path without permitting holdout feedback into the calibration.
+    #[must_use]
+    pub fn choose(&self, gates: u64, cone: u64) -> EngineChoice {
+        self.policy.choose(gates, cone)
+    }
+}
+
+#[cfg(test)]
+mod frozen_dispatch_tests {
+    use super::*;
+
+    #[test]
+    fn frozen_decisions_match_calibration_across_geometry() {
+        let mut calibration = ValidDispatch::new(2, 10);
+        calibration.observe_valid(10_000, 100, 100, 20, true).unwrap();
+        calibration.observe_valid(10_000, 100, 100, 30, true).unwrap();
+        let geometries = [(10_000, 100), (10_000, 101), (10_000, 5_000),
+                          (0, 0), (10_000, 10_001)];
+        let expected: Vec<_> = geometries.iter()
+            .map(|&(gates, cone)| calibration.choose(gates, cone)).collect();
+        let frozen = calibration.freeze();
+        let actual: Vec<_> = geometries.iter()
+            .map(|&(gates, cone)| frozen.choose(gates, cone)).collect();
+        assert_eq!(actual, expected);
+        assert_eq!(frozen.choose(10_000, 100), EngineChoice::Incremental);
+        assert_eq!(frozen.choose(10_000, 101), EngineChoice::Full);
+    }
+
+    #[test]
+    fn freeze_keeps_fail_closed_mismatch_decision() {
+        let mut calibration = ValidDispatch::new(1, 0);
+        calibration.observe_valid(10_000, 100, 100, 1, false).unwrap();
+        let frozen = calibration.freeze();
+        assert_eq!(frozen.choose(10_000, 100), EngineChoice::Full);
+    }
+}
