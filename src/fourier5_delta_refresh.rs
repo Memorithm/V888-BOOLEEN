@@ -124,3 +124,115 @@ mod tests {
         assert_eq!((state, cache), (1, 1));
     }
 }
+
+ 
+/// Fallible transactional refresh. An error from the intervention or cache
+/// updater aborts before the live state/cache are published.
+pub fn try_verified_delta<S, C, O, E, I, R, F, D>(
+    state: &mut S,
+    cache: &mut C,
+    intervene: I,
+    refresh: R,
+    full: F,
+    incremental: D,
+) -> Result<DeltaMeasure, E>
+where
+    S: Clone,
+    C: Clone,
+    O: Eq,
+    I: FnOnce(&mut S) -> Result<bool, E>,
+    R: FnOnce(&S, &mut C) -> Result<(), E>,
+    F: FnOnce(&S) -> Result<O, E>,
+    D: FnOnce(&S, &C) -> Result<O, E>,
+{
+    let started = Instant::now();
+    let mut candidate = state.clone();
+    if !intervene(&mut candidate)? {
+        return Ok(DeltaMeasure {
+            outcome: DeltaOutcome::Declined,
+            elapsed: started.elapsed(),
+            refresh: Duration::ZERO,
+            full: Duration::ZERO,
+            incremental: Duration::ZERO,
+        });
+    }
+    let mut candidate_cache = cache.clone();
+    let phase = Instant::now();
+    refresh(&candidate, &mut candidate_cache)?;
+    let refresh_time = phase.elapsed();
+    let phase = Instant::now();
+    let expected = full(&candidate)?;
+    let full_time = phase.elapsed();
+    let phase = Instant::now();
+    let observed = incremental(&candidate, &candidate_cache)?;
+    let incremental_time = phase.elapsed();
+    let outcome = if expected == observed {
+        *state = candidate;
+        *cache = candidate_cache;
+        DeltaOutcome::Committed
+    } else {
+        DeltaOutcome::OracleMismatch
+    };
+    Ok(DeltaMeasure {
+        outcome,
+        elapsed: started.elapsed(),
+        refresh: refresh_time,
+        full: full_time,
+        incremental: incremental_time,
+    })
+}
+
+#[cfg(test)]
+mod fallible_tests {
+    use super::*;
+
+    #[test]
+    fn errors_at_each_stage_leave_both_live_objects_unchanged() {
+        for failing_stage in 0..4 {
+            let mut state = 1_u8;
+            let mut cache = 1_u8;
+            let result = try_verified_delta(
+                &mut state,
+                &mut cache,
+                |candidate| {
+                    *candidate = 2;
+                    if failing_stage == 0 { Err("intervention") } else { Ok(true) }
+                },
+                |_, candidate_cache| {
+                    *candidate_cache = 2;
+                    if failing_stage == 1 { Err("refresh") } else { Ok(()) }
+                },
+                |_| {
+                    if failing_stage == 2 { Err("full") } else { Ok(2_u8) }
+                },
+                |_, _| {
+                    if failing_stage == 3 { Err("incremental") } else { Ok(2_u8) }
+                },
+            );
+            assert!(result.is_err());
+            assert_eq!((state, cache), (1, 1));
+        }
+    }
+
+    #[test]
+    fn success_commits_and_mismatch_rolls_back() {
+        for observed in [2_u8, 3_u8] {
+            let mut state = 1_u8;
+            let mut cache = 1_u8;
+            let result = try_verified_delta(
+                &mut state,
+                &mut cache,
+                |candidate| { *candidate = 2; Ok::<_, ()>(true) },
+                |_, candidate_cache| { *candidate_cache = 2; Ok::<_, ()>(()) },
+                |candidate| Ok::<_, ()>(*candidate),
+                |_, _| Ok::<_, ()>(observed),
+            ).unwrap();
+            assert_eq!(result.outcome, if observed == 2 {
+                DeltaOutcome::Committed
+            } else {
+                DeltaOutcome::OracleMismatch
+            });
+            assert_eq!((state, cache), if observed == 2 { (2, 2) } else { (1, 1) });
+        }
+    }
+}
