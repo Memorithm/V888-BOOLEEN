@@ -90,7 +90,7 @@ The optional CPU binary `v888-gf4-bench` compares a scalar GF(4)
 reference against `PackedQ2::gf4_dot` on identical deterministic
 four-level inputs. It requires exact field-code equality for every
 measured repetition and aborts otherwise. It alternates the order of
-the three modes and reports median nanoseconds independently. Its
+the three modes and reports median nanoseconds independently (for an even number of trials, the arithmetic midpoint of both central observations, rounded down without overflow). Its
 measurements exclude input generation, warmup and result verification.
 Three paired timing scopes are reported: scalar GF(4) over the original
 byte vectors; packed GF(4) compute-only on reused packed vectors;
