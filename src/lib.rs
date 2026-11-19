@@ -311,3 +311,6 @@ pub mod fourier5_sequential_physical_step;
 
 /// Provenance guard against synthetic VALID and holdout sample reuse.
 pub mod fourier5_split_guard;
+
+/// Opt-in SECDED128 protection of frozen BooleanState snapshots.
+pub mod checkpoint_ecc;
