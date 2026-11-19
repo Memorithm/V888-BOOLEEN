@@ -32,7 +32,7 @@ impl Counters {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct PhysicalSample {
     pub split: Split,
     pub sequence: u64,
