@@ -775,3 +775,120 @@ mod diverse_valid_tests {
         assert_eq!(policy.choose(10_000, 100), EngineChoice::Full);
     }
 }
+
+
+/// Exact sequential cache-update contract for synthetic interventions.
+/// A successful intervention must return a refreshed cache and the output
+/// computed from that cache; the independent Full oracle is authoritative.
+/// No cache is committed on disagreement or on either execution error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SequentialDecision {
+    Accepted,
+    RejectedMismatch,
+    RejectedIncrementalError,
+    RejectedOracleError,
+}
+
+/// Counters are operation counts, not timing or biological measurements.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SequentialAudit {
+    pub attempted: u64,
+    pub accepted: u64,
+    pub rejected_mismatch: u64,
+    pub rejected_incremental_error: u64,
+    pub rejected_oracle_error: u64,
+}
+
+impl SequentialAudit {
+    /// Evaluate one proposed edit against an independent Full oracle.
+    /// The incremental closure receives the last accepted cache by reference
+    /// and must build its replacement without mutating that cache.
+    /// The Full closure must independently evaluate the proposed edit.
+    /// A rejected edit leaves the cache unchanged.
+    pub fn attempt<C, T, E, I, F>(
+        &mut self,
+        cache: &mut C,
+        incremental_refresh: I,
+        full_oracle: F,
+    ) -> Result<SequentialDecision, PolicyError>
+    where
+        T: Eq,
+        I: FnOnce(&C) -> Result<(C, T), E>,
+        F: FnOnce() -> Result<T, E>,
+    {
+        let attempted = self.attempted.checked_add(1).ok_or(PolicyError::Overflow)?;
+        let candidate = incremental_refresh(cache);
+        let reference = full_oracle();
+        let decision = match (candidate, reference) {
+            (Ok((next_cache, output)), Ok(expected)) if output == expected => {
+                self.accepted = self.accepted.checked_add(1).ok_or(PolicyError::Overflow)?;
+                *cache = next_cache;
+                SequentialDecision::Accepted
+            }
+            (Ok(_), Ok(_)) => {
+                self.rejected_mismatch = self.rejected_mismatch.checked_add(1)
+                    .ok_or(PolicyError::Overflow)?;
+                SequentialDecision::RejectedMismatch
+            }
+            (Err(_), _) => {
+                self.rejected_incremental_error = self.rejected_incremental_error
+                    .checked_add(1).ok_or(PolicyError::Overflow)?;
+                SequentialDecision::RejectedIncrementalError
+            }
+            (Ok(_), Err(_)) => {
+                self.rejected_oracle_error = self.rejected_oracle_error
+                    .checked_add(1).ok_or(PolicyError::Overflow)?;
+                SequentialDecision::RejectedOracleError
+            }
+        };
+        self.attempted = attempted;
+        Ok(decision)
+    }
+}
+
+#[cfg(test)]
+mod sequential_audit_tests {
+    use super::*;
+
+    #[test]
+    fn accepted_edits_refresh_cache_before_next_intervention() {
+        let mut audit = SequentialAudit::default();
+        let mut cache = 2_u64;
+        for expected in [3_u64, 6, 7] {
+            let result = audit.attempt(
+                &mut cache,
+                |old| Ok::<_, ()>((expected, *old + (expected - *old))),
+                || Ok::<_, ()>(expected),
+            );
+            assert_eq!(result, Ok(SequentialDecision::Accepted));
+            assert_eq!(cache, expected);
+        }
+        assert_eq!(audit.accepted, 3);
+        assert_eq!(audit.attempted, 3);
+    }
+
+    #[test]
+    fn mismatch_and_errors_preserve_last_accepted_cache() {
+        let mut audit = SequentialAudit::default();
+        let mut cache = vec![false, true];
+        assert_eq!(audit.attempt(
+            &mut cache,
+            |_| Ok::<_, &'static str>((vec![true, true], vec![true, true])),
+            || Ok::<_, &'static str>(vec![false, false]),
+        ), Ok(SequentialDecision::RejectedMismatch));
+        assert_eq!(audit.attempt(
+            &mut cache,
+            |_| Err::<(Vec<bool>, Vec<bool>), _>("refresh failed"),
+            || Ok::<_, &'static str>(vec![false, true]),
+        ), Ok(SequentialDecision::RejectedIncrementalError));
+        assert_eq!(audit.attempt(
+            &mut cache,
+            |_| Ok::<_, &'static str>((vec![true, false], vec![true, false])),
+            || Err::<Vec<bool>, _>("oracle failed"),
+        ), Ok(SequentialDecision::RejectedOracleError));
+        assert_eq!(cache, vec![false, true]);
+        assert_eq!((audit.attempted, audit.accepted), (3, 0));
+        assert_eq!((audit.rejected_mismatch, audit.rejected_incremental_error,
+                    audit.rejected_oracle_error), (1, 1, 1));
+    }
+}
