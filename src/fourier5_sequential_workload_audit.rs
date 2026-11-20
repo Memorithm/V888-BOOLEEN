@@ -263,3 +263,132 @@ mod counterbalanced_tests {
         assert!(rows.iter().all(|row| row.verdict == StepVerdict::Accepted));
     }
 }
+
+/// Paired audit with execution order balanced *within each workload class*.
+/// Classes must be assigned independently of measured timings and outcomes.
+/// This prevents an alternating global order from always placing the same
+/// engine first for a class appearing only at even (or odd) positions.
+/// The order counter advances on rejected steps as well.
+pub fn audit_sequence_stratified<S, I, K, E, F, D, C>(
+    initial: S,
+    inputs: &[I],
+    mut class_of: C,
+    mut full: F,
+    mut incremental: D,
+) -> (S, Vec<StepMeasurement>)
+where
+    S: Clone + Eq,
+    K: Eq,
+    C: FnMut(&I) -> K,
+    F: FnMut(&S, &I) -> Result<S, E>,
+    D: FnMut(&S, &I) -> Result<S, E>,
+{
+    let mut accepted = initial;
+    let mut classes: Vec<(K, usize)> = Vec::new();
+    let mut report = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        let class = class_of(input);
+        let first_incremental = if let Some((_, count)) =
+            classes.iter_mut().find(|(key, _)| *key == class)
+        {
+            let odd = *count % 2 == 1;
+            *count += 1;
+            odd
+        } else {
+            classes.push((class, 1));
+            false
+        };
+        let (reference, full_time, candidate, incremental_time) = if first_incremental {
+            let start = Instant::now();
+            let candidate = incremental(&accepted, input);
+            let incremental_time = start.elapsed();
+            let start = Instant::now();
+            let reference = full(&accepted, input);
+            (reference, start.elapsed(), candidate, incremental_time)
+        } else {
+            let start = Instant::now();
+            let reference = full(&accepted, input);
+            let full_time = start.elapsed();
+            let start = Instant::now();
+            let candidate = incremental(&accepted, input);
+            (reference, full_time, candidate, start.elapsed())
+        };
+        let verdict = match (reference, candidate) {
+            (Err(_), _) => StepVerdict::FullError,
+            (Ok(_), Err(_)) => StepVerdict::IncrementalError,
+            (Ok(expected), Ok(actual)) if expected == actual => {
+                accepted = actual;
+                StepVerdict::Accepted
+            }
+            (Ok(_), Ok(_)) => StepVerdict::Mismatch,
+        };
+        report.push(StepMeasurement {
+            verdict,
+            full: full_time,
+            incremental_with_refresh: incremental_time,
+            peak_rss_kib: process_vm_hwm_kib(),
+        });
+    }
+    (accepted, report)
+}
+
+#[cfg(test)]
+mod stratified_tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    #[test]
+    fn each_class_balances_even_when_interleaved() {
+        let calls = RefCell::new(Vec::new());
+        let inputs = [(0_u8, 1_i32), (1, 2), (0, 3), (1, 4), (0, 5)];
+        let (state, rows) = audit_sequence_stratified(
+            0_i32,
+            &inputs,
+            |&(class, _)| class,
+            |&value, &(class, delta)| {
+                calls.borrow_mut().push(('F', class));
+                Ok::<_, ()>(value + delta)
+            },
+            |&value, &(class, delta)| {
+                calls.borrow_mut().push(('I', class));
+                Ok::<_, ()>(value + delta)
+            },
+        );
+        assert_eq!(state, 15);
+        assert!(rows.iter().all(|row| row.verdict == StepVerdict::Accepted));
+        assert_eq!(
+            calls.into_inner(),
+            vec![
+                ('F', 0), ('I', 0),
+                ('F', 1), ('I', 1),
+                ('I', 0), ('F', 0),
+                ('I', 1), ('F', 1),
+                ('F', 0), ('I', 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn rejected_step_still_advances_class_order_and_rolls_back() {
+        let calls = RefCell::new(Vec::new());
+        let (state, rows) = audit_sequence_stratified(
+            (0_i32, 0_u32),
+            &[1_i32, 2, 3],
+            |_| 0_u8,
+            |&(value, epoch), &delta| {
+                calls.borrow_mut().push('F');
+                Ok::<_, ()>((value + delta, epoch + 1))
+            },
+            |&(value, epoch), &delta| {
+                calls.borrow_mut().push('I');
+                Ok::<_, ()>((value + delta, epoch + u32::from(delta != 2)))
+            },
+        );
+        assert_eq!(state, (4, 2));
+        assert_eq!(
+            rows.iter().map(|row| row.verdict).collect::<Vec<_>>(),
+            vec![StepVerdict::Accepted, StepVerdict::Mismatch, StepVerdict::Accepted]
+        );
+        assert_eq!(calls.into_inner(), vec!['F', 'I', 'I', 'F', 'F', 'I']);
+    }
+}
