@@ -80,7 +80,6 @@ where
     (accepted, report)
 }
 
-
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WorkloadSummary {
     pub accepted: usize,
@@ -153,7 +152,15 @@ mod tests {
             },
         ];
         let summary = summarize_workload(&rows).unwrap();
-        assert_eq!((summary.accepted, summary.mismatches, summary.full_errors, summary.incremental_errors), (1, 1, 1, 1));
+        assert_eq!(
+            (
+                summary.accepted,
+                summary.mismatches,
+                summary.full_errors,
+                summary.incremental_errors
+            ),
+            (1, 1, 1, 1)
+        );
         assert_eq!((summary.full_nanos, summary.incremental_nanos), (44, 22));
         assert_eq!(summary.process_peak_rss_kib, Some(2048));
     }
@@ -162,7 +169,6 @@ mod tests {
     fn empty_summary_has_no_invented_memory_measurement() {
         assert_eq!(summarize_workload(&[]), Some(WorkloadSummary::default()));
     }
-
 
     #[test]
     fn independent_oracle_rejects_stale_internal_cache_even_if_output_matches() {
@@ -230,7 +236,6 @@ mod tests {
         assert!(rows.is_empty());
     }
 }
-
 
 /// Counterbalanced paired audit: odd steps time Incremental before Full,
 /// even steps Full before Incremental. This reduces fixed execution-order
@@ -306,15 +311,28 @@ mod counterbalanced_tests {
                 Ok::<_, ()>((value + delta, epoch + u32::from(delta != 2)))
             },
         );
-        assert_eq!(calls.into_inner(), vec![
-            ('F', 1), ('I', 1), ('I', 2), ('F', 2),
-            ('F', 3), ('I', 3), ('I', 4), ('F', 4),
-        ]);
+        assert_eq!(
+            calls.into_inner(),
+            vec![
+                ('F', 1),
+                ('I', 1),
+                ('I', 2),
+                ('F', 2),
+                ('F', 3),
+                ('I', 3),
+                ('I', 4),
+                ('F', 4),
+            ]
+        );
         assert_eq!(state, (8, 3));
         assert_eq!(
             rows.iter().map(|row| row.verdict).collect::<Vec<_>>(),
-            vec![StepVerdict::Accepted, StepVerdict::Mismatch,
-                 StepVerdict::Accepted, StepVerdict::Accepted]
+            vec![
+                StepVerdict::Accepted,
+                StepVerdict::Mismatch,
+                StepVerdict::Accepted,
+                StepVerdict::Accepted
+            ]
         );
     }
 
@@ -368,16 +386,15 @@ where
     let mut report = Vec::with_capacity(inputs.len());
     for input in inputs {
         let class = class_of(input);
-        let first_incremental = if let Some((_, count)) =
-            classes.iter_mut().find(|(key, _)| *key == class)
-        {
-            let odd = *count % 2 == 1;
-            *count += 1;
-            odd
-        } else {
-            classes.push((class, 1));
-            false
-        };
+        let first_incremental =
+            if let Some((_, count)) = classes.iter_mut().find(|(key, _)| *key == class) {
+                let odd = *count % 2 == 1;
+                *count += 1;
+                odd
+            } else {
+                classes.push((class, 1));
+                false
+            };
         let (reference, full_time, candidate, incremental_time) = if first_incremental {
             let start = Instant::now();
             let candidate = incremental(&accepted, input);
@@ -439,11 +456,16 @@ mod stratified_tests {
         assert_eq!(
             calls.into_inner(),
             vec![
-                ('F', 0), ('I', 0),
-                ('F', 1), ('I', 1),
-                ('I', 0), ('F', 0),
-                ('I', 1), ('F', 1),
-                ('F', 0), ('I', 0),
+                ('F', 0),
+                ('I', 0),
+                ('F', 1),
+                ('I', 1),
+                ('I', 0),
+                ('F', 0),
+                ('I', 1),
+                ('F', 1),
+                ('F', 0),
+                ('I', 0),
             ]
         );
     }
@@ -467,12 +489,15 @@ mod stratified_tests {
         assert_eq!(state, (4, 2));
         assert_eq!(
             rows.iter().map(|row| row.verdict).collect::<Vec<_>>(),
-            vec![StepVerdict::Accepted, StepVerdict::Mismatch, StepVerdict::Accepted]
+            vec![
+                StepVerdict::Accepted,
+                StepVerdict::Mismatch,
+                StepVerdict::Accepted
+            ]
         );
         assert_eq!(calls.into_inner(), vec!['F', 'I', 'I', 'F', 'F', 'I']);
     }
 }
-
 
 /// Per-class paired totals for heterogeneous sequential workloads.
 /// Rejected steps contribute to cost but never to accepted throughput.
@@ -556,10 +581,22 @@ mod stratified_cost_tests {
         ];
         let costs = summarize_stratified_costs(&classes, &rows).unwrap();
         assert_eq!(costs.len(), 2);
-        assert_eq!((costs[0].attempted, costs[0].accepted, costs[0].rejected), (2, 1, 1));
-        assert_eq!((costs[0].full_ns, costs[0].incremental_with_refresh_ns), (40, 10));
-        assert_eq!((costs[1].attempted, costs[1].accepted, costs[1].rejected), (1, 0, 1));
-        assert_eq!((costs[1].full_ns, costs[1].incremental_with_refresh_ns), (20, 40));
+        assert_eq!(
+            (costs[0].attempted, costs[0].accepted, costs[0].rejected),
+            (2, 1, 1)
+        );
+        assert_eq!(
+            (costs[0].full_ns, costs[0].incremental_with_refresh_ns),
+            (40, 10)
+        );
+        assert_eq!(
+            (costs[1].attempted, costs[1].accepted, costs[1].rejected),
+            (1, 0, 1)
+        );
+        assert_eq!(
+            (costs[1].full_ns, costs[1].incremental_with_refresh_ns),
+            (20, 40)
+        );
     }
 
     #[test]
@@ -569,7 +606,6 @@ mod stratified_cost_tests {
         assert_eq!(summarize_stratified_costs::<u8>(&[], &[]), Some(vec![]));
     }
 }
-
 
 /// Conservative measured dispatch for a workload class. No timings from
 /// TEST/OOD may be used to construct this policy; callers must supply VALID
@@ -599,8 +635,7 @@ pub fn select_measured_engine<K>(
     {
         return MeasuredEngine::Full;
     }
-    let Some(incremental_scaled) = class_cost.incremental_with_refresh_ns.checked_mul(100)
-    else {
+    let Some(incremental_scaled) = class_cost.incremental_with_refresh_ns.checked_mul(100) else {
         return MeasuredEngine::Full;
     };
     let Some(full_scaled) = class_cost
@@ -647,10 +682,22 @@ mod measured_dispatch_tests {
 
     #[test]
     fn fail_closed_for_rejections_insufficient_data_and_overflow() {
-        assert_eq!(select_measured_engine(&cost(4, 3, 100, 1), 4, 10), MeasuredEngine::Full);
-        assert_eq!(select_measured_engine(&cost(3, 3, 100, 1), 4, 10), MeasuredEngine::Full);
-        assert_eq!(select_measured_engine(&cost(4, 4, 100, 1), 0, 10), MeasuredEngine::Full);
-        assert_eq!(select_measured_engine(&cost(4, 4, 100, 1), 4, 101), MeasuredEngine::Full);
+        assert_eq!(
+            select_measured_engine(&cost(4, 3, 100, 1), 4, 10),
+            MeasuredEngine::Full
+        );
+        assert_eq!(
+            select_measured_engine(&cost(3, 3, 100, 1), 4, 10),
+            MeasuredEngine::Full
+        );
+        assert_eq!(
+            select_measured_engine(&cost(4, 4, 100, 1), 0, 10),
+            MeasuredEngine::Full
+        );
+        assert_eq!(
+            select_measured_engine(&cost(4, 4, 100, 1), 4, 101),
+            MeasuredEngine::Full
+        );
         assert_eq!(
             select_measured_engine(&cost(4, 4, u128::MAX, 1), 4, 10),
             MeasuredEngine::Full
@@ -663,7 +710,10 @@ mod measured_dispatch_tests {
 
     #[test]
     fn exact_threshold_is_not_a_win() {
-        assert_eq!(select_measured_engine(&cost(4, 4, 100, 90), 4, 10), MeasuredEngine::Full);
+        assert_eq!(
+            select_measured_engine(&cost(4, 4, 100, 90), 4, 10),
+            MeasuredEngine::Full
+        );
         assert_eq!(
             select_measured_engine(&cost(4, 4, 100, 89), 4, 10),
             MeasuredEngine::Incremental
