@@ -489,3 +489,104 @@ mod stratified_cost_tests {
         assert_eq!(summarize_stratified_costs::<u8>(&[], &[]), Some(vec![]));
     }
 }
+
+
+/// Conservative measured dispatch for a workload class. No timings from
+/// TEST/OOD may be used to construct this policy; callers must supply VALID
+/// observations with a predeclared class mapping.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MeasuredEngine {
+    Full,
+    Incremental,
+}
+
+/// Admit Incremental only with enough paired VALID observations, no oracle
+/// divergence, and at least `minimum_saving_percent` measured cost saving.
+/// All attempted steps, including failures, count toward the cost.
+/// Invalid policy parameters or arithmetic overflow fail closed to Full.
+#[must_use]
+pub fn select_measured_engine<K>(
+    class_cost: &ClassCost<K>,
+    minimum_samples: usize,
+    minimum_saving_percent: u8,
+) -> MeasuredEngine {
+    if minimum_samples == 0
+        || minimum_saving_percent > 100
+        || class_cost.attempted < minimum_samples
+        || class_cost.accepted != class_cost.attempted
+        || class_cost.rejected != 0
+        || class_cost.full_ns == 0
+    {
+        return MeasuredEngine::Full;
+    }
+    let Some(incremental_scaled) = class_cost.incremental_with_refresh_ns.checked_mul(100)
+    else {
+        return MeasuredEngine::Full;
+    };
+    let Some(full_scaled) = class_cost
+        .full_ns
+        .checked_mul(u128::from(100 - minimum_saving_percent))
+    else {
+        return MeasuredEngine::Full;
+    };
+    if incremental_scaled < full_scaled {
+        MeasuredEngine::Incremental
+    } else {
+        MeasuredEngine::Full
+    }
+}
+
+#[cfg(test)]
+mod measured_dispatch_tests {
+    use super::*;
+
+    fn cost(attempted: usize, accepted: usize, full: u128, incremental: u128) -> ClassCost<u8> {
+        ClassCost {
+            class: 0,
+            attempted,
+            accepted,
+            rejected: attempted - accepted,
+            full_ns: full,
+            incremental_with_refresh_ns: incremental,
+        }
+    }
+
+    #[test]
+    fn independent_integer_oracle_matches_fractional_margin() {
+        for full in 1..100_u128 {
+            for incremental in 0..100_u128 {
+                let observed = cost(4, 4, full, incremental);
+                let expected = incremental * 100 < full * 90;
+                assert_eq!(
+                    select_measured_engine(&observed, 4, 10) == MeasuredEngine::Incremental,
+                    expected
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fail_closed_for_rejections_insufficient_data_and_overflow() {
+        assert_eq!(select_measured_engine(&cost(4, 3, 100, 1), 4, 10), MeasuredEngine::Full);
+        assert_eq!(select_measured_engine(&cost(3, 3, 100, 1), 4, 10), MeasuredEngine::Full);
+        assert_eq!(select_measured_engine(&cost(4, 4, 100, 1), 0, 10), MeasuredEngine::Full);
+        assert_eq!(select_measured_engine(&cost(4, 4, 100, 1), 4, 101), MeasuredEngine::Full);
+        assert_eq!(
+            select_measured_engine(&cost(4, 4, u128::MAX, 1), 4, 10),
+            MeasuredEngine::Full
+        );
+        assert_eq!(
+            select_measured_engine(&cost(4, 4, 100, u128::MAX), 4, 10),
+            MeasuredEngine::Full
+        );
+    }
+
+    #[test]
+    fn exact_threshold_is_not_a_win() {
+        assert_eq!(select_measured_engine(&cost(4, 4, 100, 90), 4, 10), MeasuredEngine::Full);
+        assert_eq!(
+            select_measured_engine(&cost(4, 4, 100, 89), 4, 10),
+            MeasuredEngine::Incremental
+        );
+    }
+}
