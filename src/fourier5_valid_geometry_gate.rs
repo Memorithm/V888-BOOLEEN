@@ -418,3 +418,119 @@ mod grouped_tests {
         );
     }
 }
+
+
+/// Conservative group-balanced admission: every independent VALID workload group
+/// must independently meet the requested saving margin on every covered sample.
+/// This prevents a large, fast group from masking a smaller, slow group.
+/// TEST/OOD never contribute to calibration. No measured speedup is implied.
+#[must_use]
+pub fn choose_with_group_balanced_margin(
+    observations: &[GroupedSplitPair],
+    target: Geometry,
+    minimum_distinct: usize,
+    minimum_samples: usize,
+    minimum_saving_percent: u8,
+) -> EngineChoice {
+    if choose_with_disjoint_groups(
+        observations,
+        target,
+        minimum_distinct,
+        minimum_samples,
+        minimum_saving_percent,
+    ) != EngineChoice::Incremental {
+        return EngineChoice::Full;
+    }
+    let mut covered_groups = std::collections::HashSet::new();
+    for grouped in observations {
+        let row = grouped.observation;
+        if row.split != Split::Valid {
+            continue;
+        }
+        let pair = row.pair;
+        if pair.geometry.gates != target.gates || pair.geometry.cone < target.cone {
+            continue;
+        }
+        covered_groups.insert(grouped.group_id);
+        // Use checked integer arithmetic, strict improvement and no rounding.
+        let lhs = u128::from(pair.incremental_refresh_ns).checked_mul(100);
+        let rhs = u128::from(pair.full_ns)
+            .checked_mul(u128::from(100 - minimum_saving_percent));
+        if !matches!((lhs, rhs), (Some(a), Some(b)) if a < b) {
+            return EngineChoice::Full;
+        }
+    }
+    if covered_groups.len() < minimum_distinct {
+        EngineChoice::Full
+    } else {
+        EngineChoice::Incremental
+    }
+}
+
+#[cfg(test)]
+mod balanced_margin_tests {
+    use super::*;
+
+    fn row(id: u64, group: u64, cone: u64, incremental: u64) -> GroupedSplitPair {
+        GroupedSplitPair {
+            group_id: group,
+            observation: SplitPair {
+                sample_id: id,
+                split: Split::Valid,
+                pair: ValidPair {
+                    geometry: Geometry { gates: 100, cone },
+                    full_ns: 100,
+                    incremental_refresh_ns: incremental,
+                    oracle_equal: true,
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn large_fast_group_cannot_mask_slow_independent_group() {
+        let mut data: Vec<_> = (0..20).map(|i| row(i, 1, 12, 1)).collect();
+        data.push(row(21, 2, 20, 95));
+        let target = Geometry { gates: 100, cone: 10 };
+        assert_eq!(
+            choose_with_disjoint_groups(&data, target, 2, 2, 20),
+            EngineChoice::Incremental
+        );
+        // Independent scalar oracle: 95 * 100 >= 100 * (100 - 20).
+        assert!(95_u128 * 100 >= 100_u128 * 80);
+        assert_eq!(
+            choose_with_group_balanced_margin(&data, target, 2, 2, 20),
+            EngineChoice::Full
+        );
+    }
+
+    #[test]
+    fn independent_groups_with_strict_margin_are_admitted() {
+        let data = [row(1, 1, 12, 20), row(2, 2, 20, 30)];
+        assert_eq!(
+            choose_with_group_balanced_margin(
+                &data,
+                Geometry { gates: 100, cone: 10 },
+                2,
+                2,
+                20
+            ),
+            EngineChoice::Incremental
+        );
+    }
+
+    #[test]
+    fn equal_to_margin_is_rejected() {
+        let data = [row(1, 1, 12, 20), row(2, 2, 20, 80)];
+        assert_eq!(
+            choose_with_group_balanced_margin(
+                &data,
+                Geometry { gates: 100, cone: 10 },
+                2,
+                2,
+                20
+            ),
+            EngineChoice::Full
+        );
+    }
+}
