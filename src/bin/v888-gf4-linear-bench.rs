@@ -42,11 +42,7 @@ fn two_pass(
     start.elapsed().as_nanos() / repetitions as u128
 }
 
-fn precomposed(
-    fused: &PackedGf4Linear,
-    input: &PackedQ2,
-    repetitions: usize,
-) -> u128 {
+fn precomposed(fused: &PackedGf4Linear, input: &PackedQ2, repetitions: usize) -> u128 {
     let start = Instant::now();
     for _ in 0..repetitions {
         let output = black_box(fused.apply(black_box(input)).expect("valid fused layer"));
@@ -68,7 +64,7 @@ fn run_case(inputs: usize, hidden: usize, outputs: usize, repetitions: usize) {
     let compose_ns = build_start.elapsed().as_nanos();
     let intermediate = first.apply(&input).expect("first layer");
     let expected = second.apply(&intermediate).expect("second layer");
-    assert_eq!(fused.apply(&input), Ok(expected));
+    assert_eq!(fused.apply(&input).expect("fused layer"), expected);
 
     // Alternate measurement order to reduce a fixed first-path advantage.
     let mut baseline_samples = Vec::with_capacity(7);

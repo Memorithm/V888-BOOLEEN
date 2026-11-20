@@ -4,10 +4,22 @@ use crate::fourier5_delta_refresh::{DeltaMeasure, DeltaOutcome};
 use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Split { Train, Valid, Test, Ood }
+pub enum Split {
+    Train,
+    Valid,
+    Test,
+    Ood,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AuditError { ZeroFullTime, Overflow, InvalidGeometry, OutOfOrder, InconsistentTiming, InvalidDecline }
+pub enum AuditError {
+    ZeroFullTime,
+    Overflow,
+    InvalidGeometry,
+    OutOfOrder,
+    InconsistentTiming,
+    InvalidDecline,
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Counters {
@@ -24,10 +36,14 @@ pub struct Counters {
 
 impl Counters {
     pub fn verified_cost_ns(&self) -> Option<u128> {
-        self.full_ns.checked_add(self.incremental_ns)?.checked_add(self.refresh_ns)
+        self.full_ns
+            .checked_add(self.incremental_ns)?
+            .checked_add(self.refresh_ns)
     }
     pub fn committed_per_second(&self) -> Option<f64> {
-        if self.elapsed_ns == 0 { return None; }
+        if self.elapsed_ns == 0 {
+            return None;
+        }
         Some(self.committed as f64 * 1_000_000_000.0 / self.elapsed_ns as f64)
     }
 }
@@ -50,7 +66,9 @@ pub struct SequentialAudit {
 }
 
 impl SequentialAudit {
-    pub fn totals(&self, split: Split) -> Counters { self.totals[index(split)] }
+    pub fn totals(&self, split: Split) -> Counters {
+        self.totals[index(split)]
+    }
 
     /// Validate and atomically incorporate a physically observed sample.
     /// Rejected samples cannot alter counters or ordering.
@@ -62,14 +80,16 @@ impl SequentialAudit {
         if self.last_sequence[i].is_some_and(|last| sample.sequence <= last) {
             return Err(AuditError::OutOfOrder);
         }
-        if sample.measure.outcome != DeltaOutcome::Declined
-            && sample.measure.full == Duration::ZERO {
+        if sample.measure.outcome != DeltaOutcome::Declined && sample.measure.full == Duration::ZERO
+        {
             return Err(AuditError::ZeroFullTime);
         }
         // Phase timings must fit the wall-clock measurement; otherwise the
         // reported throughput and verified cost cannot be trusted.
         let m = &sample.measure;
-        let phases = m.refresh.as_nanos()
+        let phases = m
+            .refresh
+            .as_nanos()
             .checked_add(m.full.as_nanos())
             .and_then(|v| v.checked_add(m.incremental.as_nanos()))
             .ok_or(AuditError::Overflow)?;
@@ -77,7 +97,8 @@ impl SequentialAudit {
             return Err(AuditError::InconsistentTiming);
         }
         if m.outcome == DeltaOutcome::Declined
-            && (m.full != Duration::ZERO || m.refresh != Duration::ZERO
+            && (m.full != Duration::ZERO
+                || m.refresh != Duration::ZERO
                 || m.incremental != Duration::ZERO)
         {
             return Err(AuditError::InvalidDecline);
@@ -85,14 +106,32 @@ impl SequentialAudit {
         let mut next = self.totals[i];
         next.attempted = next.attempted.checked_add(1).ok_or(AuditError::Overflow)?;
         match sample.measure.outcome {
-            DeltaOutcome::Committed => next.committed = next.committed.checked_add(1).ok_or(AuditError::Overflow)?,
-            DeltaOutcome::Declined => next.declined = next.declined.checked_add(1).ok_or(AuditError::Overflow)?,
-            DeltaOutcome::OracleMismatch => next.mismatched = next.mismatched.checked_add(1).ok_or(AuditError::Overflow)?,
+            DeltaOutcome::Committed => {
+                next.committed = next.committed.checked_add(1).ok_or(AuditError::Overflow)?
+            }
+            DeltaOutcome::Declined => {
+                next.declined = next.declined.checked_add(1).ok_or(AuditError::Overflow)?
+            }
+            DeltaOutcome::OracleMismatch => {
+                next.mismatched = next.mismatched.checked_add(1).ok_or(AuditError::Overflow)?
+            }
         }
-        next.full_ns = next.full_ns.checked_add(sample.measure.full.as_nanos()).ok_or(AuditError::Overflow)?;
-        next.incremental_ns = next.incremental_ns.checked_add(sample.measure.incremental.as_nanos()).ok_or(AuditError::Overflow)?;
-        next.refresh_ns = next.refresh_ns.checked_add(sample.measure.refresh.as_nanos()).ok_or(AuditError::Overflow)?;
-        next.elapsed_ns = next.elapsed_ns.checked_add(sample.measure.elapsed.as_nanos()).ok_or(AuditError::Overflow)?;
+        next.full_ns = next
+            .full_ns
+            .checked_add(sample.measure.full.as_nanos())
+            .ok_or(AuditError::Overflow)?;
+        next.incremental_ns = next
+            .incremental_ns
+            .checked_add(sample.measure.incremental.as_nanos())
+            .ok_or(AuditError::Overflow)?;
+        next.refresh_ns = next
+            .refresh_ns
+            .checked_add(sample.measure.refresh.as_nanos())
+            .ok_or(AuditError::Overflow)?;
+        next.elapsed_ns = next
+            .elapsed_ns
+            .checked_add(sample.measure.elapsed.as_nanos())
+            .ok_or(AuditError::Overflow)?;
         next.peak_vm_hwm_kib = next.peak_vm_hwm_kib.max(sample.vm_hwm_kib);
         self.totals[i] = next;
         self.last_sequence[i] = Some(sample.sequence);
@@ -119,7 +158,12 @@ impl SequentialAudit {
 }
 
 const fn index(split: Split) -> usize {
-    match split { Split::Train => 0, Split::Valid => 1, Split::Test => 2, Split::Ood => 3 }
+    match split {
+        Split::Train => 0,
+        Split::Valid => 1,
+        Split::Test => 2,
+        Split::Ood => 3,
+    }
 }
 
 /// Linux process high-water RSS, in KiB; unavailable elsewhere.
@@ -130,7 +174,11 @@ pub fn linux_vm_hwm_kib() -> Option<u64> {
         let value = line.strip_prefix("VmHWM:")?;
         let mut fields = value.split_whitespace();
         let number = fields.next()?.parse::<u64>().ok()?;
-        if fields.next()? == "kB" { Some(number) } else { None }
+        if fields.next()? == "kB" {
+            Some(number)
+        } else {
+            None
+        }
     })
 }
 
@@ -140,9 +188,14 @@ mod tests {
 
     fn sample(split: Split, sequence: u64, outcome: DeltaOutcome) -> PhysicalSample {
         PhysicalSample {
-            split, sequence, gates: 100, cone: 7, vm_hwm_kib: 1234,
+            split,
+            sequence,
+            gates: 100,
+            cone: 7,
+            vm_hwm_kib: 1234,
             measure: DeltaMeasure {
-                outcome, elapsed: Duration::from_nanos(20),
+                outcome,
+                elapsed: Duration::from_nanos(20),
                 refresh: Duration::from_nanos(3),
                 full: Duration::from_nanos(10),
                 incremental: Duration::from_nanos(4),
@@ -153,10 +206,14 @@ mod tests {
     #[test]
     fn holdouts_do_not_mutate_valid_accounting() {
         let mut audit = SequentialAudit::default();
-        audit.record(sample(Split::Valid, 0, DeltaOutcome::Committed)).unwrap();
+        audit
+            .record(sample(Split::Valid, 0, DeltaOutcome::Committed))
+            .unwrap();
         let frozen = audit.totals(Split::Valid);
         for split in [Split::Train, Split::Test, Split::Ood] {
-            audit.record(sample(split, 0, DeltaOutcome::OracleMismatch)).unwrap();
+            audit
+                .record(sample(split, 0, DeltaOutcome::OracleMismatch))
+                .unwrap();
         }
         assert_eq!(audit.totals(Split::Valid), frozen);
         assert_eq!(frozen.verified_cost_ns(), Some(17));
@@ -166,14 +223,21 @@ mod tests {
     #[test]
     fn invalid_and_reordered_samples_are_atomic() {
         let mut audit = SequentialAudit::default();
-        audit.record(sample(Split::Valid, 4, DeltaOutcome::Committed)).unwrap();
+        audit
+            .record(sample(Split::Valid, 4, DeltaOutcome::Committed))
+            .unwrap();
         let before = audit.totals(Split::Valid);
-        assert_eq!(audit.record(sample(Split::Valid, 4, DeltaOutcome::Committed)), Err(AuditError::OutOfOrder));
+        assert_eq!(
+            audit.record(sample(Split::Valid, 4, DeltaOutcome::Committed)),
+            Err(AuditError::OutOfOrder)
+        );
         let mut invalid = sample(Split::Valid, 5, DeltaOutcome::Committed);
         invalid.cone = 101;
         assert_eq!(audit.record(invalid), Err(AuditError::InvalidGeometry));
         assert_eq!(audit.totals(Split::Valid), before);
-        audit.record(sample(Split::Valid, 5, DeltaOutcome::Committed)).unwrap();
+        audit
+            .record(sample(Split::Valid, 5, DeltaOutcome::Committed))
+            .unwrap();
         assert_eq!(audit.totals(Split::Valid).attempted, 2);
     }
 
@@ -192,11 +256,13 @@ mod tests {
         );
         assert_eq!(audit.totals(Split::Train).attempted, 0);
         assert_eq!(audit.totals(Split::Valid).attempted, 0);
-        audit.record_batch([
-            sample(Split::Train, 0, DeltaOutcome::Committed),
-            sample(Split::Valid, 0, DeltaOutcome::Committed),
-            sample(Split::Valid, 1, DeltaOutcome::Committed),
-        ]).unwrap();
+        audit
+            .record_batch([
+                sample(Split::Train, 0, DeltaOutcome::Committed),
+                sample(Split::Valid, 0, DeltaOutcome::Committed),
+                sample(Split::Valid, 1, DeltaOutcome::Committed),
+            ])
+            .unwrap();
         assert_eq!(audit.totals(Split::Train).attempted, 1);
         assert_eq!(audit.totals(Split::Valid).attempted, 2);
     }
@@ -222,7 +288,9 @@ mod tests {
         let mut invalid = sample(Split::Test, 0, DeltaOutcome::Committed);
         invalid.measure.full = Duration::ZERO;
         assert_eq!(audit.record(invalid), Err(AuditError::ZeroFullTime));
-        audit.record(sample(Split::Test, 0, DeltaOutcome::Committed)).unwrap();
+        audit
+            .record(sample(Split::Test, 0, DeltaOutcome::Committed))
+            .unwrap();
         assert_eq!(audit.totals(Split::Test).full_ns, 10);
     }
 }
