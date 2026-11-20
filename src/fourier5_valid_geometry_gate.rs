@@ -105,7 +105,10 @@ mod tests {
 
     #[test]
     fn requires_distinct_covered_geometries() {
-        let target = Geometry { gates: 100, cone: 10 };
+        let target = Geometry {
+            gates: 100,
+            cone: 10,
+        };
         assert_eq!(
             choose_for_geometry(&[pair(12, 10), pair(12, 10)], target, 2, 2, 20),
             EngineChoice::Full
@@ -120,42 +123,87 @@ mod tests {
     fn never_extrapolates_to_larger_cone_or_different_gate_count() {
         let valid = [pair(12, 10), pair(20, 10)];
         assert_eq!(
-            choose_for_geometry(&valid, Geometry { gates: 100, cone: 21 }, 2, 2, 20),
+            choose_for_geometry(
+                &valid,
+                Geometry {
+                    gates: 100,
+                    cone: 21
+                },
+                2,
+                2,
+                20
+            ),
             EngineChoice::Full
         );
         assert_eq!(
-            choose_for_geometry(&valid, Geometry { gates: 101, cone: 10 }, 2, 2, 20),
+            choose_for_geometry(
+                &valid,
+                Geometry {
+                    gates: 101,
+                    cone: 10
+                },
+                2,
+                2,
+                20
+            ),
             EngineChoice::Full
         );
     }
 
     #[test]
     fn oracle_mismatch_and_cost_regression_fail_closed() {
-        let target = Geometry { gates: 100, cone: 10 };
+        let target = Geometry {
+            gates: 100,
+            cone: 10,
+        };
         let mut valid = [pair(12, 10), pair(20, 10)];
         valid[0].oracle_equal = false;
-        assert_eq!(choose_for_geometry(&valid, target, 2, 2, 20), EngineChoice::Full);
+        assert_eq!(
+            choose_for_geometry(&valid, target, 2, 2, 20),
+            EngineChoice::Full
+        );
         valid[0].oracle_equal = true;
         valid[0].incremental_refresh_ns = 300;
-        assert_eq!(choose_for_geometry(&valid, target, 2, 2, 20), EngineChoice::Full);
+        assert_eq!(
+            choose_for_geometry(&valid, target, 2, 2, 20),
+            EngineChoice::Full
+        );
     }
 
     #[test]
     fn pooled_gain_never_masks_one_slow_covered_cone() {
-        let target = Geometry { gates: 100, cone: 10 };
+        let target = Geometry {
+            gates: 100,
+            cone: 10,
+        };
         let valid = [pair(12, 1), pair(20, 101)];
         // Aggregate refresh is 102 ns versus 200 ns Full, but the
         // second cone regresses. Dispatch must remain Full.
-        assert_eq!(choose_for_geometry(&valid, target, 2, 2, 20), EngineChoice::Full);
+        assert_eq!(
+            choose_for_geometry(&valid, target, 2, 2, 20),
+            EngineChoice::Full
+        );
     }
 
     #[test]
     fn threshold_is_strict_and_invalid_policy_is_rejected() {
-        let target = Geometry { gates: 100, cone: 10 };
+        let target = Geometry {
+            gates: 100,
+            cone: 10,
+        };
         let valid = [pair(12, 80), pair(20, 80)];
-        assert_eq!(choose_for_geometry(&valid, target, 2, 2, 20), EngineChoice::Full);
-        assert_eq!(choose_for_geometry(&valid, target, 2, 2, 19), EngineChoice::Incremental);
-        assert_eq!(choose_for_geometry(&valid, target, 1, 2, 19), EngineChoice::Full);
+        assert_eq!(
+            choose_for_geometry(&valid, target, 2, 2, 20),
+            EngineChoice::Full
+        );
+        assert_eq!(
+            choose_for_geometry(&valid, target, 2, 2, 19),
+            EngineChoice::Incremental
+        );
+        assert_eq!(
+            choose_for_geometry(&valid, target, 1, 2, 19),
+            EngineChoice::Full
+        );
     }
 }
 
@@ -229,7 +277,10 @@ mod disjoint_tests {
 
     #[test]
     fn disjoint_valid_only_matches_independent_oracle() {
-        let target = Geometry { gates: 100, cone: 10 };
+        let target = Geometry {
+            gates: 100,
+            cone: 10,
+        };
         let data = [
             observation(1, Split::Train, 12),
             observation(2, Split::Valid, 12),
@@ -237,13 +288,7 @@ mod disjoint_tests {
             observation(4, Split::Test, 12),
             observation(5, Split::Ood, 20),
         ];
-        let expected = choose_for_geometry(
-            &[data[1].pair, data[2].pair],
-            target,
-            2,
-            2,
-            20,
-        );
+        let expected = choose_for_geometry(&[data[1].pair, data[2].pair], target, 2, 2, 20);
         assert_eq!(expected, EngineChoice::Incremental);
         assert_eq!(
             choose_with_disjoint_splits(&data, target, 2, 2, 20),
@@ -253,7 +298,10 @@ mod disjoint_tests {
 
     #[test]
     fn cross_split_identity_leakage_fails_closed() {
-        let target = Geometry { gates: 100, cone: 10 };
+        let target = Geometry {
+            gates: 100,
+            cone: 10,
+        };
         let data = [
             observation(7, Split::Train, 12),
             observation(7, Split::Valid, 12),
@@ -267,7 +315,10 @@ mod disjoint_tests {
 
     #[test]
     fn duplicated_valid_identity_is_not_independent_evidence() {
-        let target = Geometry { gates: 100, cone: 10 };
+        let target = Geometry {
+            gates: 100,
+            cone: 10,
+        };
         let data = [
             observation(7, Split::Valid, 12),
             observation(7, Split::Valid, 20),
@@ -280,7 +331,10 @@ mod disjoint_tests {
 
     #[test]
     fn train_test_ood_cannot_supply_missing_valid_coverage() {
-        let target = Geometry { gates: 100, cone: 10 };
+        let target = Geometry {
+            gates: 100,
+            cone: 10,
+        };
         let data = [
             observation(1, Split::Valid, 12),
             observation(2, Split::Train, 20),
@@ -371,7 +425,16 @@ mod grouped_tests {
             sample(3, 43, Split::Valid, 20),
         ];
         assert_eq!(
-            choose_with_disjoint_groups(&data, Geometry { gates: 100, cone: 10 }, 2, 2, 20),
+            choose_with_disjoint_groups(
+                &data,
+                Geometry {
+                    gates: 100,
+                    cone: 10
+                },
+                2,
+                2,
+                20
+            ),
             EngineChoice::Full
         );
     }
@@ -385,7 +448,16 @@ mod grouped_tests {
             sample(4, 43, Split::Test, 12),
         ];
         assert_eq!(
-            choose_with_disjoint_groups(&data, Geometry { gates: 100, cone: 10 }, 2, 2, 20),
+            choose_with_disjoint_groups(
+                &data,
+                Geometry {
+                    gates: 100,
+                    cone: 10
+                },
+                2,
+                2,
+                20
+            ),
             EngineChoice::Incremental
         );
     }
@@ -401,7 +473,16 @@ mod grouped_tests {
             data.iter().map(|row| row.group_id).collect();
         assert_eq!(distinct_groups.len(), 1);
         assert_eq!(
-            choose_with_disjoint_groups(&data, Geometry { gates: 100, cone: 10 }, 2, 2, 20),
+            choose_with_disjoint_groups(
+                &data,
+                Geometry {
+                    gates: 100,
+                    cone: 10
+                },
+                2,
+                2,
+                20
+            ),
             EngineChoice::Full
         );
     }
@@ -413,12 +494,20 @@ mod grouped_tests {
             sample(2, 42, Split::Valid, 20),
         ];
         assert_eq!(
-            choose_with_disjoint_groups(&data, Geometry { gates: 100, cone: 10 }, 2, 2, 20),
+            choose_with_disjoint_groups(
+                &data,
+                Geometry {
+                    gates: 100,
+                    cone: 10
+                },
+                2,
+                2,
+                20
+            ),
             EngineChoice::Full
         );
     }
 }
-
 
 /// Conservative group-balanced admission: every independent VALID workload group
 /// must independently meet the requested saving margin on every covered sample.
@@ -438,7 +527,8 @@ pub fn choose_with_group_balanced_margin(
         minimum_distinct,
         minimum_samples,
         minimum_saving_percent,
-    ) != EngineChoice::Incremental {
+    ) != EngineChoice::Incremental
+    {
         return EngineChoice::Full;
     }
     let mut covered_groups = std::collections::HashSet::new();
@@ -454,8 +544,7 @@ pub fn choose_with_group_balanced_margin(
         covered_groups.insert(grouped.group_id);
         // Use checked integer arithmetic, strict improvement and no rounding.
         let lhs = u128::from(pair.incremental_refresh_ns).checked_mul(100);
-        let rhs = u128::from(pair.full_ns)
-            .checked_mul(u128::from(100 - minimum_saving_percent));
+        let rhs = u128::from(pair.full_ns).checked_mul(u128::from(100 - minimum_saving_percent));
         if !matches!((lhs, rhs), (Some(a), Some(b)) if a < b) {
             return EngineChoice::Full;
         }
@@ -491,13 +580,18 @@ mod balanced_margin_tests {
     fn large_fast_group_cannot_mask_slow_independent_group() {
         let mut data: Vec<_> = (0..20).map(|i| row(i, 1, 12, 1)).collect();
         data.push(row(21, 2, 20, 95));
-        let target = Geometry { gates: 100, cone: 10 };
+        let target = Geometry {
+            gates: 100,
+            cone: 10,
+        };
         assert_eq!(
             choose_with_disjoint_groups(&data, target, 2, 2, 20),
             EngineChoice::Incremental
         );
-        // Independent scalar oracle: 95 * 100 >= 100 * (100 - 20).
-        assert!(95_u128 * 100 >= 100_u128 * 80);
+        // Independent scalar oracle on the slow group's sample:
+        // 95 * 100 >= 100 * (100 - 20), so its saving misses the margin.
+        let slow = data.last().expect("slow group sample").observation.pair;
+        assert!(u128::from(slow.incremental_refresh_ns) * 100 >= u128::from(slow.full_ns) * 80);
         assert_eq!(
             choose_with_group_balanced_margin(&data, target, 2, 2, 20),
             EngineChoice::Full
@@ -510,7 +604,10 @@ mod balanced_margin_tests {
         assert_eq!(
             choose_with_group_balanced_margin(
                 &data,
-                Geometry { gates: 100, cone: 10 },
+                Geometry {
+                    gates: 100,
+                    cone: 10
+                },
                 2,
                 2,
                 20
@@ -525,7 +622,10 @@ mod balanced_margin_tests {
         assert_eq!(
             choose_with_group_balanced_margin(
                 &data,
-                Geometry { gates: 100, cone: 10 },
+                Geometry {
+                    gates: 100,
+                    cone: 10
+                },
                 2,
                 2,
                 20
@@ -534,7 +634,6 @@ mod balanced_margin_tests {
         );
     }
 }
-
 
 /// One *sequential* accepted or rejected intervention. Costs include any
 /// cache reconstruction or refresh performed after an accepted intervention.
@@ -559,10 +658,7 @@ pub fn choose_for_sequential_costs(
     minimum_steps: usize,
     minimum_saving_percent: u8,
 ) -> EngineChoice {
-    if minimum_steps == 0
-        || valid_sequence.len() < minimum_steps
-        || minimum_saving_percent > 100
-    {
+    if minimum_steps == 0 || valid_sequence.len() < minimum_steps || minimum_saving_percent > 100 {
         return EngineChoice::Full;
     }
     let mut full = 0_u128;
@@ -579,8 +675,8 @@ pub fn choose_for_sequential_costs(
             return EngineChoice::Full;
         };
         full = next_full;
-        let Some(step_cost) = u128::from(step.incremental_ns)
-            .checked_add(u128::from(step.cache_update_ns))
+        let Some(step_cost) =
+            u128::from(step.incremental_ns).checked_add(u128::from(step.cache_update_ns))
         else {
             return EngineChoice::Full;
         };
@@ -620,32 +716,59 @@ mod sequential_cost_tests {
     #[test]
     fn accepted_refresh_is_charged_and_can_reverse_dispatch() {
         let valid = [step(100, 10, 95, true), step(100, 10, 0, false)];
-        assert_eq!(choose_for_sequential_costs(&valid, 2, 20), EngineChoice::Full);
+        assert_eq!(
+            choose_for_sequential_costs(&valid, 2, 20),
+            EngineChoice::Full
+        );
         let fast = [step(100, 10, 20, true), step(100, 10, 0, false)];
-        assert_eq!(choose_for_sequential_costs(&fast, 2, 20), EngineChoice::Incremental);
+        assert_eq!(
+            choose_for_sequential_costs(&fast, 2, 20),
+            EngineChoice::Incremental
+        );
     }
 
     #[test]
     fn prefix_regression_is_not_hidden_by_later_fast_steps() {
         let valid = [step(100, 101, 0, true), step(1000, 1, 0, false)];
-        assert_eq!(choose_for_sequential_costs(&valid, 2, 20), EngineChoice::Full);
+        assert_eq!(
+            choose_for_sequential_costs(&valid, 2, 20),
+            EngineChoice::Full
+        );
     }
 
     #[test]
     fn rejected_refresh_and_oracle_mismatch_fail_closed() {
         let bad_refresh = [step(100, 1, 1, false)];
-        assert_eq!(choose_for_sequential_costs(&bad_refresh, 1, 0), EngineChoice::Full);
+        assert_eq!(
+            choose_for_sequential_costs(&bad_refresh, 1, 0),
+            EngineChoice::Full
+        );
         let mut mismatch = [step(100, 1, 1, true)];
         mismatch[0].exact_state_equal = false;
-        assert_eq!(choose_for_sequential_costs(&mismatch, 1, 0), EngineChoice::Full);
+        assert_eq!(
+            choose_for_sequential_costs(&mismatch, 1, 0),
+            EngineChoice::Full
+        );
     }
 
     #[test]
     fn strict_boundary_and_invalid_configuration() {
         let valid = [step(100, 80, 0, true)];
-        assert_eq!(choose_for_sequential_costs(&valid, 1, 20), EngineChoice::Full);
-        assert_eq!(choose_for_sequential_costs(&valid, 1, 19), EngineChoice::Incremental);
-        assert_eq!(choose_for_sequential_costs(&valid, 0, 19), EngineChoice::Full);
-        assert_eq!(choose_for_sequential_costs(&valid, 1, 101), EngineChoice::Full);
+        assert_eq!(
+            choose_for_sequential_costs(&valid, 1, 20),
+            EngineChoice::Full
+        );
+        assert_eq!(
+            choose_for_sequential_costs(&valid, 1, 19),
+            EngineChoice::Incremental
+        );
+        assert_eq!(
+            choose_for_sequential_costs(&valid, 0, 19),
+            EngineChoice::Full
+        );
+        assert_eq!(
+            choose_for_sequential_costs(&valid, 1, 101),
+            EngineChoice::Full
+        );
     }
 }

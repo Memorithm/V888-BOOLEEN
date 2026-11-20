@@ -58,9 +58,7 @@ mod tests {
             (0_u32, 0_u32),
             &[1_u32, 2, 3],
             |&(out, epoch), &delta| Ok::<_, ()>((out + delta, epoch + 1)),
-            |&(out, epoch), &delta| {
-                Ok::<_, ()>((out + delta, epoch + u32::from(delta != 2)))
-            },
+            |&(out, epoch), &delta| Ok::<_, ()>((out + delta, epoch + u32::from(delta != 2))),
         );
         assert_eq!(state, (6, 3));
         assert_eq!(
@@ -79,10 +77,18 @@ mod tests {
             0_i32,
             &[1, 2, 3, 4],
             |&state, &delta| {
-                if delta == 2 { Err(()) } else { Ok(state + delta) }
+                if delta == 2 {
+                    Err(())
+                } else {
+                    Ok(state + delta)
+                }
             },
             |&state, &delta| {
-                if delta == 3 { Err(()) } else { Ok(state + delta) }
+                if delta == 3 {
+                    Err(())
+                } else {
+                    Ok(state + delta)
+                }
             },
         );
         assert_eq!(state, 8);
@@ -104,7 +110,11 @@ mod tests {
             0_i64,
             &inputs,
             |&state, &delta| {
-                if delta == 0 { Err(()) } else { Ok(state + delta) }
+                if delta == 0 {
+                    Err(())
+                } else {
+                    Ok(state + delta)
+                }
             },
             |&state, &delta| Ok::<_, ()>(state + delta + i64::from(delta == 7)),
         );
