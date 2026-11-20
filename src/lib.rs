@@ -330,3 +330,6 @@ pub mod fourier5_valid_dispatch;
 
 /// Paired heterogeneous sequential state/cache audit with VmHWM reporting.
 pub mod fourier5_sequential_workload_audit;
+
+/// Full-authoritative recovery of sequential synthetic cache state after mismatch.
+pub mod fourier5_sequential_full_recovery;
