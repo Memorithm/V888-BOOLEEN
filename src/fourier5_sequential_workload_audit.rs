@@ -78,9 +78,89 @@ where
     (accepted, report)
 }
 
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WorkloadSummary {
+    pub accepted: usize,
+    pub mismatches: usize,
+    pub full_errors: usize,
+    pub incremental_errors: usize,
+    pub full_nanos: u128,
+    pub incremental_nanos: u128,
+    /// Process-wide high-water mark; not the allocation of this workload.
+    pub process_peak_rss_kib: Option<u64>,
+}
+
+/// Aggregate a heterogeneous sequence without hiding rejected interventions.
+/// Returns None on arithmetic overflow rather than publishing a partial total.
+/// Durations include all attempted steps, not only successful interventions.
+#[must_use]
+pub fn summarize_workload(rows: &[StepMeasurement]) -> Option<WorkloadSummary> {
+    let mut summary = WorkloadSummary::default();
+    for row in rows {
+        let count = match row.verdict {
+            StepVerdict::Accepted => &mut summary.accepted,
+            StepVerdict::Mismatch => &mut summary.mismatches,
+            StepVerdict::FullError => &mut summary.full_errors,
+            StepVerdict::IncrementalError => &mut summary.incremental_errors,
+        };
+        *count = count.checked_add(1)?;
+        summary.full_nanos = summary.full_nanos.checked_add(row.full.as_nanos())?;
+        summary.incremental_nanos = summary
+            .incremental_nanos
+            .checked_add(row.incremental_with_refresh.as_nanos())?;
+        summary.process_peak_rss_kib = match (summary.process_peak_rss_kib, row.peak_rss_kib) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (Some(a), None) => Some(a),
+            (None, value) => value,
+        };
+    }
+    Some(summary)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn summary_includes_rejections_in_paired_cost_and_peak() {
+        let rows = [
+            StepMeasurement {
+                verdict: StepVerdict::Accepted,
+                full: Duration::from_nanos(10),
+                incremental_with_refresh: Duration::from_nanos(3),
+                peak_rss_kib: Some(1024),
+            },
+            StepMeasurement {
+                verdict: StepVerdict::Mismatch,
+                full: Duration::from_nanos(20),
+                incremental_with_refresh: Duration::from_nanos(8),
+                peak_rss_kib: Some(2048),
+            },
+            StepMeasurement {
+                verdict: StepVerdict::FullError,
+                full: Duration::from_nanos(5),
+                incremental_with_refresh: Duration::from_nanos(7),
+                peak_rss_kib: None,
+            },
+            StepMeasurement {
+                verdict: StepVerdict::IncrementalError,
+                full: Duration::from_nanos(9),
+                incremental_with_refresh: Duration::from_nanos(4),
+                peak_rss_kib: Some(512),
+            },
+        ];
+        let summary = summarize_workload(&rows).unwrap();
+        assert_eq!((summary.accepted, summary.mismatches, summary.full_errors, summary.incremental_errors), (1, 1, 1, 1));
+        assert_eq!((summary.full_nanos, summary.incremental_nanos), (44, 22));
+        assert_eq!(summary.process_peak_rss_kib, Some(2048));
+    }
+
+    #[test]
+    fn empty_summary_has_no_invented_memory_measurement() {
+        assert_eq!(summarize_workload(&[]), Some(WorkloadSummary::default()));
+    }
+
 
     #[test]
     fn independent_oracle_rejects_stale_internal_cache_even_if_output_matches() {
