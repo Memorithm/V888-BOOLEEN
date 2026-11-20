@@ -772,3 +772,97 @@ mod sequential_cost_tests {
         );
     }
 }
+
+
+/// A measured VALID sequential workload, including the peak resident memory
+/// observed for each engine. VmHWM values are in KiB, not bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SequentialMemorySample {
+    pub cost: SequentialCost,
+    pub full_vmhwm_kib: u64,
+    pub incremental_vmhwm_kib: u64,
+}
+
+/// Conservative dispatch for heterogeneous sequential workloads: every
+/// prefix must remain faster, exact-state equality is mandatory, and the
+/// incremental peak must fit the declared memory ceiling. Peak RSS is
+/// compared per paired run; it is not summed across sequential steps.
+/// Memory figures must come from isolated, identically bounded runs.
+#[must_use]
+pub fn choose_for_sequential_memory(
+    valid: &[SequentialMemorySample],
+    minimum_steps: usize,
+    minimum_saving_percent: u8,
+    max_incremental_vmhwm_kib: u64,
+) -> EngineChoice {
+    if max_incremental_vmhwm_kib == 0 {
+        return EngineChoice::Full;
+    }
+    let mut costs = Vec::with_capacity(valid.len());
+    for sample in valid {
+        if sample.full_vmhwm_kib == 0
+            || sample.incremental_vmhwm_kib == 0
+            || sample.incremental_vmhwm_kib > max_incremental_vmhwm_kib
+        {
+            return EngineChoice::Full;
+        }
+        costs.push(sample.cost);
+    }
+    choose_for_sequential_costs(&costs, minimum_steps, minimum_saving_percent)
+}
+
+#[cfg(test)]
+mod sequential_memory_tests {
+    use super::*;
+
+    fn sample(full: u64, incremental: u64, refresh: u64, rss: u64) -> SequentialMemorySample {
+        SequentialMemorySample {
+            cost: SequentialCost {
+                full_ns: full,
+                incremental_ns: incremental,
+                cache_update_ns: refresh,
+                accepted: true,
+                exact_state_equal: true,
+            },
+            full_vmhwm_kib: 100,
+            incremental_vmhwm_kib: rss,
+        }
+    }
+
+    #[test]
+    fn heterogeneous_sequence_admitted_with_exact_refresh_cost_and_memory() {
+        let data = [sample(100, 10, 20, 120), sample(500, 100, 30, 140)];
+        assert_eq!(
+            choose_for_sequential_memory(&data, 2, 20, 150),
+            EngineChoice::Incremental
+        );
+    }
+
+    #[test]
+    fn peak_memory_exceeding_limit_forces_full_despite_speedup() {
+        let data = [sample(100, 1, 1, 151), sample(500, 1, 1, 140)];
+        assert_eq!(
+            choose_for_sequential_memory(&data, 2, 20, 150),
+            EngineChoice::Full
+        );
+    }
+
+    #[test]
+    fn missing_memory_measurement_fails_closed() {
+        let data = [sample(100, 1, 1, 0)];
+        assert_eq!(
+            choose_for_sequential_memory(&data, 1, 20, 150),
+            EngineChoice::Full
+        );
+    }
+
+    #[test]
+    fn exact_state_oracle_mismatch_overrides_memory_and_speed() {
+        let mut data = [sample(100, 1, 1, 120)];
+        data[0].cost.exact_state_equal = false;
+        assert_eq!(
+            choose_for_sequential_memory(&data, 1, 20, 150),
+            EngineChoice::Full
+        );
+    }
+}
