@@ -82,11 +82,7 @@ impl PackedGf4Linear {
     /// Both shapes are rejected before writing the first destination lane.
     /// After construction every row has an invariant width, so all field
     /// products and writes are valid throughout this loop.
-    pub fn apply_xor(
-        &self,
-        input: &PackedQ2,
-        output: &mut PackedQ2,
-    ) -> Result<(), Q2Error> {
+    pub fn apply_xor(&self, input: &PackedQ2, output: &mut PackedQ2) -> Result<(), Q2Error> {
         if input.len() != self.input_len || output.len() != self.rows.len() {
             return Err(Q2Error::LengthMismatch);
         }
@@ -107,8 +103,7 @@ mod tests {
         let a1 = a >> 1;
         let b0 = b & 1;
         let b1 = b >> 1;
-        ((a0 & b0) ^ (a1 & b1))
-            | (((a0 & b1) ^ (a1 & b0) ^ (a1 & b1)) << 1)
+        ((a0 & b0) ^ (a1 & b1)) | (((a0 & b1) ^ (a1 & b0) ^ (a1 & b1)) << 1)
     }
 
     fn scalar_dot(row: &[u8], input: &[u8]) -> u8 {
@@ -192,13 +187,12 @@ mod tests {
         let empty_rows = PackedGf4Linear::from_rows(65, Vec::new()).unwrap();
         assert!(empty_rows.apply(&PackedQ2::new(65)).unwrap().is_empty());
 
-        let zero_input_rows = PackedGf4Linear::from_rows(
-            0,
-            vec![PackedQ2::new(0), PackedQ2::new(0)],
-        )
-        .unwrap();
-        assert_eq!(zero_input_rows.apply(&PackedQ2::new(0)),
-            Ok(PackedQ2::from_levels(&[0, 0]).unwrap()));
+        let zero_input_rows =
+            PackedGf4Linear::from_rows(0, vec![PackedQ2::new(0), PackedQ2::new(0)]).unwrap();
+        assert_eq!(
+            zero_input_rows.apply(&PackedQ2::new(0)),
+            Ok(PackedQ2::from_levels(&[0, 0]).unwrap())
+        );
     }
 
     #[test]
@@ -263,16 +257,8 @@ mod tests {
 
     #[test]
     fn composition_checks_dimensions_and_does_not_mutate_operands() {
-        let earlier = PackedGf4Linear::from_rows(
-            65,
-            vec![PackedQ2::new(65); 3],
-        )
-        .unwrap();
-        let later = PackedGf4Linear::from_rows(
-            2,
-            vec![PackedQ2::new(2); 4],
-        )
-        .unwrap();
+        let earlier = PackedGf4Linear::from_rows(65, vec![PackedQ2::new(65); 3]).unwrap();
+        let later = PackedGf4Linear::from_rows(2, vec![PackedQ2::new(2); 4]).unwrap();
         let before_earlier = earlier.clone();
         let before_later = later.clone();
         assert_eq!(later.compose(&earlier), Err(Q2Error::LengthMismatch));
@@ -302,11 +288,8 @@ mod tests {
             PackedGf4Linear::from_rows(64, rows),
             Err(Q2Error::LengthMismatch)
         ));
-        let matrix = PackedGf4Linear::from_rows(
-            65,
-            vec![PackedQ2::new(65), PackedQ2::new(65)],
-        )
-        .unwrap();
+        let matrix =
+            PackedGf4Linear::from_rows(65, vec![PackedQ2::new(65), PackedQ2::new(65)]).unwrap();
         let mut output = PackedQ2::from_levels(&[1, 3]).unwrap();
         let before = output.clone();
         assert_eq!(
@@ -318,6 +301,9 @@ mod tests {
             matrix.apply_xor(&PackedQ2::new(65), &mut PackedQ2::new(1)),
             Err(Q2Error::LengthMismatch)
         );
-        assert_eq!(matrix.apply(&PackedQ2::new(64)), Err(Q2Error::LengthMismatch));
+        assert_eq!(
+            matrix.apply(&PackedQ2::new(64)),
+            Err(Q2Error::LengthMismatch)
+        );
     }
 }
