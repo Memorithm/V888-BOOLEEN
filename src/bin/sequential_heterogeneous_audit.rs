@@ -419,12 +419,13 @@ mod tests {
     #[test]
     fn verified_sequential_cost_exceeds_paid_full_on_each_positive_probe() {
         let csv = format!(
-            "{HEADER}VALID,1,0,100,2,100,10,5,0,0,1,1,10\nVALID,2,1,100,2,100,20,30,1,1,1,1,10\n"
+            "{HEADER}VALID,1,0,100,2,100,10,5,0,1,1,1,10\nVALID,2,1,100,2,100,20,30,1,1,1,1,10\n"
         );
         let t = audit(csv.as_bytes()).unwrap();
         assert_eq!(t[1].verified_sequential, 265);
         assert!(t[1].verified_sequential > t[1].full);
         assert_eq!(t[1].fallback_count, 1);
+        assert_eq!(t[1].output_mismatch, 1);
     }
 
     #[test]
