@@ -42,11 +42,7 @@ fn two_pass(
     start.elapsed().as_nanos() / repetitions as u128
 }
 
-fn precomposed(
-    fused: &PackedGf4Linear,
-    input: &PackedQ2,
-    repetitions: usize,
-) -> u128 {
+fn precomposed(fused: &PackedGf4Linear, input: &PackedQ2, repetitions: usize) -> u128 {
     let start = Instant::now();
     for _ in 0..repetitions {
         let output = black_box(fused.apply(black_box(input)).expect("valid fused layer"));
