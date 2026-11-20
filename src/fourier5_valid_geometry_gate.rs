@@ -57,7 +57,7 @@ pub fn choose_for_geometry(
         if pair.geometry.gates != target.gates || pair.geometry.cone < target.cone {
             continue;
         }
-        samples = match samples.checked_add(1) {
+        // A pooled speedup can hide a slow cone. Reject any measured\n        // geometry whose incremental refresh is not strictly faster.\n        if pair.full_ns == 0 || pair.incremental_refresh_ns >= pair.full_ns {\n            return EngineChoice::Full;\n        }\n        samples = match samples.checked_add(1) {
             Some(value) => value,
             None => return EngineChoice::Full,
         };
