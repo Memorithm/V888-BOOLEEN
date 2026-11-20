@@ -534,3 +534,118 @@ mod balanced_margin_tests {
         );
     }
 }
+
+
+/// One *sequential* accepted or rejected intervention. Costs include any
+/// cache reconstruction or refresh performed after an accepted intervention.
+/// The oracle must compare the complete resulting state, not only outputs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SequentialCost {
+    pub full_ns: u64,
+    pub incremental_ns: u64,
+    pub cache_update_ns: u64,
+    pub accepted: bool,
+    pub exact_state_equal: bool,
+}
+
+/// Admit incremental execution only if the entire VALID sequence, including
+/// post-acceptance cache maintenance, beats Full by a strict integer margin.
+/// Rejected interventions still count as attempted work. This is deliberately
+/// independent of the per-geometry gate; callers must satisfy *both* gates.
+/// No timings from TEST/OOD may be passed to this function.
+#[must_use]
+pub fn choose_for_sequential_costs(
+    valid_sequence: &[SequentialCost],
+    minimum_steps: usize,
+    minimum_saving_percent: u8,
+) -> EngineChoice {
+    if minimum_steps == 0
+        || valid_sequence.len() < minimum_steps
+        || minimum_saving_percent > 100
+    {
+        return EngineChoice::Full;
+    }
+    let mut full = 0_u128;
+    let mut incremental = 0_u128;
+    for step in valid_sequence {
+        if !step.exact_state_equal || step.full_ns == 0 {
+            return EngineChoice::Full;
+        }
+        // Rejected edits must not trigger post-acceptance reconstruction.
+        if !step.accepted && step.cache_update_ns != 0 {
+            return EngineChoice::Full;
+        }
+        let Some(next_full) = full.checked_add(u128::from(step.full_ns)) else {
+            return EngineChoice::Full;
+        };
+        full = next_full;
+        let Some(step_cost) = u128::from(step.incremental_ns)
+            .checked_add(u128::from(step.cache_update_ns))
+        else {
+            return EngineChoice::Full;
+        };
+        let Some(next_incremental) = incremental.checked_add(step_cost) else {
+            return EngineChoice::Full;
+        };
+        incremental = next_incremental;
+        // Fail closed on a prefix regression: a late fast step cannot hide
+        // earlier sequential stalls.
+        if incremental >= full {
+            return EngineChoice::Full;
+        }
+    }
+    let lhs = incremental.checked_mul(100);
+    let rhs = full.checked_mul(u128::from(100 - minimum_saving_percent));
+    if matches!((lhs, rhs), (Some(a), Some(b)) if a < b) {
+        EngineChoice::Incremental
+    } else {
+        EngineChoice::Full
+    }
+}
+
+#[cfg(test)]
+mod sequential_cost_tests {
+    use super::*;
+
+    fn step(full: u64, incremental: u64, refresh: u64, accepted: bool) -> SequentialCost {
+        SequentialCost {
+            full_ns: full,
+            incremental_ns: incremental,
+            cache_update_ns: refresh,
+            accepted,
+            exact_state_equal: true,
+        }
+    }
+
+    #[test]
+    fn accepted_refresh_is_charged_and_can_reverse_dispatch() {
+        let valid = [step(100, 10, 95, true), step(100, 10, 0, false)];
+        assert_eq!(choose_for_sequential_costs(&valid, 2, 20), EngineChoice::Full);
+        let fast = [step(100, 10, 20, true), step(100, 10, 0, false)];
+        assert_eq!(choose_for_sequential_costs(&fast, 2, 20), EngineChoice::Incremental);
+    }
+
+    #[test]
+    fn prefix_regression_is_not_hidden_by_later_fast_steps() {
+        let valid = [step(100, 101, 0, true), step(1000, 1, 0, false)];
+        assert_eq!(choose_for_sequential_costs(&valid, 2, 20), EngineChoice::Full);
+    }
+
+    #[test]
+    fn rejected_refresh_and_oracle_mismatch_fail_closed() {
+        let bad_refresh = [step(100, 1, 1, false)];
+        assert_eq!(choose_for_sequential_costs(&bad_refresh, 1, 0), EngineChoice::Full);
+        let mut mismatch = [step(100, 1, 1, true)];
+        mismatch[0].exact_state_equal = false;
+        assert_eq!(choose_for_sequential_costs(&mismatch, 1, 0), EngineChoice::Full);
+    }
+
+    #[test]
+    fn strict_boundary_and_invalid_configuration() {
+        let valid = [step(100, 80, 0, true)];
+        assert_eq!(choose_for_sequential_costs(&valid, 1, 20), EngineChoice::Full);
+        assert_eq!(choose_for_sequential_costs(&valid, 1, 19), EngineChoice::Incremental);
+        assert_eq!(choose_for_sequential_costs(&valid, 0, 19), EngineChoice::Full);
+        assert_eq!(choose_for_sequential_costs(&valid, 1, 101), EngineChoice::Full);
+    }
+}
