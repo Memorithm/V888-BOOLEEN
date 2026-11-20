@@ -327,3 +327,6 @@ pub mod fourier5_delta_physical_audit;
 
 /// Conservative VALID-calibrated Full/Incremental dispatch.
 pub mod fourier5_valid_dispatch;
+
+/// Paired heterogeneous sequential state/cache audit with VmHWM reporting.
+pub mod fourier5_sequential_workload_audit;
