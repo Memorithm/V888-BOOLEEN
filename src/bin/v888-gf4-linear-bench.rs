@@ -64,7 +64,7 @@ fn run_case(inputs: usize, hidden: usize, outputs: usize, repetitions: usize) {
     let compose_ns = build_start.elapsed().as_nanos();
     let intermediate = first.apply(&input).expect("first layer");
     let expected = second.apply(&intermediate).expect("second layer");
-    assert_eq!(fused.apply(&input), Ok(expected));
+    assert_eq!(fused.apply(&input).expect("fused layer"), expected);
 
     // Alternate measurement order to reduce a fixed first-path advantage.
     let mut baseline_samples = Vec::with_capacity(7);
