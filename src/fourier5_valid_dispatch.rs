@@ -84,6 +84,23 @@ impl ValidDispatch {
         Ok(())
     }
 
+    /// Atomically ingest a heterogeneous VALID batch. No bucket is modified
+    /// if any observation is invalid or a counter overflows.
+    ///
+    /// Each tuple is (gates, affected cone, Full ns, Incremental+refresh ns,
+    /// exact Full-oracle equality). Holdout observations are not admissible.
+    pub fn observe_valid_batch(
+        &mut self,
+        observations: &[(u64, u64, u64, u64, bool)],
+    ) -> Result<(), PolicyError> {
+        let mut candidate = self.clone();
+        for &(gates, cone, full_ns, incremental_ns, equal) in observations {
+            candidate.observe_valid(gates, cone, full_ns, incremental_ns, equal)?;
+        }
+        *self = candidate;
+        Ok(())
+    }
+
     /// Dispatch from a frozen VALID calibration; no holdout feedback.
     #[must_use]
     pub fn choose(&self, gates: u64, cone: u64) -> EngineChoice {
@@ -162,6 +179,38 @@ mod tests {
         policy.observe_valid(10_000, 5_000, 100, 10, true).unwrap();
         assert_eq!(policy.choose(10_000, 5_000), EngineChoice::Incremental);
         assert_eq!(policy.choose(10_000, 5_001), EngineChoice::Full);
+    }
+
+    #[test]
+    fn heterogeneous_valid_batch_commits_all_buckets() {
+        let mut policy = ValidDispatch::new(1, 10);
+        policy
+            .observe_valid_batch(&[
+                (10_000, 100, 100, 20, true),
+                (10_000, 500, 100, 20, true),
+            ])
+            .unwrap();
+        assert_eq!(policy.choose(10_000, 100), EngineChoice::Incremental);
+        assert_eq!(policy.choose(10_000, 500), EngineChoice::Incremental);
+    }
+
+    #[test]
+    fn invalid_late_valid_observation_rolls_back_earlier_buckets() {
+        let mut policy = ValidDispatch::new(1, 10);
+        policy
+            .observe_valid(10_000, 100, 100, 20, true)
+            .unwrap();
+        let original = policy.clone();
+        assert_eq!(
+            policy.observe_valid_batch(&[
+                (10_000, 500, 100, 20, true),
+                (10_000, 100, 100, 0, true),
+            ]),
+            Err(PolicyError::ZeroDuration)
+        );
+        assert_eq!(policy.bins, original.bins);
+        assert_eq!(policy.choose(10_000, 500), EngineChoice::Full);
+        assert_eq!(policy.choose(10_000, 100), EngineChoice::Incremental);
     }
 
     #[test]
