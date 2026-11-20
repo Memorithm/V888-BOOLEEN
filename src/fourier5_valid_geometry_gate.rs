@@ -291,3 +291,106 @@ mod disjoint_tests {
         );
     }
 }
+
+/// Group-level holdout: correlated interventions must never cross splits.
+/// A group may contain multiple distinct samples within one split.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GroupedSplitPair {
+    pub group_id: u64,
+    pub observation: SplitPair,
+}
+
+/// Reject correlated cross-partition workloads before calibrating on VALID.
+/// Group identifiers must derive from original workloads, not split positions.
+#[must_use]
+pub fn choose_with_disjoint_groups(
+    observations: &[GroupedSplitPair],
+    target: Geometry,
+    minimum_distinct: usize,
+    minimum_samples: usize,
+    minimum_saving_percent: u8,
+) -> EngineChoice {
+    let mut groups = std::collections::HashMap::new();
+    let mut ids = std::collections::HashSet::new();
+    let mut valid = Vec::new();
+    for grouped in observations {
+        let observation = grouped.observation;
+        if !ids.insert(observation.sample_id) {
+            return EngineChoice::Full;
+        }
+        match groups.insert(grouped.group_id, observation.split) {
+            Some(previous) if previous != observation.split => return EngineChoice::Full,
+            _ => {}
+        }
+        if observation.split == Split::Valid {
+            valid.push(observation.pair);
+        }
+    }
+    choose_for_geometry(
+        &valid,
+        target,
+        minimum_distinct,
+        minimum_samples,
+        minimum_saving_percent,
+    )
+}
+
+#[cfg(test)]
+mod grouped_tests {
+    use super::*;
+
+    fn sample(id: u64, group: u64, split: Split, cone: u64) -> GroupedSplitPair {
+        GroupedSplitPair {
+            group_id: group,
+            observation: SplitPair {
+                sample_id: id,
+                split,
+                pair: ValidPair {
+                    geometry: Geometry { gates: 100, cone },
+                    full_ns: 100,
+                    incremental_refresh_ns: 20,
+                    oracle_equal: true,
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn correlated_cross_split_samples_fail_closed() {
+        let data = [
+            sample(1, 42, Split::Train, 12),
+            sample(2, 42, Split::Valid, 12),
+            sample(3, 43, Split::Valid, 20),
+        ];
+        assert_eq!(
+            choose_with_disjoint_groups(&data, Geometry { gates: 100, cone: 10 }, 2, 2, 20),
+            EngineChoice::Full
+        );
+    }
+
+    #[test]
+    fn distinct_groups_allow_valid_dispatch() {
+        let data = [
+            sample(1, 41, Split::Train, 12),
+            sample(2, 42, Split::Valid, 12),
+            sample(3, 42, Split::Valid, 20),
+            sample(4, 43, Split::Test, 12),
+        ];
+        assert_eq!(
+            choose_with_disjoint_groups(&data, Geometry { gates: 100, cone: 10 }, 2, 2, 20),
+            EngineChoice::Incremental
+        );
+    }
+
+    #[test]
+    fn duplicate_sample_in_same_group_fails_closed() {
+        let data = [
+            sample(2, 42, Split::Valid, 12),
+            sample(2, 42, Split::Valid, 20),
+        ];
+        assert_eq!(
+            choose_with_disjoint_groups(&data, Geometry { gates: 100, cone: 10 }, 2, 2, 20),
+            EngineChoice::Full
+        );
+    }
+}
