@@ -330,8 +330,13 @@ pub fn choose_with_disjoint_groups(
             _ => {}
         }
         if observation.split == Split::Valid {
+            valid_groups.insert(grouped.group_id);
             valid.push(observation.pair);
         }
+    }
+    // Geometry diversity is not evidence of independent workload coverage.
+    if valid_groups.len() < minimum_distinct {
+        return EngineChoice::Full;
     }
     choose_for_geometry(
         &valid,
