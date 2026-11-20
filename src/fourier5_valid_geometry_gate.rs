@@ -57,7 +57,12 @@ pub fn choose_for_geometry(
         if pair.geometry.gates != target.gates || pair.geometry.cone < target.cone {
             continue;
         }
-        // A pooled speedup can hide a slow cone. Reject any measured\n        // geometry whose incremental refresh is not strictly faster.\n        if pair.full_ns == 0 || pair.incremental_refresh_ns >= pair.full_ns {\n            return EngineChoice::Full;\n        }\n        samples = match samples.checked_add(1) {
+        // A pooled speedup can hide a slow cone. Reject any measured
+        // geometry whose incremental refresh is not strictly faster.
+        if pair.full_ns == 0 || pair.incremental_refresh_ns >= pair.full_ns {
+            return EngineChoice::Full;
+        }
+        samples = match samples.checked_add(1) {
             Some(value) => value,
             None => return EngineChoice::Full,
         };
@@ -132,6 +137,15 @@ mod tests {
         assert_eq!(choose_for_geometry(&valid, target, 2, 2, 20), EngineChoice::Full);
         valid[0].oracle_equal = true;
         valid[0].incremental_refresh_ns = 300;
+        assert_eq!(choose_for_geometry(&valid, target, 2, 2, 20), EngineChoice::Full);
+    }
+
+    #[test]
+    fn pooled_gain_never_masks_one_slow_covered_cone() {
+        let target = Geometry { gates: 100, cone: 10 };
+        let valid = [pair(12, 1), pair(20, 101)];
+        // Aggregate refresh is 102 ns versus 200 ns Full, but the
+        // second cone regresses. Dispatch must remain Full.
         assert_eq!(choose_for_geometry(&valid, target, 2, 2, 20), EngineChoice::Full);
     }
 
