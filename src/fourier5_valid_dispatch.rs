@@ -892,3 +892,119 @@ mod sequential_audit_tests {
                     audit.rejected_oracle_error), (1, 1, 1));
     }
 }
+
+
+/// Sequential verification that checks both observable output and the complete
+/// refreshed cache against independently reconstructed Full state. Unlike
+/// output-only auditing, equal outputs with stale internal cache are rejected.
+/// This method does not time either engine and is not a throughput benchmark.
+impl SequentialAudit {
+    pub fn attempt_exact<C, T, E, I, F>(
+        &mut self,
+        cache: &mut C,
+        incremental_refresh: I,
+        full_rebuild: F,
+    ) -> Result<SequentialDecision, PolicyError>
+    where
+        C: Eq,
+        T: Eq,
+        I: FnOnce(&C) -> Result<(C, T), E>,
+        F: FnOnce() -> Result<(C, T), E>,
+    {
+        // Preflight all counters before running either engine. A counter
+        // overflow must not commit a cache or execute side-effectful closures.
+        let attempted = self.attempted.checked_add(1).ok_or(PolicyError::Overflow)?;
+        let candidate = incremental_refresh(cache);
+        let oracle = full_rebuild();
+        let decision = match (candidate, oracle) {
+            (Ok((next_cache, output)), Ok((full_cache, expected)))
+                if output == expected && next_cache == full_cache => {
+                let accepted = self.accepted.checked_add(1).ok_or(PolicyError::Overflow)?;
+                *cache = next_cache;
+                self.accepted = accepted;
+                SequentialDecision::Accepted
+            }
+            (Ok(_), Ok(_)) => {
+                self.rejected_mismatch = self.rejected_mismatch.checked_add(1)
+                    .ok_or(PolicyError::Overflow)?;
+                SequentialDecision::RejectedMismatch
+            }
+            (_, Err(_)) => {
+                self.rejected_oracle_error = self.rejected_oracle_error.checked_add(1)
+                    .ok_or(PolicyError::Overflow)?;
+                SequentialDecision::RejectedOracleError
+            }
+            (Err(_), Ok(_)) => {
+                self.rejected_incremental_error = self.rejected_incremental_error.checked_add(1)
+                    .ok_or(PolicyError::Overflow)?;
+                SequentialDecision::RejectedIncrementalError
+            }
+        };
+        self.attempted = attempted;
+        Ok(decision)
+    }
+}
+
+#[cfg(test)]
+mod sequential_exact_tests {
+    use super::*;
+
+    #[test]
+    fn stale_cache_is_rejected_even_when_output_matches() {
+        let mut audit = SequentialAudit::default();
+        let mut cache = vec![false, false];
+        let result = audit.attempt_exact(
+            &mut cache,
+            |_| Ok::<_, ()>((vec![false, false], true)),
+            || Ok::<_, ()>((vec![true, false], true)),
+        );
+        assert_eq!(result, Ok(SequentialDecision::RejectedMismatch));
+        assert_eq!(cache, vec![false, false]);
+        assert_eq!(audit.rejected_mismatch, 1);
+    }
+
+    #[test]
+    fn accepted_full_state_is_input_to_next_sequential_edit() {
+        let mut audit = SequentialAudit::default();
+        let mut cache = vec![false, false];
+        for expected in [vec![true, false], vec![true, true]] {
+            let prior = cache.clone();
+            let next = expected.clone();
+            assert_eq!(audit.attempt_exact(
+                &mut cache,
+                |current| {
+                    assert_eq!(current, &prior);
+                    Ok::<_, ()>((next.clone(), next[0]))
+                },
+                || Ok::<_, ()>((expected.clone(), expected[0])),
+            ), Ok(SequentialDecision::Accepted));
+            assert_eq!(cache, expected);
+        }
+        assert_eq!((audit.attempted, audit.accepted), (2, 2));
+    }
+
+    #[test]
+    fn oracle_failure_rejects_both_failed_engines_without_commit() {
+        let mut audit = SequentialAudit::default();
+        let mut cache = 5_u8;
+        assert_eq!(audit.attempt_exact(
+            &mut cache,
+            |_| Err::<(u8, u8), _>(()),
+            || Err::<(u8, u8), _>(()),
+        ), Ok(SequentialDecision::RejectedOracleError));
+        assert_eq!(cache, 5);
+        assert_eq!(audit.rejected_oracle_error, 1);
+    }
+
+    #[test]
+    fn exhausted_attempt_counter_skips_both_engines() {
+        let mut audit = SequentialAudit { attempted: u64::MAX, ..SequentialAudit::default() };
+        let mut cache = 1_u8;
+        assert_eq!(audit.attempt_exact(
+            &mut cache,
+            |_| panic!("incremental must not run"),
+            || -> Result<(u8, u8), ()> { panic!("oracle must not run") },
+        ), Err(PolicyError::Overflow));
+        assert_eq!(cache, 1);
+    }
+}
