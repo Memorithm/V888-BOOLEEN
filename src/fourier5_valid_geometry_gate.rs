@@ -196,15 +196,11 @@ pub fn choose_with_disjoint_splits(
             return EngineChoice::Full;
         }
         if observation.split == Split::Valid {
-            valid_groups.insert(grouped.group_id);
             valid.push(observation.pair);
         }
     }
-    // Correlated samples from one workload do not establish independent
-    // VALID coverage, even when their cone geometries differ.
-    if valid_groups.len() < minimum_distinct {
-        return EngineChoice::Full;
-    }
+    // This API has sample IDs but no workload-group provenance. Independent
+    // groups must be checked by choose_with_disjoint_groups instead.
     choose_for_geometry(
         &valid,
         target,
