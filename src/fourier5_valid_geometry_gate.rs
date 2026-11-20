@@ -196,8 +196,14 @@ pub fn choose_with_disjoint_splits(
             return EngineChoice::Full;
         }
         if observation.split == Split::Valid {
+            valid_groups.insert(grouped.group_id);
             valid.push(observation.pair);
         }
+    }
+    // Correlated samples from one workload do not establish independent
+    // VALID coverage, even when their cone geometries differ.
+    if valid_groups.len() < minimum_distinct {
+        return EngineChoice::Full;
     }
     choose_for_geometry(
         &valid,
@@ -313,6 +319,7 @@ pub fn choose_with_disjoint_groups(
     let mut groups = std::collections::HashMap::new();
     let mut ids = std::collections::HashSet::new();
     let mut valid = Vec::new();
+    let mut valid_groups = std::collections::HashSet::new();
     for grouped in observations {
         let observation = grouped.observation;
         if !ids.insert(observation.sample_id) {
@@ -373,12 +380,28 @@ mod grouped_tests {
         let data = [
             sample(1, 41, Split::Train, 12),
             sample(2, 42, Split::Valid, 12),
-            sample(3, 42, Split::Valid, 20),
+            sample(3, 44, Split::Valid, 20),
             sample(4, 43, Split::Test, 12),
         ];
         assert_eq!(
             choose_with_disjoint_groups(&data, Geometry { gates: 100, cone: 10 }, 2, 2, 20),
             EngineChoice::Incremental
+        );
+    }
+
+    #[test]
+    fn correlated_valid_geometries_do_not_count_as_independent_groups() {
+        let data = [
+            sample(1, 42, Split::Valid, 12),
+            sample(2, 42, Split::Valid, 20),
+        ];
+        // Independent scalar oracle: one group cannot satisfy a two-group gate.
+        let distinct_groups: std::collections::HashSet<_> =
+            data.iter().map(|row| row.group_id).collect();
+        assert_eq!(distinct_groups.len(), 1);
+        assert_eq!(
+            choose_with_disjoint_groups(&data, Geometry { gates: 100, cone: 10 }, 2, 2, 20),
+            EngineChoice::Full
         );
     }
 
