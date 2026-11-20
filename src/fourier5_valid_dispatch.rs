@@ -649,3 +649,129 @@ mod quarantine_tests {
         assert_eq!(session.choose(0, 0), EngineChoice::Full);
     }
 }
+
+
+/// Optional diversity gate for heterogeneous VALID calibration.
+/// A bucket cannot use Incremental until at least two distinct (gates, cone)
+/// geometries have independent, passing VALID observations. This does not
+/// change the existing ValidDispatch policy or its default decisions.
+#[derive(Clone, Debug)]
+pub struct DiverseValidDispatch {
+    policy: ValidDispatch,
+    first: [Option<(u64, u64)>; 16],
+    diverse: [bool; 16],
+}
+
+impl DiverseValidDispatch {
+    #[must_use]
+    pub fn new(min_samples: u64, margin_percent: u64) -> Self {
+        Self {
+            policy: ValidDispatch::new(min_samples.max(2), margin_percent),
+            first: [None; 16],
+            diverse: [false; 16],
+        }
+    }
+
+    /// Record one VALID observation. Geometry evidence is updated only after
+    /// the underlying duration and overflow checks have succeeded.
+    pub fn observe_valid(
+        &mut self,
+        gates: u64,
+        cone: u64,
+        full_ns: u64,
+        incremental_with_refresh_ns: u64,
+        equal: bool,
+    ) -> Result<(), PolicyError> {
+        let bucket = ValidDispatch::bucket(gates, cone)?;
+        self.policy.observe_valid(
+            gates,
+            cone,
+            full_ns,
+            incremental_with_refresh_ns,
+            equal,
+        )?;
+        let geometry = (gates, cone);
+        match self.first[bucket] {
+            None => self.first[bucket] = Some(geometry),
+            Some(first) if first != geometry => self.diverse[bucket] = true,
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Atomic heterogeneous VALID ingestion: a late invalid sample cannot
+    /// leak either calibration counters or diversity evidence.
+    pub fn observe_valid_batch(
+        &mut self,
+        observations: &[(u64, u64, u64, u64, bool)],
+    ) -> Result<(), PolicyError> {
+        let mut candidate = self.clone();
+        for &(gates, cone, full_ns, incremental_ns, equal) in observations {
+            candidate.observe_valid(gates, cone, full_ns, incremental_ns, equal)?;
+        }
+        *self = candidate;
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn choose(&self, gates: u64, cone: u64) -> EngineChoice {
+        let Ok(bucket) = ValidDispatch::bucket(gates, cone) else {
+            return EngineChoice::Full;
+        };
+        if !self.diverse[bucket] {
+            return EngineChoice::Full;
+        }
+        self.policy.choose(gates, cone)
+    }
+}
+
+#[cfg(test)]
+mod diverse_valid_tests {
+    use super::*;
+
+    #[test]
+    fn repeated_identical_geometry_cannot_unlock_incremental() {
+        let mut policy = DiverseValidDispatch::new(2, 10);
+        for _ in 0..4 {
+            policy.observe_valid(10_000, 100, 100, 20, true).unwrap();
+        }
+        assert_eq!(policy.choose(10_000, 100), EngineChoice::Full);
+        policy.observe_valid(10_000, 99, 100, 20, true).unwrap();
+        assert_eq!(policy.choose(10_000, 100), EngineChoice::Incremental);
+    }
+
+    #[test]
+    fn different_buckets_do_not_supply_diversity() {
+        let mut policy = DiverseValidDispatch::new(2, 10);
+        policy.observe_valid(10_000, 100, 100, 20, true).unwrap();
+        policy.observe_valid(10_000, 101, 100, 20, true).unwrap();
+        assert_eq!(policy.choose(10_000, 100), EngineChoice::Full);
+        assert_eq!(policy.choose(10_000, 101), EngineChoice::Full);
+    }
+
+    #[test]
+    fn invalid_late_batch_rolls_back_diversity_and_calibration() {
+        let mut policy = DiverseValidDispatch::new(2, 10);
+        policy.observe_valid(10_000, 100, 100, 20, true).unwrap();
+        assert_eq!(
+            policy.observe_valid_batch(&[
+                (10_000, 99, 100, 20, true),
+                (10_000, 98, 100, 0, true),
+            ]),
+            Err(PolicyError::ZeroDuration)
+        );
+        assert_eq!(policy.choose(10_000, 100), EngineChoice::Full);
+        policy.observe_valid(10_000, 100, 100, 20, true).unwrap();
+        assert_eq!(policy.choose(10_000, 100), EngineChoice::Full);
+        policy.observe_valid(10_000, 99, 100, 20, true).unwrap();
+        assert_eq!(policy.choose(10_000, 100), EngineChoice::Incremental);
+    }
+
+    #[test]
+    fn oracle_mismatch_disables_diverse_bucket() {
+        let mut policy = DiverseValidDispatch::new(2, 10);
+        policy.observe_valid(10_000, 100, 100, 20, true).unwrap();
+        policy.observe_valid(10_000, 99, 100, 20, false).unwrap();
+        assert_eq!(policy.choose(10_000, 100), EngineChoice::Full);
+    }
+}
