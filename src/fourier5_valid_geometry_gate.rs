@@ -105,7 +105,10 @@ mod tests {
 
     #[test]
     fn requires_distinct_covered_geometries() {
-        let target = Geometry { gates: 100, cone: 10 };
+        let target = Geometry {
+            gates: 100,
+            cone: 10,
+        };
         assert_eq!(
             choose_for_geometry(&[pair(12, 10), pair(12, 10)], target, 2, 2, 20),
             EngineChoice::Full
@@ -120,42 +123,87 @@ mod tests {
     fn never_extrapolates_to_larger_cone_or_different_gate_count() {
         let valid = [pair(12, 10), pair(20, 10)];
         assert_eq!(
-            choose_for_geometry(&valid, Geometry { gates: 100, cone: 21 }, 2, 2, 20),
+            choose_for_geometry(
+                &valid,
+                Geometry {
+                    gates: 100,
+                    cone: 21
+                },
+                2,
+                2,
+                20
+            ),
             EngineChoice::Full
         );
         assert_eq!(
-            choose_for_geometry(&valid, Geometry { gates: 101, cone: 10 }, 2, 2, 20),
+            choose_for_geometry(
+                &valid,
+                Geometry {
+                    gates: 101,
+                    cone: 10
+                },
+                2,
+                2,
+                20
+            ),
             EngineChoice::Full
         );
     }
 
     #[test]
     fn oracle_mismatch_and_cost_regression_fail_closed() {
-        let target = Geometry { gates: 100, cone: 10 };
+        let target = Geometry {
+            gates: 100,
+            cone: 10,
+        };
         let mut valid = [pair(12, 10), pair(20, 10)];
         valid[0].oracle_equal = false;
-        assert_eq!(choose_for_geometry(&valid, target, 2, 2, 20), EngineChoice::Full);
+        assert_eq!(
+            choose_for_geometry(&valid, target, 2, 2, 20),
+            EngineChoice::Full
+        );
         valid[0].oracle_equal = true;
         valid[0].incremental_refresh_ns = 300;
-        assert_eq!(choose_for_geometry(&valid, target, 2, 2, 20), EngineChoice::Full);
+        assert_eq!(
+            choose_for_geometry(&valid, target, 2, 2, 20),
+            EngineChoice::Full
+        );
     }
 
     #[test]
     fn pooled_gain_never_masks_one_slow_covered_cone() {
-        let target = Geometry { gates: 100, cone: 10 };
+        let target = Geometry {
+            gates: 100,
+            cone: 10,
+        };
         let valid = [pair(12, 1), pair(20, 101)];
         // Aggregate refresh is 102 ns versus 200 ns Full, but the
         // second cone regresses. Dispatch must remain Full.
-        assert_eq!(choose_for_geometry(&valid, target, 2, 2, 20), EngineChoice::Full);
+        assert_eq!(
+            choose_for_geometry(&valid, target, 2, 2, 20),
+            EngineChoice::Full
+        );
     }
 
     #[test]
     fn threshold_is_strict_and_invalid_policy_is_rejected() {
-        let target = Geometry { gates: 100, cone: 10 };
+        let target = Geometry {
+            gates: 100,
+            cone: 10,
+        };
         let valid = [pair(12, 80), pair(20, 80)];
-        assert_eq!(choose_for_geometry(&valid, target, 2, 2, 20), EngineChoice::Full);
-        assert_eq!(choose_for_geometry(&valid, target, 2, 2, 19), EngineChoice::Incremental);
-        assert_eq!(choose_for_geometry(&valid, target, 1, 2, 19), EngineChoice::Full);
+        assert_eq!(
+            choose_for_geometry(&valid, target, 2, 2, 20),
+            EngineChoice::Full
+        );
+        assert_eq!(
+            choose_for_geometry(&valid, target, 2, 2, 19),
+            EngineChoice::Incremental
+        );
+        assert_eq!(
+            choose_for_geometry(&valid, target, 1, 2, 19),
+            EngineChoice::Full
+        );
     }
 }
 
@@ -227,7 +275,10 @@ mod disjoint_tests {
 
     #[test]
     fn disjoint_valid_only_matches_independent_oracle() {
-        let target = Geometry { gates: 100, cone: 10 };
+        let target = Geometry {
+            gates: 100,
+            cone: 10,
+        };
         let data = [
             observation(1, Split::Train, 12),
             observation(2, Split::Valid, 12),
@@ -235,13 +286,7 @@ mod disjoint_tests {
             observation(4, Split::Test, 12),
             observation(5, Split::Ood, 20),
         ];
-        let expected = choose_for_geometry(
-            &[data[1].pair, data[2].pair],
-            target,
-            2,
-            2,
-            20,
-        );
+        let expected = choose_for_geometry(&[data[1].pair, data[2].pair], target, 2, 2, 20);
         assert_eq!(expected, EngineChoice::Incremental);
         assert_eq!(
             choose_with_disjoint_splits(&data, target, 2, 2, 20),
@@ -251,7 +296,10 @@ mod disjoint_tests {
 
     #[test]
     fn cross_split_identity_leakage_fails_closed() {
-        let target = Geometry { gates: 100, cone: 10 };
+        let target = Geometry {
+            gates: 100,
+            cone: 10,
+        };
         let data = [
             observation(7, Split::Train, 12),
             observation(7, Split::Valid, 12),
@@ -265,7 +313,10 @@ mod disjoint_tests {
 
     #[test]
     fn duplicated_valid_identity_is_not_independent_evidence() {
-        let target = Geometry { gates: 100, cone: 10 };
+        let target = Geometry {
+            gates: 100,
+            cone: 10,
+        };
         let data = [
             observation(7, Split::Valid, 12),
             observation(7, Split::Valid, 20),
@@ -278,7 +329,10 @@ mod disjoint_tests {
 
     #[test]
     fn train_test_ood_cannot_supply_missing_valid_coverage() {
-        let target = Geometry { gates: 100, cone: 10 };
+        let target = Geometry {
+            gates: 100,
+            cone: 10,
+        };
         let data = [
             observation(1, Split::Valid, 12),
             observation(2, Split::Train, 20),
@@ -363,7 +417,16 @@ mod grouped_tests {
             sample(3, 43, Split::Valid, 20),
         ];
         assert_eq!(
-            choose_with_disjoint_groups(&data, Geometry { gates: 100, cone: 10 }, 2, 2, 20),
+            choose_with_disjoint_groups(
+                &data,
+                Geometry {
+                    gates: 100,
+                    cone: 10
+                },
+                2,
+                2,
+                20
+            ),
             EngineChoice::Full
         );
     }
@@ -377,7 +440,16 @@ mod grouped_tests {
             sample(4, 43, Split::Test, 12),
         ];
         assert_eq!(
-            choose_with_disjoint_groups(&data, Geometry { gates: 100, cone: 10 }, 2, 2, 20),
+            choose_with_disjoint_groups(
+                &data,
+                Geometry {
+                    gates: 100,
+                    cone: 10
+                },
+                2,
+                2,
+                20
+            ),
             EngineChoice::Incremental
         );
     }
@@ -389,7 +461,16 @@ mod grouped_tests {
             sample(2, 42, Split::Valid, 20),
         ];
         assert_eq!(
-            choose_with_disjoint_groups(&data, Geometry { gates: 100, cone: 10 }, 2, 2, 20),
+            choose_with_disjoint_groups(
+                &data,
+                Geometry {
+                    gates: 100,
+                    cone: 10
+                },
+                2,
+                2,
+                20
+            ),
             EngineChoice::Full
         );
     }
