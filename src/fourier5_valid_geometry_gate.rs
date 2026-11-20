@@ -158,3 +158,136 @@ mod tests {
         assert_eq!(choose_for_geometry(&valid, target, 1, 2, 19), EngineChoice::Full);
     }
 }
+
+/// Split assignment is explicit: only VALID pairs may calibrate dispatch.
+/// Stable sample IDs must be unique across all partitions and within VALID.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Split {
+    Train,
+    Valid,
+    Test,
+    Ood,
+}
+
+/// The ID is a stable identity of an underlying intervention/workload,
+/// not a position in a shuffled dataset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SplitPair {
+    pub sample_id: u64,
+    pub split: Split,
+    pub pair: ValidPair,
+}
+
+/// Fail closed if any sample identity appears twice, including cross-split
+/// leakage or repeated VALID measurements mislabeled as independent samples.
+/// The admission policy sees only VALID pairs; TEST/OOD never tune thresholds.
+#[must_use]
+pub fn choose_with_disjoint_splits(
+    observations: &[SplitPair],
+    target: Geometry,
+    minimum_distinct: usize,
+    minimum_samples: usize,
+    minimum_saving_percent: u8,
+) -> EngineChoice {
+    let mut ids = std::collections::HashSet::with_capacity(observations.len());
+    let mut valid = Vec::new();
+    for observation in observations {
+        if !ids.insert(observation.sample_id) {
+            return EngineChoice::Full;
+        }
+        if observation.split == Split::Valid {
+            valid.push(observation.pair);
+        }
+    }
+    choose_for_geometry(
+        &valid,
+        target,
+        minimum_distinct,
+        minimum_samples,
+        minimum_saving_percent,
+    )
+}
+
+#[cfg(test)]
+mod disjoint_tests {
+    use super::*;
+
+    fn observation(id: u64, split: Split, cone: u64) -> SplitPair {
+        SplitPair {
+            sample_id: id,
+            split,
+            pair: ValidPair {
+                geometry: Geometry { gates: 100, cone },
+                full_ns: 100,
+                incremental_refresh_ns: 20,
+                oracle_equal: true,
+            },
+        }
+    }
+
+    #[test]
+    fn disjoint_valid_only_matches_independent_oracle() {
+        let target = Geometry { gates: 100, cone: 10 };
+        let data = [
+            observation(1, Split::Train, 12),
+            observation(2, Split::Valid, 12),
+            observation(3, Split::Valid, 20),
+            observation(4, Split::Test, 12),
+            observation(5, Split::Ood, 20),
+        ];
+        let expected = choose_for_geometry(
+            &[data[1].pair, data[2].pair],
+            target,
+            2,
+            2,
+            20,
+        );
+        assert_eq!(expected, EngineChoice::Incremental);
+        assert_eq!(
+            choose_with_disjoint_splits(&data, target, 2, 2, 20),
+            expected
+        );
+    }
+
+    #[test]
+    fn cross_split_identity_leakage_fails_closed() {
+        let target = Geometry { gates: 100, cone: 10 };
+        let data = [
+            observation(7, Split::Train, 12),
+            observation(7, Split::Valid, 12),
+            observation(8, Split::Valid, 20),
+        ];
+        assert_eq!(
+            choose_with_disjoint_splits(&data, target, 2, 2, 20),
+            EngineChoice::Full
+        );
+    }
+
+    #[test]
+    fn duplicated_valid_identity_is_not_independent_evidence() {
+        let target = Geometry { gates: 100, cone: 10 };
+        let data = [
+            observation(7, Split::Valid, 12),
+            observation(7, Split::Valid, 20),
+        ];
+        assert_eq!(
+            choose_with_disjoint_splits(&data, target, 2, 2, 20),
+            EngineChoice::Full
+        );
+    }
+
+    #[test]
+    fn train_test_ood_cannot_supply_missing_valid_coverage() {
+        let target = Geometry { gates: 100, cone: 10 };
+        let data = [
+            observation(1, Split::Valid, 12),
+            observation(2, Split::Train, 20),
+            observation(3, Split::Test, 20),
+            observation(4, Split::Ood, 20),
+        ];
+        assert_eq!(
+            choose_with_disjoint_splits(&data, target, 2, 2, 20),
+            EngineChoice::Full
+        );
+    }
+}
