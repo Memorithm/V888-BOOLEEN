@@ -24,7 +24,9 @@ pub struct StepMeasurement {
 #[must_use]
 pub fn process_vm_hwm_kib() -> Option<u64> {
     let status = std::fs::read_to_string("/proc/self/status").ok()?;
-    let value = status.lines().find_map(|line| line.strip_prefix("VmHWM:"))?;
+    let value = status
+        .lines()
+        .find_map(|line| line.strip_prefix("VmHWM:"))?;
     let mut parts = value.split_whitespace();
     let amount = parts.next()?.parse::<u64>().ok()?;
     if parts.next()? != "kB" || parts.next().is_some() {
@@ -90,9 +92,7 @@ mod tests {
             (0_u8, 0_u8),
             &inputs,
             |&(output, epoch), &delta| Ok::<_, ()>((output + delta, epoch + 1)),
-            |&(output, epoch), &delta| {
-                Ok::<_, ()>((output + delta, epoch + u8::from(delta != 2)))
-            },
+            |&(output, epoch), &delta| Ok::<_, ()>((output + delta, epoch + u8::from(delta != 2))),
         );
         assert_eq!(state, (8, 3)); // 1 + rejected 2 + 3 + 4
         assert_eq!(
@@ -111,8 +111,20 @@ mod tests {
         let (state, rows) = audit_sequence(
             0_i32,
             &[1_i32, 2, 3, 4],
-            |&state, &delta| if delta == 2 { Err("oracle") } else { Ok(state + delta) },
-            |&state, &delta| if delta == 3 { Err("incremental") } else { Ok(state + delta) },
+            |&state, &delta| {
+                if delta == 2 {
+                    Err("oracle")
+                } else {
+                    Ok(state + delta)
+                }
+            },
+            |&state, &delta| {
+                if delta == 3 {
+                    Err("incremental")
+                } else {
+                    Ok(state + delta)
+                }
+            },
         );
         assert_eq!(state, 5);
         assert_eq!(
