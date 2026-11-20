@@ -392,3 +392,100 @@ mod stratified_tests {
         assert_eq!(calls.into_inner(), vec!['F', 'I', 'I', 'F', 'F', 'I']);
     }
 }
+
+
+/// Per-class paired totals for heterogeneous sequential workloads.
+/// Rejected steps contribute to cost but never to accepted throughput.
+/// VmHWM is a process-lifetime peak and cannot be attributed to a class.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClassCost<K> {
+    pub class: K,
+    pub attempted: usize,
+    pub accepted: usize,
+    pub rejected: usize,
+    pub full_ns: u128,
+    pub incremental_with_refresh_ns: u128,
+}
+
+/// Aggregate paired observations without mixing classes or hiding failures.
+/// Returns None for mismatched input lengths or arithmetic overflow.
+pub fn summarize_stratified_costs<K: Eq + Clone>(
+    classes: &[K],
+    rows: &[StepMeasurement],
+) -> Option<Vec<ClassCost<K>>> {
+    if classes.len() != rows.len() {
+        return None;
+    }
+    let mut totals: Vec<ClassCost<K>> = Vec::new();
+    for (class, row) in classes.iter().zip(rows) {
+        let position = totals.iter().position(|entry| entry.class == *class);
+        let index = if let Some(index) = position {
+            index
+        } else {
+            totals.push(ClassCost {
+                class: class.clone(),
+                attempted: 0,
+                accepted: 0,
+                rejected: 0,
+                full_ns: 0,
+                incremental_with_refresh_ns: 0,
+            });
+            totals.len() - 1
+        };
+        let entry = &mut totals[index];
+        entry.attempted = entry.attempted.checked_add(1)?;
+        if row.verdict == StepVerdict::Accepted {
+            entry.accepted = entry.accepted.checked_add(1)?;
+        } else {
+            entry.rejected = entry.rejected.checked_add(1)?;
+        }
+        entry.full_ns = entry.full_ns.checked_add(row.full.as_nanos())?;
+        entry.incremental_with_refresh_ns = entry
+            .incremental_with_refresh_ns
+            .checked_add(row.incremental_with_refresh.as_nanos())?;
+    }
+    Some(totals)
+}
+
+#[cfg(test)]
+mod stratified_cost_tests {
+    use super::*;
+
+    #[test]
+    fn rejected_steps_are_charged_to_their_class() {
+        let classes = [0_u8, 1, 0];
+        let rows = [
+            StepMeasurement {
+                verdict: StepVerdict::Accepted,
+                full: Duration::from_nanos(10),
+                incremental_with_refresh: Duration::from_nanos(3),
+                peak_rss_kib: None,
+            },
+            StepMeasurement {
+                verdict: StepVerdict::Mismatch,
+                full: Duration::from_nanos(20),
+                incremental_with_refresh: Duration::from_nanos(40),
+                peak_rss_kib: None,
+            },
+            StepMeasurement {
+                verdict: StepVerdict::FullError,
+                full: Duration::from_nanos(30),
+                incremental_with_refresh: Duration::from_nanos(7),
+                peak_rss_kib: None,
+            },
+        ];
+        let costs = summarize_stratified_costs(&classes, &rows).unwrap();
+        assert_eq!(costs.len(), 2);
+        assert_eq!((costs[0].attempted, costs[0].accepted, costs[0].rejected), (2, 1, 1));
+        assert_eq!((costs[0].full_ns, costs[0].incremental_with_refresh_ns), (40, 10));
+        assert_eq!((costs[1].attempted, costs[1].accepted, costs[1].rejected), (1, 0, 1));
+        assert_eq!((costs[1].full_ns, costs[1].incremental_with_refresh_ns), (20, 40));
+    }
+
+    #[test]
+    fn malformed_pairing_is_rejected() {
+        let classes = [1_u8];
+        assert!(summarize_stratified_costs(&classes, &[]).is_none());
+        assert_eq!(summarize_stratified_costs::<u8>(&[], &[]), Some(vec![]));
+    }
+}
