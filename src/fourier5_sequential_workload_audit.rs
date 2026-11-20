@@ -150,3 +150,116 @@ mod tests {
         assert!(rows.is_empty());
     }
 }
+
+
+/// Counterbalanced paired audit: odd steps time Incremental before Full,
+/// even steps Full before Incremental. This reduces fixed execution-order
+/// bias in heterogeneous synthetic workloads, without claiming to remove
+/// cache, thermal or process-level interference. Both paths always start
+/// from the same accepted state; only exact equality commits a candidate.
+/// Full errors take precedence, regardless of evaluation order.
+pub fn audit_sequence_counterbalanced<S, I, E, F, D>(
+    initial: S,
+    inputs: &[I],
+    mut full: F,
+    mut incremental: D,
+) -> (S, Vec<StepMeasurement>)
+where
+    S: Clone + Eq,
+    F: FnMut(&S, &I) -> Result<S, E>,
+    D: FnMut(&S, &I) -> Result<S, E>,
+{
+    let mut accepted = initial;
+    let mut report = Vec::with_capacity(inputs.len());
+    for (index, input) in inputs.iter().enumerate() {
+        let (reference, full_time, candidate, incremental_time) = if index % 2 == 0 {
+            let start = Instant::now();
+            let reference = full(&accepted, input);
+            let full_time = start.elapsed();
+            let start = Instant::now();
+            let candidate = incremental(&accepted, input);
+            (reference, full_time, candidate, start.elapsed())
+        } else {
+            let start = Instant::now();
+            let candidate = incremental(&accepted, input);
+            let incremental_time = start.elapsed();
+            let start = Instant::now();
+            let reference = full(&accepted, input);
+            (reference, start.elapsed(), candidate, incremental_time)
+        };
+        let verdict = match (reference, candidate) {
+            (Err(_), _) => StepVerdict::FullError,
+            (Ok(_), Err(_)) => StepVerdict::IncrementalError,
+            (Ok(expected), Ok(actual)) if expected == actual => {
+                accepted = actual;
+                StepVerdict::Accepted
+            }
+            (Ok(_), Ok(_)) => StepVerdict::Mismatch,
+        };
+        report.push(StepMeasurement {
+            verdict,
+            full: full_time,
+            incremental_with_refresh: incremental_time,
+            peak_rss_kib: process_vm_hwm_kib(),
+        });
+    }
+    (accepted, report)
+}
+
+#[cfg(test)]
+mod counterbalanced_tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    #[test]
+    fn order_alternates_and_rejected_steps_do_not_change_state() {
+        let calls = RefCell::new(Vec::new());
+        let (state, rows) = audit_sequence_counterbalanced(
+            (0_i32, 0_u32),
+            &[1_i32, 2, 3, 4],
+            |&(value, epoch), &delta| {
+                calls.borrow_mut().push(('F', delta));
+                Ok::<_, ()>((value + delta, epoch + 1))
+            },
+            |&(value, epoch), &delta| {
+                calls.borrow_mut().push(('I', delta));
+                Ok::<_, ()>((value + delta, epoch + u32::from(delta != 2)))
+            },
+        );
+        assert_eq!(calls.into_inner(), vec![
+            ('F', 1), ('I', 1), ('I', 2), ('F', 2),
+            ('F', 3), ('I', 3), ('I', 4), ('F', 4),
+        ]);
+        assert_eq!(state, (8, 3));
+        assert_eq!(
+            rows.iter().map(|row| row.verdict).collect::<Vec<_>>(),
+            vec![StepVerdict::Accepted, StepVerdict::Mismatch,
+                 StepVerdict::Accepted, StepVerdict::Accepted]
+        );
+    }
+
+    #[test]
+    fn full_error_precedes_incremental_error_in_both_orders() {
+        let (state, rows) = audit_sequence_counterbalanced(
+            0_i32,
+            &[1_i32, 2],
+            |_, _| Err::<i32, ()>(()),
+            |_, _| Err::<i32, ()>(()),
+        );
+        assert_eq!(state, 0);
+        assert!(rows.iter().all(|row| row.verdict == StepVerdict::FullError));
+    }
+
+    #[test]
+    fn oracle_matches_independent_scalar_replay_on_heterogeneous_steps() {
+        let deltas = [3_i64, -2, 7, 0, -9, 11, 1];
+        let (state, rows) = audit_sequence_counterbalanced(
+            0_i64,
+            &deltas,
+            |&value, &delta| value.checked_add(delta).ok_or(()),
+            |&value, &delta| value.checked_add(delta).ok_or(()),
+        );
+        assert_eq!(state, deltas.iter().copied().sum::<i64>());
+        assert!(rows.iter().all(|row| row.verdict == StepVerdict::Accepted));
+    }
+}
