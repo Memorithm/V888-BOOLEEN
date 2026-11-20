@@ -4,7 +4,11 @@
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DeltaOutcome { Declined, OracleMismatch, Committed }
+pub enum DeltaOutcome {
+    Declined,
+    OracleMismatch,
+    Committed,
+}
 
 #[derive(Clone, Debug)]
 pub struct DeltaMeasure {
@@ -19,11 +23,17 @@ pub struct DeltaMeasure {
 /// Refresh must handle all dependencies of the intervention. Full is independent
 /// of the cache, and its result must include any decision bits being protected.
 pub fn verified_delta<S, C, O, I, R, F, D>(
-    state: &mut S, cache: &mut C, intervene: I, refresh: R,
-    full: F, incremental: D,
+    state: &mut S,
+    cache: &mut C,
+    intervene: I,
+    refresh: R,
+    full: F,
+    incremental: D,
 ) -> DeltaMeasure
 where
-    S: Clone, C: Clone, O: Eq,
+    S: Clone,
+    C: Clone,
+    O: Eq,
     I: FnOnce(&mut S) -> bool,
     R: FnOnce(&S, &mut C),
     F: FnOnce(&S) -> O,
@@ -33,8 +43,10 @@ where
     let mut candidate = state.clone();
     if !intervene(&mut candidate) {
         return DeltaMeasure {
-            outcome: DeltaOutcome::Declined, elapsed: started.elapsed(),
-            refresh: Duration::ZERO, full: Duration::ZERO,
+            outcome: DeltaOutcome::Declined,
+            elapsed: started.elapsed(),
+            refresh: Duration::ZERO,
+            full: Duration::ZERO,
             incremental: Duration::ZERO,
         };
     }
@@ -56,8 +68,11 @@ where
         DeltaOutcome::OracleMismatch
     };
     DeltaMeasure {
-        outcome, elapsed: started.elapsed(), refresh: refresh_time,
-        full: full_time, incremental: incremental_time,
+        outcome,
+        elapsed: started.elapsed(),
+        refresh: refresh_time,
+        full: full_time,
+        incremental: incremental_time,
     }
 }
 
@@ -78,10 +93,18 @@ mod tests {
         for index in [0, 6, 2, 2, 4, 0, 5] {
             let before = bits[index];
             let result = verified_delta(
-                &mut bits, &mut cache,
-                |candidate| { candidate[index] = !candidate[index]; true },
+                &mut bits,
+                &mut cache,
+                |candidate| {
+                    candidate[index] = !candidate[index];
+                    true
+                },
                 |candidate, count| {
-                    if before { *count -= 1; } else { *count += 1; }
+                    if before {
+                        *count -= 1;
+                    } else {
+                        *count += 1;
+                    }
                     assert_eq!(*count, candidate.iter().filter(|&&b| b).count());
                 },
                 |candidate| oracle(candidate),
@@ -99,8 +122,12 @@ mod tests {
             let mut bits = vec![false, false, false];
             let mut cache = 0_usize;
             let result = verified_delta(
-                &mut bits, &mut cache,
-                |candidate| { candidate[0] = true; true },
+                &mut bits,
+                &mut cache,
+                |candidate| {
+                    candidate[0] = true;
+                    true
+                },
                 |_, count| *count = if corrupt_decision { 1 } else { 9 },
                 |candidate| oracle(candidate),
                 |_, count| (*count, corrupt_decision),
@@ -116,8 +143,11 @@ mod tests {
         let mut state = 1_u8;
         let mut cache = 1_u8;
         let result = verified_delta::<_, _, u8, _, _, _, _>(
-            &mut state, &mut cache, |_| false,
-            |_, _| panic!("refresh called"), |_| panic!("full called"),
+            &mut state,
+            &mut cache,
+            |_| false,
+            |_, _| panic!("refresh called"),
+            |_| panic!("full called"),
             |_, _| panic!("incremental called"),
         );
         assert_eq!(result.outcome, DeltaOutcome::Declined);
@@ -125,7 +155,6 @@ mod tests {
     }
 }
 
- 
 /// Fallible transactional refresh. An error from the intervention or cache
 /// updater aborts before the live state/cache are published.
 pub fn try_verified_delta<S, C, O, E, I, R, F, D>(
@@ -196,17 +225,33 @@ mod fallible_tests {
                 &mut cache,
                 |candidate| {
                     *candidate = 2;
-                    if failing_stage == 0 { Err("intervention") } else { Ok(true) }
+                    if failing_stage == 0 {
+                        Err("intervention")
+                    } else {
+                        Ok(true)
+                    }
                 },
                 |_, candidate_cache| {
                     *candidate_cache = 2;
-                    if failing_stage == 1 { Err("refresh") } else { Ok(()) }
+                    if failing_stage == 1 {
+                        Err("refresh")
+                    } else {
+                        Ok(())
+                    }
                 },
                 |_| {
-                    if failing_stage == 2 { Err("full") } else { Ok(2_u8) }
+                    if failing_stage == 2 {
+                        Err("full")
+                    } else {
+                        Ok(2_u8)
+                    }
                 },
                 |_, _| {
-                    if failing_stage == 3 { Err("incremental") } else { Ok(2_u8) }
+                    if failing_stage == 3 {
+                        Err("incremental")
+                    } else {
+                        Ok(2_u8)
+                    }
                 },
             );
             assert!(result.is_err());
@@ -222,21 +267,30 @@ mod fallible_tests {
             let result = try_verified_delta(
                 &mut state,
                 &mut cache,
-                |candidate| { *candidate = 2; Ok::<_, ()>(true) },
-                |_, candidate_cache| { *candidate_cache = 2; Ok::<_, ()>(()) },
+                |candidate| {
+                    *candidate = 2;
+                    Ok::<_, ()>(true)
+                },
+                |_, candidate_cache| {
+                    *candidate_cache = 2;
+                    Ok::<_, ()>(())
+                },
                 |candidate| Ok::<_, ()>(*candidate),
                 |_, _| Ok::<_, ()>(observed),
-            ).unwrap();
-            assert_eq!(result.outcome, if observed == 2 {
-                DeltaOutcome::Committed
-            } else {
-                DeltaOutcome::OracleMismatch
-            });
+            )
+            .unwrap();
+            assert_eq!(
+                result.outcome,
+                if observed == 2 {
+                    DeltaOutcome::Committed
+                } else {
+                    DeltaOutcome::OracleMismatch
+                }
+            );
             assert_eq!((state, cache), if observed == 2 { (2, 2) } else { (1, 1) });
         }
     }
 }
-
 
 /// A sequence is published atomically: even a late mismatch or declined edit
 /// discards every earlier candidate commit. Each accepted step is independently
@@ -326,7 +380,8 @@ mod batch_tests {
             },
             |bits| Ok::<_, ()>(bits.iter().filter(|&&bit| bit).count()),
             |_, count| Ok::<_, ()>(*count),
-        ).unwrap();
+        )
+        .unwrap();
         (result, state, cache)
     }
 
