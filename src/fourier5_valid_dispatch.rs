@@ -463,9 +463,20 @@ impl QuarantinedDispatch {
         }
     }
 
+    /// Return the exact quarantine bitmap for a reproducible session audit.
+    /// Bit i corresponds to the same size/cone bucket as VALID calibration.
+    /// This is diagnostic state only and must not modify frozen calibration.
+    #[must_use]
+    pub fn quarantine_mask(&self) -> u16 {
+        self.quarantined.iter().enumerate().fold(0_u16, |mask, (i, &flag)| {
+            if flag { mask | (1_u16 << i) } else { mask }
+        })
+    }
+
     /// Execute with an independent Full oracle. A mismatch or Incremental
     /// error permanently quarantines the bucket until a new session is made.
-    /// Full failures propagate without publishing an unverified result and\n    /// quarantine the bucket because the candidate cannot be certified.
+    /// Full failures propagate without publishing an unverified result and
+    /// quarantine the bucket because the candidate cannot be certified.
     /// This is a safety mechanism, not a throughput optimization.
     pub fn try_execute<T, E, F, I>(
         &mut self,
@@ -558,6 +569,24 @@ mod quarantine_tests {
         ).unwrap();
         assert_eq!((value, path), (7, FallibleVerifiedPath::FullAfterIncrementalError));
         assert_eq!(session.choose(10_000, 500), EngineChoice::Full);
+    }
+
+    #[test]
+    fn quarantine_mask_tracks_independent_geometry_buckets() {
+        let mut session = session();
+        assert_eq!(session.quarantine_mask(), 0);
+        let _ = session.try_execute(
+            10_000, 100, || Ok::<_, ()>(1_u8), || Ok::<_, ()>(2_u8),
+        ).unwrap();
+        let first = session.quarantine_mask();
+        assert_eq!(first.count_ones(), 1);
+        assert_eq!(session.choose(10_000, 100), EngineChoice::Full);
+        assert_eq!(session.choose(10_000, 500), EngineChoice::Incremental);
+        let _ = session.try_execute(
+            10_000, 500, || Ok::<_, ()>(1_u8), || Err::<u8, _>(()),
+        ).unwrap();
+        assert_eq!(session.quarantine_mask().count_ones(), 2);
+        assert_eq!(session.quarantine_mask() & first, first);
     }
 
     #[test]
