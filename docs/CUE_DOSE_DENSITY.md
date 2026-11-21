@@ -323,6 +323,16 @@ Both pre-registered checks pass (§4):
   This also shows the branch leaves cycle 29's base output unchanged.
   Cycle 29's src256 and src512 conditions were not re-run.
 
+**Declared change after the main run (tests only, no result affected):**
+the first RemoteOps qualification of this PR hit the 720 s container
+timeout because the new unit tests added ~73 s. The tests were trimmed:
+the mid-stage checkpoint/resume test now covers Zbd2 only (§4 said Zbd2 and
+Zbd4; Zbd2 is the arm whose dose mask binds), the small grid uses
+identity + reversed orders, and two tests that only re-checked cycle 29
+properties of the same functions (rows equal to `cue_write_dose::run_seed`,
+thread-count independence) were removed because the cycle 29 tests already
+pin them. No source outside `#[cfg(test)]` changed.
+
 
 ## Reproduce
 

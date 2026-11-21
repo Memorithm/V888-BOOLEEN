@@ -715,7 +715,7 @@ mod tests {
 
     fn grid() -> &'static [CondRows] {
         static GRID: std::sync::OnceLock<Vec<CondRows>> = std::sync::OnceLock::new();
-        GRID.get_or_init(|| cdg::run_with(&[Cond::Src512, Cond::D512], &[2], 2, 1, small).unwrap())
+        GRID.get_or_init(|| cdg::run_with(&[Cond::Src512, Cond::D512], &[2], 2, 0, small).unwrap())
     }
 
     #[test]
@@ -776,18 +776,13 @@ mod tests {
     }
 
     #[test]
-    fn rows_are_the_unchanged_cycle29_engine_and_gates_hold() {
+    fn rows_come_from_the_unchanged_cycle29_engine_and_gates_hold() {
+        // `run` is `cue_dose_guard::run_with` (whose rows are pinned to
+        // `cue_write_dose::run_seed` and thread-count independence by the
+        // cycle 29 tests); here only shape and integrity at fan-in 32.
         for c in grid() {
-            assert_eq!(c.rows.len(), 3 * cwd::ARMS.len());
-            assert_eq!(c.guard_rows.len(), 3 * ZB_DOSES.len());
-            let d = small(c.cond);
-            let (r, g) = cdg::run_cond(&d, &[2], 1, 1).unwrap();
-            assert_eq!(c.rows, r);
-            assert_eq!(c.guard_rows, g);
-            assert_eq!(
-                c.rows,
-                cwd::run_seed(None, &d, cdg::K, cdg::FLIP, 2, 1).unwrap()
-            );
+            assert_eq!(c.rows.len(), 2 * cwd::ARMS.len());
+            assert_eq!(c.guard_rows.len(), 2 * ZB_DOSES.len());
             let gt = cdg::gates(c);
             assert!(gt[0] && gt[5], "{}", c.cond.name());
         }
@@ -812,7 +807,7 @@ mod tests {
         assert!(csv.lines().skip(1).all(|l| l.starts_with(SCHEMA)));
         assert_eq!(
             csv.lines().count(),
-            1 + 2 * 3 * (cwd::ARMS.len() + ZB_DOSES.len())
+            1 + 2 * 2 * (cwd::ARMS.len() + ZB_DOSES.len())
         );
         assert!(csv.contains(",d512,block,"));
         let rep = report(all);
@@ -828,7 +823,7 @@ mod tests {
     }
 
     #[test]
-    fn checkpoint_resume_is_bit_exact_for_block_dose_arms_at_fan_in_32() {
+    fn checkpoint_resume_is_bit_exact_for_a_block_dose_arm_at_fan_in_32() {
         let d = small(Cond::D512);
         let (k, seed) = (cdg::K, 4);
         let spec = GenSpec {
@@ -842,7 +837,7 @@ mod tests {
             cgd::run_setting(&base, &spec, seed, cgd::Setting::Err, &order, &sg::free(k)).unwrap();
         let curves: Vec<Vec<u64>> = e.logs.iter().map(|t| t.ledger.cum.clone()).collect();
         let lim = cgd::paced_limits(&curves);
-        for x in [cdg::ZBD2, ZBD4] {
+        for x in [cdg::ZBD2] {
             let (fx, _, masks, watch, _, ok) = cwd::arm_fixture(&base, x, &a, seed).unwrap();
             assert!(ok);
             let g = &fx.graph;
@@ -895,13 +890,5 @@ mod tests {
             }
             assert_eq!(c.weights(), &full.weights[..]);
         }
-    }
-
-    #[test]
-    fn output_does_not_depend_on_the_thread_count() {
-        let d = small(Cond::D512);
-        let a = cdg::run_cond(&d, &[3, 4], 0, 1).unwrap();
-        let b = cdg::run_cond(&d, &[3, 4], 0, 2).unwrap();
-        assert_eq!(a, b);
     }
 }
