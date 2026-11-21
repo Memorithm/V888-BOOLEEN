@@ -9,6 +9,7 @@ pub mod consolidation_guard;
 pub mod consolidation_scale;
 pub mod context_cue;
 pub mod cue_capacity;
+pub mod cue_defer;
 pub mod cue_displacement;
 pub mod cue_gating;
 pub mod cue_init;

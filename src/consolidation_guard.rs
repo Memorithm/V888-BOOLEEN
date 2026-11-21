@@ -999,6 +999,300 @@ pub fn run_setting_masked(
     ))
 }
 
+/// Two-phase frozen-line schedule of one task (cycle 25, deferred partner
+/// writes): `early` is frozen during episodes `0..split`, `late` during
+/// `split..n`, with `split = phase_split(n)`. Same masks in both halves is
+/// exactly [`train_range_masked`] with that mask (tested).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StageMask {
+    pub early: Vec<usize>,
+    pub late: Vec<usize>,
+}
+
+impl StageMask {
+    /// The same frozen lines in both halves.
+    #[must_use]
+    pub fn constant(lines: &[usize]) -> Self {
+        Self {
+            early: lines.to_vec(),
+            late: lines.to_vec(),
+        }
+    }
+    /// No frozen line in either half.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.early.is_empty() && self.late.is_empty()
+    }
+}
+
+/// Episode at which a stage of `episodes` episodes switches from the early
+/// to the late mask (`⌊episodes / 2⌋`).
+#[must_use]
+pub const fn phase_split(episodes: usize) -> usize {
+    episodes / 2
+}
+
+/// Per-half counters of one scheduled stage (index 0 = early half,
+/// 1 = late half).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PhaseCount {
+    /// Edge steps removed by the mask.
+    pub skipped: [u64; 2],
+    /// Edges of the half's frozen lines whose weight changed during that
+    /// half (0 by construction; checked, not assumed).
+    pub frozen_moved: [u64; 2],
+    /// Edges of the watched lines whose weight changed during that half.
+    pub watch_moved: [u64; 2],
+}
+
+/// [`train_range_masked`] under a two-phase schedule: episodes before
+/// `split` use `mask.early`, the others `mask.late`; resumes from the
+/// checkpoint's episode (the schedule is a pure function of the episode
+/// index, so save/load anywhere is bit-exact). Skips are added per half.
+#[allow(clippy::too_many_arguments)]
+pub fn train_range_scheduled(
+    circuit: &mut PlasticCircuit,
+    fx: &Fixture,
+    spec: &GenSpec,
+    seed: u64,
+    s: Setting,
+    limit: &Limit,
+    cp: &mut Checkpoint,
+    end: usize,
+    mask: &StageMask,
+    skipped: &mut [u64; 2],
+) -> io::Result<()> {
+    let task = cp.inner.inner.inner.task;
+    let split = phase_split(ts::task_order(spec, seed, task).len());
+    let at = cp.inner.inner.inner.episode;
+    if at < split {
+        let e = end.min(split);
+        train_range_masked(
+            circuit,
+            fx,
+            spec,
+            seed,
+            s,
+            limit,
+            cp,
+            e,
+            &mask.early,
+            &mut skipped[0],
+        )?;
+    }
+    if end > split || at >= split {
+        train_range_masked(
+            circuit,
+            fx,
+            spec,
+            seed,
+            s,
+            limit,
+            cp,
+            end,
+            &mask.late,
+            &mut skipped[1],
+        )?;
+    }
+    Ok(())
+}
+
+/// [`train_stage_masked`] under a two-phase schedule, recording per-half
+/// skips, frozen moves and moves on the `watch` lines (any setting may
+/// watch; a non-empty mask needs a guarded-step setting).
+#[allow(clippy::too_many_arguments)]
+pub fn train_stage_scheduled(
+    circuit: &mut PlasticCircuit,
+    fx: &Fixture,
+    spec: &GenSpec,
+    seed: u64,
+    s: Setting,
+    order: &[usize],
+    i: usize,
+    limit: &Limit,
+    dir: &mut [i8],
+    stamp: &mut [u8],
+    mask: &StageMask,
+    watch: &[usize],
+) -> io::Result<(sg::Checkpoint, GuardLog, PhaseCount)> {
+    let t = *order.get(i).ok_or_else(|| bad("stage out of range"))?;
+    let episodes = ts::task_order(spec, seed, t).len();
+    let split = phase_split(episodes);
+    let start = circuit.weights().to_vec();
+    let mut pc = PhaseCount::default();
+    let (inner, stats, mid) = match s.guard() {
+        None if !mask.is_empty() => {
+            return Err(bad("frozen lines need a guarded-step setting"));
+        }
+        None => {
+            let mut cp = sg::Checkpoint::start(order, i, fx.graph.edges(), limit)?;
+            sg::train_range(circuit, fx, spec, seed, s.base(), limit, &mut cp, split)?;
+            let mid = circuit.weights().to_vec();
+            sg::train_range(circuit, fx, spec, seed, s.base(), limit, &mut cp, episodes)?;
+            (cp, None, mid)
+        }
+        Some(gd) => {
+            let mut cp = Checkpoint::start(order, i, limit, gd, dir, stamp, &start)?;
+            train_range_scheduled(
+                circuit,
+                fx,
+                spec,
+                seed,
+                s,
+                limit,
+                &mut cp,
+                split,
+                mask,
+                &mut pc.skipped,
+            )?;
+            let mid = circuit.weights().to_vec();
+            train_range_scheduled(
+                circuit,
+                fx,
+                spec,
+                seed,
+                s,
+                limit,
+                &mut cp,
+                episodes,
+                mask,
+                &mut pc.skipped,
+            )?;
+            (cp.inner, Some(cp.g), mid)
+        }
+    };
+    let end = circuit.weights();
+    pc.frozen_moved = [
+        moved_on_lines(&fx.graph, &mask.early, &start, &mid),
+        moved_on_lines(&fx.graph, &mask.late, &mid, end),
+    ];
+    pc.watch_moved = [
+        moved_on_lines(&fx.graph, watch, &start, &mid),
+        moved_on_lines(&fx.graph, watch, &mid, end),
+    ];
+    let (net_reversals, moved) = consolidate(dir, stamp, i, &start, end)?;
+    Ok((
+        inner,
+        GuardLog {
+            stats,
+            net_reversals,
+            moved,
+            consolidated: dir.iter().filter(|&&d| d != 0).count() as u64,
+        },
+        pc,
+    ))
+}
+
+/// [`run_setting`] with a two-phase frozen-line schedule per task and
+/// watched lines per task (cycle 25). `masks` and `watch` are each empty or
+/// hold one entry per task (indexed by task id). With every mask
+/// [`StageMask::constant`] this is bit-identical to [`run_setting_masked`]
+/// and with no mask to [`run_setting`] (tested).
+#[allow(clippy::too_many_arguments)]
+pub fn run_setting_scheduled(
+    fx: &Fixture,
+    spec: &GenSpec,
+    seed: u64,
+    s: Setting,
+    order: &[usize],
+    limits: &[Limit],
+    masks: &[StageMask],
+    watch: &[Vec<usize>],
+) -> io::Result<(Run, Vec<PhaseCount>)> {
+    let graph = &fx.graph;
+    let k = fx.task.train.len();
+    if fx.cues.len() != k || fx.splits.len() != k || limits.len() != k {
+        return Err(bad("need k tasks, cues, splits and limits"));
+    }
+    if (!masks.is_empty() && masks.len() != k) || (!watch.is_empty() && watch.len() != k) {
+        return Err(bad("need no schedule or one entry per task"));
+    }
+    let lines = masks
+        .iter()
+        .flat_map(|m| m.early.iter().chain(&m.late))
+        .chain(watch.iter().flatten());
+    if lines.into_iter().any(|&src| src + 1 >= graph.offsets.len()) {
+        return Err(bad("frozen or watched line out of range"));
+    }
+    if !sg::is_permutation(order, k) {
+        return Err(bad("order is not a permutation of the tasks"));
+    }
+    graph.validate()?;
+    let original = graph.clone();
+    let cue = ci::cue_edges(fx)?;
+    let mut circuit = ci::initial_circuit(fx, spec, s.base().arm())?;
+    let fingerprint = circuit.topology_fingerprint();
+    let mut dir = vec![0_i8; graph.edges()];
+    let mut stamp = vec![0_u8; graph.edges()];
+    let mut ev = Vec::with_capacity(k);
+    let mut logs = Vec::with_capacity(k);
+    let mut glogs = Vec::with_capacity(k);
+    let mut cost = Vec::with_capacity(k);
+    let mut phases = Vec::with_capacity(k);
+    let none = StageMask::default();
+    for i in 0..k {
+        let m = masks.get(order[i]).unwrap_or(&none);
+        let w: &[usize] = watch.get(order[i]).map_or(&[], Vec::as_slice);
+        let (inner, gl, pc) = train_stage_scheduled(
+            &mut circuit,
+            fx,
+            spec,
+            seed,
+            s,
+            order,
+            i,
+            &limits[i],
+            &mut dir,
+            &mut stamp,
+            m,
+            w,
+        )?;
+        phases.push(pc);
+        glogs.push(gl);
+        let (mut nz, mut mass) = (0, 0);
+        for (&x, &on) in circuit.weights().iter().zip(&cue) {
+            if on && x > 0 {
+                nz += 1;
+                mass += u64::from(x);
+            }
+        }
+        cost.push(inner.inner.inner.cost);
+        logs.push(TaskLog {
+            ledger: inner.inner.inner.ledger,
+            stats: inner.inner.inner.stats,
+            cue_cum: inner.inner.cue_cum,
+            cue_nonzero_end: nz,
+            cue_mass_end: mass,
+        });
+        let mut row = Vec::with_capacity(i + 1);
+        for &u in &order[..=i] {
+            let c: &[usize] = if s.cued() { &fx.cues[u] } else { &[] };
+            row.push(ns::evaluate(
+                &circuit,
+                graph,
+                &fx.task.test,
+                &fx.task.valence[u],
+                c,
+                &fx.splits[u],
+            )?);
+        }
+        ev.push(row);
+    }
+    Ok((
+        Run {
+            ev,
+            logs,
+            glogs,
+            cost,
+            topology_unchanged: *graph == original
+                && circuit.topology_fingerprint() == fingerprint
+                && circuit.weights().len() == graph.edges(),
+            weights: circuit.weights().to_vec(),
+        },
+        phases,
+    ))
+}
+
 struct Lcg(u64);
 impl Lcg {
     fn next(&mut self) -> u64 {
