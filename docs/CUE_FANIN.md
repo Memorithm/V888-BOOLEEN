@@ -15,6 +15,9 @@ update rule and an artificial benchmark on a Boolean graph with 4-bit
 weights. Nothing here is a claim about synapses, biology, insect memory or
 BANC physiology.
 
+**Follow-up:** cycle 32 ([CUE_COVERAGE.md](CUE_COVERAGE.md)) tests whether
+the fan-in loss is caused by untrained edges in TEST pairs (edge coverage).
+
 Module: `src/cue_fanin.rs`. CLI: `bench-cue-fanin` (`--census` for the
 label-free pilot).
 

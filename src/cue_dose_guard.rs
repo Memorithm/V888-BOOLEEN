@@ -121,6 +121,14 @@ pub enum Cond {
     /// B888-4 cycle 31 (`docs/CUE_FANIN.md`): 128 graph sources (as `Base`)
     /// with fan-in 32. Not in [`CONDS`].
     F32,
+    /// B888-4 cycle 32 (`docs/CUE_COVERAGE.md`): `Base` with 4x the distinct
+    /// training patterns per task and 1/4 of the rounds (same 256
+    /// presentations per task). Not in [`CONDS`].
+    BaseC,
+    /// B888-4 cycle 32 (`docs/CUE_COVERAGE.md`): `F32` with 4x the distinct
+    /// training patterns per task and 1/4 of the rounds (same 256
+    /// presentations per task). Not in [`CONDS`].
+    F32C,
 }
 
 /// Conditions in CSV / report order.
@@ -137,6 +145,8 @@ impl Cond {
             Self::D512 => "d512",
             Self::F16 => "f16",
             Self::F32 => "f32",
+            Self::BaseC => "basec",
+            Self::F32C => "f32c",
         }
     }
     /// Parse a condition name.
@@ -150,7 +160,9 @@ impl Cond {
     #[must_use]
     pub fn sources(self) -> usize {
         match self {
-            Self::Base | Self::F16 | Self::F32 => cwd::DESIGN.shape.sources,
+            Self::Base | Self::F16 | Self::F32 | Self::BaseC | Self::F32C => {
+                cwd::DESIGN.shape.sources
+            }
             Self::Src256 | Self::D256 => 256,
             Self::Src512 | Self::D512 => 512,
         }
@@ -161,12 +173,13 @@ impl Cond {
     pub fn fan_in(self) -> usize {
         match self {
             Self::D256 | Self::F16 => 16,
-            Self::D512 | Self::F32 => 32,
+            Self::D512 | Self::F32 | Self::F32C => 32,
             _ => cwd::DESIGN.shape.fan_in,
         }
     }
-    /// Design of the condition (only `shape.sources`, and for
-    /// [`Cond::D256`] / [`Cond::D512`] `shape.fan_in`, differ from cycle 27).
+    /// Design of the condition (only `shape.sources`, for the fan-in
+    /// conditions `shape.fan_in`, and for the cycle 32 coverage conditions
+    /// `spec.train_patterns` / `spec.rounds_*`, differ from cycle 27).
     #[must_use]
     pub fn design(self) -> Design {
         let d = cwd::DESIGN;
@@ -176,10 +189,30 @@ impl Cond {
                 fan_in: self.fan_in(),
                 ..d.shape
             },
+            spec: if self.more_patterns() {
+                GenSpec {
+                    train_patterns: d.spec.train_patterns * COVERAGE_FACTOR,
+                    rounds_a: d.spec.rounds_a / COVERAGE_FACTOR as u32,
+                    rounds_b: d.spec.rounds_b / COVERAGE_FACTOR as u32,
+                    ..d.spec
+                }
+            } else {
+                d.spec
+            },
             ..d
         }
     }
+    /// Cycle 32 coverage conditions ([`Cond::BaseC`], [`Cond::F32C`]).
+    #[must_use]
+    pub fn more_patterns(self) -> bool {
+        matches!(self, Self::BaseC | Self::F32C)
+    }
 }
+
+/// B888-4 cycle 32: training-pattern multiplier of [`Cond::BaseC`] and
+/// [`Cond::F32C`] (rounds are divided by the same factor, so the number of
+/// presentations per task is unchanged).
+pub const COVERAGE_FACTOR: usize = 4;
 
 /// Rows of one condition.
 #[derive(Clone, Debug, PartialEq)]
