@@ -21,13 +21,15 @@ pub enum TransactionError {
 /// conservative cost of *verified execution*, not unverified production latency.
 /// Full timing remains the standalone reference, so these paired figures are
 /// unsuitable for claims of production speedup without a separate benchmark.
+/// Backwards-compatible verified execution; use the profiled variant to obtain
+/// the initial cache reconstruction duration (excluded from per-step rows).
 pub fn execute_verified_sequence<S, C, I, E, F, D, R>(
     initial_state: S,
     initial_cache: C,
     inputs: &[I],
-    mut full: F,
-    mut incremental: D,
-    mut rebuild: R,
+    full: F,
+    incremental: D,
+    rebuild: R,
 ) -> Result<(S, C, Vec<StepMeasurement>), TransactionError>
 where
     S: Clone + Eq,
@@ -36,8 +38,34 @@ where
     D: FnMut(&S, &C, &I) -> Result<(S, C), E>,
     R: FnMut(&S) -> Result<C, E>,
 {
+ 
+    execute_verified_sequence_profiled(initial_state, initial_cache, inputs, full, incremental, rebuild)
+        .map(|(state, cache, rows, _initial_rebuild)| (state, cache, rows))
+}
+
+/// Same transactional semantics as `execute_verified_sequence`, but returns
+/// the measured initial canonical cache reconstruction cost separately.
+/// This cost must be included in end-to-end cold-start benchmarks.
+pub fn execute_verified_sequence_profiled<S, C, I, E, F, D, R>(
+    initial_state: S,
+    initial_cache: C,
+    inputs: &[I],
+    mut full: F,
+    mut incremental: D,
+    mut rebuild: R,
+) -> Result<(S, C, Vec<StepMeasurement>, std::time::Duration), TransactionError>
+where
+    S: Clone + Eq,
+    C: Clone + Eq,
+    F: FnMut(&S, &I) -> Result<S, E>,
+    D: FnMut(&S, &C, &I) -> Result<(S, C), E>,
+    R: FnMut(&S) -> Result<C, E>,
+{
     // Verify the supplied initial cache before allowing any incremental call.
-    if rebuild(&initial_state).map_err(|_| TransactionError::Rebuild)? != initial_cache {
+    let initial_rebuild_start = Instant::now();
+    let initial_canonical = rebuild(&initial_state).map_err(|_| TransactionError::Rebuild)?;
+    let initial_rebuild_time = initial_rebuild_start.elapsed();
+    if initial_canonical != initial_cache {
         return Err(TransactionError::Rebuild);
     }
     let mut state = initial_state;
@@ -85,7 +113,7 @@ where
             peak_rss_kib: process_vm_hwm_kib(),
         });
     }
-    Ok((state, cache, rows))
+    Ok((state, cache, rows, initial_rebuild_time))
 }
 
 #[cfg(test)]
@@ -164,6 +192,24 @@ mod tests {
         ).unwrap();
         assert_eq!(rows[0].verdict, StepVerdict::Accepted);
         assert!(rows[0].incremental_with_refresh >= Duration::from_millis(5));
+    }
+
+    #[test]
+    fn profiled_cold_start_reports_initial_rebuild_separately() {
+        use std::time::Duration;
+        let (state, cache, rows, initial) = execute_verified_sequence_profiled(
+            0_u8, 0_u8, &[1_u8],
+            |s, d| Ok::<_, ()>(s + d),
+            |s, _, d| Ok::<_, ()>((s + d, s + d)),
+            |s| {
+                if *s == 0 { std::thread::sleep(Duration::from_millis(3)); }
+                Ok::<_, ()>(*s)
+            },
+        ).unwrap();
+        assert_eq!((state, cache), (1, 1));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].verdict, StepVerdict::Accepted);
+        assert!(initial >= Duration::from_millis(3));
     }
 
     #[test]
