@@ -188,8 +188,32 @@ hypothesis is reported, pass or fail; failures are results.
 
 ## 7. Label-free pilot
 
-Not run yet at the time of pre-registration (this section is filled after
-the pre-registration commit is pushed; the pilot cannot change §3–§6).
+Run after the pre-registration commit `1e9f9d2` was pushed.
+`bench-cue-fanin --census` (seeds 1..5, identity order, training only, no
+accuracy computed, no held-out order drawn):
+[results/cue-fanin-census-v1.txt](../results/cue-fanin-census-v1.txt).
+
+| cond | edges / source | active-input edges per target | share of targets reached | same-task Jaccard of reached targets | E writes (= cap) | Zgd4 partner moves | Zbd4 partner moves | Zbd0 blocked |
+|---|---|---|---|---|---|---|---|---|
+| base | 2.0 | 0.241 | 0.220 | 0.188 | 914.8 | 61.2 | 61.8 | 12 046 |
+| f16 | 4.0 | 0.492 | 0.407 | 0.281 | 2 447.2 | 137.4 | 116.0 | 20 414 |
+| f32 | 8.0 | 1.201 | 0.749 | **0.604** | 5 959.4 | 201.0 | 169.8 | 32 751 |
+| src512 | 0.5 | 0.188 | 0.175 | 0.114 | 1 309.4 | 49.0 | 59.4 | 9 879 |
+| d512 | 2.0 | 0.361 | 0.312 | 0.191 | 2 645.6 | 115.6 | 112.6 | 12 476 |
+
+* At fixed sources, fan-in raises the target load strongly: f32 reaches
+  75 % of the targets per training pattern (base 22 %), and two training
+  patterns of the same task share 60 % of their reached targets (base
+  19 %). d512 sits close to base on overlap (0.191) despite its fan-in 32,
+  because its 6 active inputs are spread over 512 sources.
+* The induced `paced100` budget grows with the edges (E writes 915 base,
+  2 447 f16, 5 959 f32): the declared confound of §3 is large at f32 (6.5×
+  base).
+* Every manipulation binds in every condition: last-resort dose skips fall
+  to 0 at full dose and partner moves rise along Zgd0..4; every block arm
+  refuses overwrites; no frozen line moves; 5/5 leakage-free fixtures per
+  condition. In f16, f32 and d512 the block arms use their whole cap.
+* The pilot changes nothing in §3–§6.
 
 ## 8. Results
 
