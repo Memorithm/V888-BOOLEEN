@@ -268,3 +268,88 @@ held-out order drawn; sha256
   pilot, so G2 is expected to pass and H1–H12 should be evaluable. The pilot
   does not measure accuracy and does not change a threshold, arm or
   hypothesis. The main run is executed exactly as pre-registered above.
+
+## 9. Main run result (seeds 681..720, held-out orders; synthetic graph)
+
+Files: `results/cue-write-dose-report-v1.txt`, `results/cue-write-dose-v1.csv`
+(12 000 rows; sha256
+`ea9f6b3f0daa29b48a2793410141423e02c3d9410e6f326e5b977b541b6c81b9`, report
+sha256 `d0f959f33805cab19efac3ecde48093026c55ffcba758f6c383de824255cbe97`).
+The run was executed exactly as pre-registered above; no threshold, arm,
+seed or hypothesis was changed after the pilot. Reproducibility: the CSV and the report are byte-identical with `--threads 8` and `--threads 6` (same sha256 in both).
+
+### Design gates
+
+| gate | result | detail |
+|---|---|---|
+| G1 integrity | **pass** | topology unchanged in every row, charged writes ≤ allowance, `error-gated@paced100` = uncapped E, frozen moves = 0, guard/ledger counters, orders, codes, dose masks, writable-line counts and per-stage budgets consistent |
+| G2 manipulation | **pass** | at k 8 / 16, flips 50 / 100 (held-out): (a) mean partner-line moves strictly increase along the doses, e.g. k 16 flip 100: 0 / 9.6 / 19.2 / 28.9 / 37.7 (Zgd0..Zgd4); (b) Zgd1 moves a partner line in 99.4–100 % of rows; (c) Zgd1/2/3/2c skip frozen edge steps in 100 % of rows; (d) Zgd2c / Zgd2 partner moves ≈ 1.0 (19.7 vs 19.2 at k 16 flip 100) |
+| G3 novel pairs | **pass** | median CN pairs at k 16, flip 50 = 64 ≥ 20 |
+
+Idle stages (descriptive, as diagnosed in §1): at flip 100 the held-out
+rows have on average 3.21 of 16 (k 16) and 1.26 of 8 (k 8) zero-budget
+stages (72.5 % / 63.1 % of rows have at least one); none at flips 25 / 50.
+They are identical across the arms of an order (G1) and no gate or
+hypothesis depends on them.
+
+### Hypotheses (k = 16 unless stated; mean ± sd [95 % bootstrap CI] better/ties/worse over 40 seeds)
+
+Slopes are per-seed least-squares slopes over the dose fraction 0 → 1
+(owned → shared write).
+
+| H | contrast | value | verdict |
+|---|---|---|---|
+| H1 | flip 100, dose slope of ACC_all | +0.026 ± 0.009 [+0.024, +0.029] 40/0/0 | **pass** |
+| H2 | flip 100, −(dose slope of LEARN_all) | +0.048 ± 0.012 [+0.044, +0.052] 40/0/0 | **pass** |
+| H3 | flip 100, −(dose slope of FGT_all) | +0.079 ± 0.014 [+0.075, +0.083] 40/0/0 | **pass** |
+| H4 | flip 100, concavity of ACC_all | +0.000 ± 0.006 [−0.001, +0.002] 20/0/20 | **fail** |
+| H5 | flip 100, ACC Zgd2 − Zgd2c equivalent to 0 (±0.01) | +0.000 ± 0.009 [−0.002, +0.003] 17/0/23 | **pass** |
+| H6 | flip 100, Zgd4 vs S1 sequence rule | ΔACC +0.096 [+0.090, +0.103] 40/0/0, ΔLEARN +0.196, ΔLAST +0.212 | **pass** |
+| H7 | flip 100, Zgd2 vs S1 sequence rule | ΔACC +0.084 [+0.077, +0.090] 40/0/0, ΔLEARN +0.219, ΔLAST +0.229 | **pass** |
+| H8 | flip 50, dose slope of ACC_all | +0.012 ± 0.008 [+0.010, +0.014] 36/0/4 | **pass** |
+| H9 | flip 50, Zgd2 vs S1 sequence rule | ΔACC +0.051 [+0.047, +0.055] 40/0/0, ΔLEARN +0.267, ΔLAST +0.285 | **pass** (ΔACC just above the 0.05 bar) |
+| H10 | k 8, flip 100, dose slope of ACC_all | +0.019 ± 0.017 [+0.014, +0.024] 34/0/6 | **pass** |
+| H11 | flip 100, dose slope of ACC_cn | +0.008 ± 0.025 [+0.000, +0.015] 24/0/16 | **pass** (marginal: CI lower bound rounds to 0.000) |
+| H12 | flip 100, ACC_cn Zgd2 − S1 | +0.117 ± 0.037 [+0.106, +0.129] 40/0/0 | **pass** |
+
+### Readings (descriptive, synthetic benchmark only)
+
+* **Count, not timing, and not line identity.** At equal `paced100`
+  budget, held-out ACC_all at k = 16, flip 100 rises step by step with
+  the number of writable partner lines: 0.577 (Zgd0 = owned), 0.584,
+  0.590, 0.597, 0.603 (Zgd4 = shared); every pairwise step vs Zgd0 is
+  positive (+0.007 / +0.013 / +0.020 / +0.026). The relation is linear
+  (H4 fails: concavity +0.000), and which half of the partner lines is
+  writable does not matter (H5: Zgd2 − Zgd2c +0.000, CI inside ±0.003).
+  This is the direct test the two timing cycles could not deliver: the
+  #139 shared-vs-owned trade-off scales with how many partner-block lines
+  a task may write.
+* **The trade-off is the same writes.** Each extra writable line costs
+  learning (LEARN slope −0.048) and buys a larger forgetting cut (FGT
+  slope −0.079); the net accuracy gain is their difference. Shared Zgd4
+  learns 0.048 less and forgets 0.079 less than owned Zgd0.
+* **Generalisation to novel pairs barely follows the dose** (ACC_cn slope
+  +0.008, marginal pass at k 16; −0.007 with a CI including 0 at k 8,
+  secondary): the dose mostly moves seen-pair retention.
+* **Against the supervised control at equal budget** every cued dose arm
+  wins on ACC, LEARN and LAST but forgets more (Zgd2 − S1 at flip 100:
+  ΔACC +0.084, ΔFGT −0.145, i.e. S1 forgets less; ACC_cn +0.117). The
+  margin shrinks at flip 50 (Zgd2 +0.051, just above the 0.05 bar).
+* **Worst held-out order (secondary, descriptive).** The per-seed minimum
+  over the 4 held-out orders of the paired difference Zgd2 − Zgd2c is
+  negative at every (k, flip) (k 16, flip 100: −0.014, 4/0/36). A minimum
+  of four noisy paired differences is biased below zero by construction, so
+  this does not contradict H5 (which is on the mean over orders), but line
+  identity is only equivalent on average, not order by order.
+* The effect is small in absolute terms (≈ +0.026 ACC from owned to
+  shared at k 16, flip 100; +0.019 at k 8; +0.012 at flip 50) and every
+  number is on a generated graph with artificial labels. No claim about
+  synapses, biology, insect memory or BANC physiology is made.
+
+## Reproduce
+
+```bash
+cargo +1.89 run --release -- bench-cue-write-dose --diagnose-cycle26 > results/cue-write-dose-diagnosis-cycle26-v1.txt
+cargo +1.89 run --release -- bench-cue-write-dose --census > results/cue-write-dose-census-v1.txt
+cargo +1.89 run --release -- bench-cue-write-dose --csv results/cue-write-dose-v1.csv > results/cue-write-dose-report-v1.txt
+```
