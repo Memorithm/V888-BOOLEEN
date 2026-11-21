@@ -334,6 +334,22 @@ f32 −0.025, src512 −0.120, d512 −0.004. Exact decomposition (Zgd4 − S1)
   with artificial labels, and no claim about synapses, biology, insect
   memory or BANC physiology is made.
 
+### Reproducibility
+
+The pre-registered check passes (§4): `bench-cue-fanin --conds f32
+--threads 5` (wall time 455 s) gives 3 001 lines (header + 3 000 rows) that
+are **byte-identical** to the header plus the `f32` rows of the main
+`--threads 8` CSV (sha256 of both:
+`5a534cbec1fdef5ddf91534afba653a3cdfd57e587c33483611b0e7d46d2b887`).
+Subset only: base, f16, src512 and d512 were not re-run.
+
+**Tests:** three new unit tests (conditions and unchanged earlier grids,
+label-free target load, readings/report/CSV on a one-seed reduced grid),
+≈ 8 s together with 8 threads, to stay inside the 720 s RemoteOps
+qualification. No engine code changed: the only non-test change outside
+the new module is the two `Cond` variants (`F16`, `F32`) and their
+`name`/`sources`/`fan_in` arms.
+
 ## Reproduce
 
 ```bash
