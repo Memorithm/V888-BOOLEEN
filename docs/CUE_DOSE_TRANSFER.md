@@ -1,0 +1,201 @@
+# B888-4 cycle 28: does the partner-write dose effect **generalise**, does it **hold up on forgetting** against the supervised control S1 at equal write budget, and **why was the cycle 27 dose curve linear**? (synthetic graph)
+
+**Synthetic data only.** The real BANC V888 graph (Harvard Dataverse
+DOI 10.7910/DVN/7WTH1N; Bates, Phelps, Kim et al. 2026, *Nature*,
+https://doi.org/10.1038/s41586-026-10735-w; BANC/FlyWire consortium; see
+[SOURCES.md](SOURCES.md)) is **not** in this repository and is not built on the
+build machine. Every number comes from the deterministic generated graph of
+`consolidation_scale::generate_graph` and the artificial OR-rule task of
+[NOVEL_SPLIT.md](NOVEL_SPLIT.md) (#123), run through the **unchanged** cycle 27
+engine of [CUE_WRITE_DOSE.md](CUE_WRITE_DOSE.md) (#186). "Cue", "code",
+"partner", "dose", "frozen", "forgetting" and "transfer" name parts of an
+update rule and an artificial benchmark on a Boolean graph with 4-bit
+weights. Nothing here is a claim about synapses, biology, insect memory or
+BANC physiology.
+
+Module: `src/cue_dose_transfer.rs`. CLI: `bench-cue-dose-transfer`
+(`--census` for the label-free pilot).
+
+## 1. Where cycle 27 left off (#186, main `61784bdc`)
+
+At k = 16, flip 100 (held-out orders, seeds 681..720, synthetic):
+
+* held-out ACC_all rises with the number of writable partner lines of the
+  matched share-2 code: dose slope +0.026 [+0.024, +0.029] (H1 pass); each
+  extra line costs learning (−slope LEARN +0.048) and buys a larger
+  forgetting cut (−slope FGT +0.079);
+* **H4 failed**: the pre-registered *diminishing-returns* hypothesis
+  (concavity f(½) − (f(0) + f(1))/2 of ACC_all > 0) gave +0.000 [−0.001,
+  +0.002], 20/0/20 — the curve is linear (0.577, 0.584, 0.590, 0.597,
+  0.603);
+* line identity did not matter (H5: Zgd2 − Zgd2c +0.000, CI inside ±0.01);
+* against S1 at equal budget every dosed arm won on ACC/LEARN/LAST (H6, H7)
+  but **forgot more in raw terms** (Zgd4: FGT 0.236 vs S1 0.129). S1 also
+  learns much less (LEARN 0.628 vs 0.824; ACC 0.506, i.e. near chance).
+
+Two questions were left open, and both are addressed here, **before any
+measurement**:
+
+1. Is the dose effect a property of that one fixture, or does it
+   generalise to other fixture conditions and fresh seeds, and does it hold
+   up on forgetting against S1 at equal write budget — in raw terms and
+   relative to how much each arm learned?
+2. Why was the curve linear (H4)?
+
+## 2. Diagnosis hypothesis for H4 (stated before measuring)
+
+The nested doses take the first ⌊d·|F_j|/4⌋ lines of a **uniformly random**
+seeded permutation of the partner lines F_j. Write f(S) for the outcome when
+the partner-line set S ⊆ F_j is writable. If line identity does not matter
+on average (cycle 27 H5) and lines have no interaction, f is additive and,
+by the symmetry of the random permutation, E[f(dose d)] is **exactly linear
+in d**. A concave curve (diminishing returns) needs *redundancy*: a negative
+interaction between partner lines, so that two halves together buy less
+than the sum of what each buys alone. Cycle 27 measured the two disjoint
+halves (Zgd2 and its complement Zgd2c) and the union (Zgd4), so the
+interaction can be measured directly:
+
+  I = f(Zgd4) − f(Zgd2) − f(Zgd2c) + f(Zgd0)  (0 if the halves add up,
+  < 0 if they are redundant).
+
+Prediction (pre-registered): I is equivalent to 0 (95 % CI inside ±0.01),
+the concavity replicates as ≈ 0, and the manipulation itself is linear (the
+partner-line moves grow linearly with the dose; cycle 27 G2: 0 / 9.6 / 19.2
+/ 28.9 / 37.7). Under that reading H4 failed because partner lines act
+additively at |F_j| = 4, not because of noise or a weak manipulation.
+**Not computed post hoc on the cycle 27 CSV**: it is measured here on fresh
+seeds only.
+
+## 3. Conditions (pre-registered; one design field changed per condition)
+
+All conditions use the cycle 27 engine unchanged
+(`cue_write_dose::run_grid_threads`): ten arms S1, R1, E, Zg1, Zgd0..Zgd4,
+Zgd2c; the same matched share-2 code, constant whole-stage dose masks
+(dose salt `0x0DE5_B888_4C27_D05E`), `paced100` equal write budget (every
+capped arm uses the per-episode cumulative write curve of uncapped
+error-gated E in the same (seed, order)); same guard, cue init 0,
+last-resort; 4-bit weights; no rehearsal; topology checked per row.
+
+| condition | change vs cycle 27 | purpose |
+|---|---|---|
+| **base** | none (128 sources, 32 targets, fan-in 8, 32 training patterns per task) | replication on fresh seeds |
+| **train64** | 64 training patterns per task (test set unchanged: 128 patterns) | generalisation to a larger training set |
+| **src256** | 256 graph sources (targets 32, fan-in 8 unchanged) | generalisation to a larger, sparser graph |
+
+* **k = 16, flip 100 only** (the cycle 27 primary cell; |F_j| = 4 in every
+  condition, checked by a test on seed 1 before this document was written —
+  fixture construction only, no learning, no accuracy).
+* **Seeds 721..760** (40 seeds, never used by an earlier B888-4 cycle).
+* **Orders:** 0 = identity (secondary only), held-out 1 = reversed, 2..4 =
+  seeded Fisher–Yates permutations. **Declared deviation from the usual
+  "new salt per cycle":** the cycle 27 order salt `0x0DE5_B888_4C27_0A1D`
+  is reused so that the engine is bit-for-bit the cycle 27 engine; the
+  orders are still new because they are keyed by the new seeds.
+* **Metrics** as #131–#186 on the shared TEST set: ACC, LEARN, FGT, LAST on
+  all / CN pairs (balanced accuracy); per seed the mean over its 4 held-out
+  orders (n = 40 paired seeds).
+* **Relative forgetting** (new derived quantity, defined here before any
+  measurement, computed only from the existing stage matrix R[i][j]): per
+  seed and arm, RF = mean FGT_all / (mean LEARN_head − 0.5), where FGT_all is
+  the usual mean over tasks j < k of R[j][j] − R[k][j] and LEARN_head is the
+  mean of R[j][j] over the **same** tasks j < k (chance of the balanced
+  accuracy = 0.5); both means are over the seed's held-out orders. RF is the
+  share of the above-chance learning that is lost by the end of the
+  sequence. Motivation (declared): in cycle 27 S1 forgot little in raw
+  terms partly because it learned little, so a raw-FGT comparison alone
+  cannot say whether a dosed arm "forgets more" of what it learned.
+* **Dose slope** and **concavity** exactly as cycle 27 (least-squares slope
+  on q ∈ {0, ¼, ½, ¾, 1}; f(½) − (f(0) + f(1))/2).
+* **Statistics** as #123–#186: bootstrap 95 % percentile CI (2000
+  resamples, seed 0xB0075EED); better/ties/worse over 40 seeds.
+  * positive: mean > 0 and CI lower bound > 0;
+  * sequence rule: ΔACC strong (mean ≥ 0.05, > 0 in ≥ 32 of 40 seeds, CI
+    lower bound > 0), ΔLAST ≥ −0.05 and ΔLEARN ≥ −0.05;
+  * equivalent: the 95 % CI lies strictly inside ±0.01;
+  * non-inferior (H5 only): CI lower bound of FGT(S1) − FGT(Zgd4) > −0.02.
+* **Reproducibility:** the main run is repeated with a different thread
+  count and must give a byte-identical CSV (sha256 reported).
+
+## 4. Design gates (per condition, reported first)
+
+* **G1 (integrity):** the cycle 27 G1 unchanged (topology, initial weights,
+  charged writes ≤ allowance, `error-gated@paced100` = uncapped E, guard
+  counters, orders, codes, dose masks and writable-line counts, frozen
+  moves = 0, per-stage budgets equal across arms).
+* **G2 (manipulation):** the cycle 27 G2 clauses (a)–(d) at k 16, flip 100,
+  held-out rows (partner-line moves strictly increase along Zgd0..Zgd4;
+  Zgd1 moves a partner line in ≥ 50 % of rows; Zgd1/2/3/2c skip frozen
+  steps in ≥ 50 % of rows; Zgd2c moves within a factor 2 of Zgd2).
+* **G3 (novel pairs):** median CN pairs per (seed, task) at k 16, flip 100
+  ≥ 20. **Declared deviation:** cycle 27 checked G3 at flip 50, which is
+  not run here.
+* **G4 (leakage):** for every seed, no TEST pattern (set of active inputs)
+  equals any training pattern of any task; all arms of a (seed, order) are
+  scored on the same TEST set (by construction of the shared fixture) and
+  no arm trains on TEST patterns.
+* **G5 (RF defined):** LEARN_head − 0.5 ≥ 0.05 for every seed for S1 and
+  Zgd4.
+
+If G1–G4 fail in a condition, every hypothesis that uses the condition is
+**not evaluable**. If only G5 fails in a condition, only H6 / H7 are not
+evaluable there.
+
+## 5. Hypotheses (k = 16, flip 100, held-out orders, seeds 721..760)
+
+Generalisation of the dose effect:
+
+* **H1 (replication):** base, dose slope of ACC_all positive.
+* **H2 (larger training set):** train64, dose slope of ACC_all positive.
+* **H3 (larger graph):** src256, dose slope of ACC_all positive.
+* **H4 (forgetting side generalises):** −(dose slope of FGT_all) positive
+  in **each** of base, train64 and src256.
+
+Forgetting against S1 at equal write budget:
+
+* **H5 (raw forgetting, non-inferiority):** base, FGT(S1) − FGT(Zgd4)
+  non-inferior (CI lower bound > −0.02). (Cycle 27 suggests this fails; it
+  is registered as the plain reading of "holds up on forgetting".)
+* **H6 (relative forgetting):** base, RF(S1) − RF(Zgd4) positive (Zgd4
+  loses a smaller share of what it learned).
+* **H7 (relative forgetting generalises):** RF(S1) − RF(Zgd4) positive in
+  **both** train64 and src256.
+* **H8 (vs control generalises):** Zgd4 vs S1 passes the sequence rule in
+  **both** train64 and src256.
+* **H9 (novel pairs):** ACC_cn(Zgd4) − ACC_cn(S1) positive in **each** of
+  base, train64 and src256.
+
+Diagnosis of the cycle 27 H4 failure:
+
+* **H10 (linearity replicates):** base, the concavity of ACC_all is
+  equivalent to 0 (CI inside ±0.01).
+* **H11 (additivity):** base, the interaction I of ACC_all is equivalent to
+  0 (CI inside ±0.01).
+* **H12 (additivity generalises):** the interaction I of ACC_all is
+  equivalent to 0 in **both** train64 and src256.
+
+No multiplicity correction (as #123–#186); every hypothesis is reported
+with its mean, CI and better/ties/worse counts, pass or fail.
+
+**Secondary (descriptive, no pass/fail):** per condition: dose slopes of
+LEARN_all, ACC_cn and partner-line moves; concavity and interaction of
+FGT_all, LEARN_all and partner-line moves; Zgd2 − Zgd2c; Zgd0 / Zgd2 / Zgd4
+vs S1 on ACC, FGT, LEARN, LAST and RF; worst held-out order of Zgd4 − S1
+and Zgd2 − Zgd2c; per-arm summaries (ACC, LEARN, LEARN_head, FGT, LAST, RF,
+writes, cue writes, partner-line moves, skips); identity order; idle stages.
+
+## 6. Pilot (label-free, before the main run)
+
+`bench-cue-dose-transfer --census` on seeds 1..5, identity order, all three
+conditions: writes, cue writes, skips, frozen moves, partner-line moves,
+writable lines, idle stages, partner agreement, cue reach and the G4
+leakage check. No accuracy is computed and no held-out order is drawn. The
+pilot can only lead to stopping the cycle before the main run (e.g. if a
+dose cannot bind in a condition); it cannot change a threshold, an arm, a
+condition, a seed or a hypothesis above.
+
+## Reproduce
+
+```bash
+cargo +1.89 run --release -- bench-cue-dose-transfer --census > results/cue-dose-transfer-census-v1.txt
+cargo +1.89 run --release -- bench-cue-dose-transfer --csv results/cue-dose-transfer-v1.csv > results/cue-dose-transfer-report-v1.txt
+```
