@@ -19,6 +19,7 @@ pub mod cue_reach;
 pub mod cue_robustness;
 pub mod cue_similarity;
 pub mod cue_write_clock;
+pub mod cue_write_dose;
 pub mod eligibility_trace;
 pub mod engine;
 pub mod error_gated;
