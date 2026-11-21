@@ -342,6 +342,14 @@ Every gate passes in every condition; all 13 hypotheses are evaluable.
   graph with artificial labels. No claim about synapses, biology, insect
   memory or BANC physiology is made.
 
+## Thread-count rerun (done in cycle 30)
+
+The rerun not done in this cycle was done for the `base` condition in
+cycle 30 ([CUE_DOSE_DENSITY.md](CUE_DOSE_DENSITY.md)): `--conds base
+--threads 6` reproduces the header and `base` rows of
+`results/cue-dose-guard-v1.csv` byte for byte (sha256 `761eadf9…`).
+src256 and src512 were not re-run.
+
 ## Reproduce
 
 ```bash

@@ -306,7 +306,22 @@ Exact decomposition (Zgd4 − S1): ΔLEARN_head / ΔRET_head = base
 
 ### Reproducibility
 
-_RERUN_PLACEHOLDER_
+Both pre-registered checks pass (§4):
+
+* **Cycle 30:** `bench-cue-dose-density --conds base,d512 --threads 5`
+  (wall time 2 389 s) gives 6 001 lines (header + 6 000 rows) that are
+  **byte-identical** to the header plus the `base` and `d512` rows of the
+  main `--threads 8` CSV (sha256 of both:
+  `6b48780ae3e21a5e166974cf39119f8f6ea3ac98f1c0e3d276c63291ef903bf1`).
+  src256-free subset only: src512 and d256 were not re-run.
+* **Cycle 29 (open item from #188):** `bench-cue-dose-guard --conds base
+  --threads 6` (built from this branch, whose only change to
+  `cue_dose_guard` is the two new `Cond` variants and visibility) gives
+  3 001 lines **byte-identical** to the header plus `base` rows of the
+  committed `results/cue-dose-guard-v1.csv` (sha256
+  `761eadf93e76e8a452c5ddd8350edcb255c2dba5533ffd0a4f519b909ff7510b`).
+  This also shows the branch leaves cycle 29's base output unchanged.
+  Cycle 29's src256 and src512 conditions were not re-run.
 
 
 ## Reproduce
