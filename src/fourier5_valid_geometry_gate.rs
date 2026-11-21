@@ -1017,7 +1017,10 @@ mod bound_sequential_tests {
             group(1, 10, Split::Valid, 12),
             group(2, 20, Split::Valid, 20),
         ];
-        let target = Geometry { gates: 100, cone: 10 };
+        let target = Geometry {
+            gates: 100,
+            cone: 10,
+        };
         // Independent order oracle: the two identity streams differ.
         let expected_order = [1_u64, 2];
         let actual_order = [2_u64, 1];
