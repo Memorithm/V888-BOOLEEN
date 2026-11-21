@@ -170,8 +170,34 @@ cause. H4 is the cycle 29 H3 question re-asked at matched density.
 
 ## 7. Label-free pilot
 
-_To be filled in after the pilot run (seeds 1..5, identity order, training
-only, no accuracy)._
+`bench-cue-dose-density --census` (seeds 1..5, identity order, training
+only, no accuracy computed, no held-out order drawn):
+[results/cue-dose-density-census-v1.txt](../results/cue-dose-density-census-v1.txt).
+
+| cond | edges / source | sources with an out-edge | out-degree of active training inputs | E writes (= cap) | Zgd4 partner moves | Zbd4 partner moves | Zbd0 blocked |
+|---|---|---|---|---|---|---|---|
+| base | 2.0 | 0.852 | 1.287 | 914.8 | 61.2 | 61.8 | 12 046 |
+| src512 | 0.5 | 0.396 | **1.000** | 1309.4 | 49.0 | 59.4 | 9 879 |
+| d256 | 2.0 | 0.866 | 1.686 | 2229.2 | 93.4 | 99.8 | 14 225 |
+| d512 | 2.0 | 0.877 | 1.923 | 2645.6 | 115.6 | 112.6 | 12 476 |
+
+* The dilution is real in the fixture: at src512 every active training
+  input reaches **exactly one** target (out-degree 1.000) and only 40 % of
+  sources have any edge; density matching restores ≥ 85 % and raises the
+  out-degree to 1.7–1.9.
+* Every manipulation binds in every condition: the last-resort dose skips
+  fall to 0 at full dose and partner moves rise along Zgd0..4; every block
+  arm refuses overwrites; Zbd partner moves rise with the dose; no frozen
+  line moves; 5/5 leakage-free fixtures per condition.
+* **Declared observation (not a deviation):** the `paced100` budget is a
+  per-(seed, order) quantity, so it differs across conditions (E writes
+  915 at base vs 2 646 at d512; there are 4× more edges at d512). Within a
+  condition every arm keeps the same caps (equal budget). Cross-condition
+  contrasts (H1–H6) therefore compare conditions that differ in fan-in
+  **and** in the write budget it induces; this is part of the manipulation
+  and is stated as such in the results. In d256 and d512 the block arms use
+  their whole cap (charged writes = cap), unlike base.
+* The pilot changes nothing in §3–§6.
 
 ## 8. Results
 
