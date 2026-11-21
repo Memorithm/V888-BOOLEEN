@@ -217,6 +217,110 @@ held-out order drawn; sha256
   pilot measured no accuracy and changed no threshold, arm, condition, seed
   or hypothesis. The main run is executed exactly as pre-registered above.
 
+## 8. Main run result (seeds 721..760, held-out orders; synthetic graph)
+
+Files: `results/cue-dose-transfer-report-v1.txt`,
+`results/cue-dose-transfer-v1.csv` (6 000 rows = 3 conditions × 40 seeds ×
+5 orders × 10 arms; sha256
+`2a4c6bf7ffa947715ea0fdf898ad05e143ac7d227e82364dd3056e2e33110fd1`, report
+sha256 `ef7f9800202e90bf90435e62b6dcf5b25f1d0c6ed8a1e99eb31b041c2bbcded6`).
+The run was executed exactly as pre-registered above; no threshold, arm,
+condition, seed or hypothesis was changed after the pilot. Reproducibility: the CSV and the report are byte-identical with `--threads 8` and `--threads 6` (same sha256 in both).
+
+**Deviations:** none from the hypotheses, thresholds, arms, conditions or
+seeds. After the pilot only the unit tests of `src/cue_dose_transfer.rs`
+were made lighter (test grid on one seed instead of two, inside
+`#[cfg(test)]`, to fit the qualification time budget); the benchmark binary
+that produced the results was built from the pre-registration commit and
+no measurement code changed. The two declared design deviations of §3–§4
+(order salt reused, G3 checked at flip 100) were stated before measuring.
+
+### Design gates
+
+| condition | G1 integrity | G2 manipulation (partner-line moves Zgd0..4 / 2c) | G3 median CN | G4 leak-free fixtures | G5 RF defined |
+|---|---|---|---|---|---|
+| base | **pass** | **pass** (0 / 10.1 / 19.6 / 28.8 / 37.9 / 19.2) | **pass** (64) | **pass** (40/40) | **pass** |
+| train64 | **pass** | **pass** (0 / 9.6 / 18.6 / 27.6 / 36.1 / 18.6) | **pass** (39) | **pass** (40/40) | **pass** |
+| src256 | **pass** | **pass** (0 / 11.0 / 20.6 / 30.2 / 40.7 / 20.6) | **pass** (66) | **pass** (40/40) | **pass** |
+
+Idle stages (descriptive, as diagnosed in cycle 27): 3.02 (base), 5.16
+(train64) and 0.77 (src256) of 16 stages per held-out row on average;
+identical across the arms of an order (G1), no gate or hypothesis depends
+on them.
+
+### Hypotheses (k = 16, flip 100; mean ± sd [95 % bootstrap CI] better/ties/worse over 40 seeds)
+
+| H | contrast | value | verdict |
+|---|---|---|---|
+| H1 | base, dose slope of ACC_all | +0.022 ± 0.011 [+0.018, +0.025] 40/0/0 | **pass** |
+| H2 | train64, dose slope of ACC_all | +0.022 ± 0.008 [+0.020, +0.025] 40/0/0 | **pass** |
+| H3 | src256, dose slope of ACC_all | +0.014 ± 0.008 [+0.011, +0.017] 40/0/0 | **pass** |
+| H4 | −(dose slope of FGT_all), each condition | base +0.077 [+0.073, +0.082]; train64 +0.078 [+0.074, +0.082]; src256 +0.060 [+0.057, +0.063]; all 40/0/0 | **pass** |
+| H5 | base, FGT(S1) − FGT(Zgd4) non-inferior (CI lo > −0.02) | −0.107 ± 0.019 [−0.113, −0.101] 0/0/40 | **fail** |
+| H6 | base, RF(S1) − RF(Zgd4) | +0.247 ± 0.051 [+0.232, +0.263] 40/0/0 | **pass** |
+| H7 | RF(S1) − RF(Zgd4), train64 and src256 | train64 +0.252 [+0.234, +0.269]; src256 +0.145 [+0.132, +0.158]; both 40/0/0 | **pass** |
+| H8 | Zgd4 vs S1 sequence rule, train64 and src256 | train64 ΔACC +0.091 [+0.086, +0.097] 40/0/0, ΔLEARN +0.196, ΔLAST +0.194 (passes); src256 ΔACC +0.0497 [+0.046, +0.053] 40/0/0, ΔLEARN +0.158, ΔLAST +0.166 (ΔACC mean below the 0.05 bar) | **fail** (src256) |
+| H9 | ACC_cn(Zgd4) − ACC_cn(S1), each condition | base +0.105 [+0.095, +0.116] 40/0/0; train64 +0.120 [+0.107, +0.132] 40/0/0; src256 +0.057 [+0.047, +0.066] 38/0/2 | **pass** |
+| H10 | base, concavity of ACC_all ≡ 0 (±0.01) | −0.002 ± 0.006 [−0.004, −0.000] 11/0/29 | **pass** |
+| H11 | base, interaction I of ACC_all ≡ 0 (±0.01) | +0.001 ± 0.005 [−0.001, +0.002] 24/0/16 | **pass** |
+| H12 | interaction I of ACC_all ≡ 0, train64 and src256 | train64 −0.001 [−0.002, +0.001]; src256 −0.001 [−0.002, +0.001] | **pass** |
+
+(H8 src256: the exact mean ΔACC over the 40 seeds is 0.04975, from the
+6-decimal CSV; the sequence rule requires ≥ 0.05.)
+
+### Readings (descriptive, synthetic benchmark only)
+
+* **The dose effect generalises.** On fresh seeds the base slope is +0.022
+  (cycle 27: +0.026). Doubling the training patterns leaves it unchanged
+  (+0.022). Doubling the graph sources shrinks it to +0.014, but it is still
+  positive in 40/40 seeds. The forgetting side generalises too: each extra
+  partner line cuts forgetting in every condition (−slope FGT +0.060 to
+  +0.078), and costs learning (−slope LEARN +0.042 to +0.051).
+* **Raw forgetting against S1 does not hold up.** At equal write budget,
+  Zgd4 forgets more than S1 in all three conditions (FGT(S1) − FGT(Zgd4) =
+  −0.107 base, −0.112 train64, −0.115 src256; 0/0/40 each), so H5 fails.
+  Owned Zgd0 forgets even more (−0.185 base). The dose narrows the raw gap
+  to S1 but does not close it.
+* **Relative to what each arm learned, the dosed arm forgets less.** S1
+  loses almost all of its above-chance learning by the end of the sequence
+  (RF ≈ 0.99 in every condition), and its final ACC_all is at chance
+  (0.506–0.507). Zgd4 loses 0.74 (base), 0.74 (train64) and 0.85 (src256)
+  of it. RF falls along the dose (base 0.846 / 0.823 / 0.800 / 0.771 /
+  0.739 for Zgd0..4). At flip 100 consecutive tasks have opposite labels,
+  so a large RF is expected for every arm (uncapped E: 1.02, i.e. old tasks
+  end slightly below chance).
+* **Against S1 the cued arms still win on accuracy, but the margin depends
+  on the graph.** ΔACC Zgd4 − S1 is +0.089 (base), +0.091 (train64) and
+  +0.050 (src256). On the 256-source graph the margin falls just short of
+  the pre-registered 0.05 bar (H8 fails). Novel-pair accuracy against S1
+  follows the same pattern (+0.105 / +0.120 / +0.057). The dose slope of
+  ACC_cn is ≈ 0 in every condition (base −0.005 [−0.016, +0.006]; train64
+  −0.008 [−0.015, −0.001]; src256 +0.000): the advantage on novel pairs
+  comes from the cue code itself, not from the partner-line dose. This
+  replicates the weak cycle 27 H11.
+* **Why cycle 27 H4 failed: the partner lines add up.** The two disjoint
+  halves of F_j together buy what each buys alone, summed: I = +0.001
+  (base), −0.001 (train64), −0.001 (src256), with every CI within [−0.002, +0.002].
+  With no interaction and a uniformly random nested order, the expected
+  dose curve is linear, and it is (base concavity −0.002 [−0.004, −0.000],
+  a very slight convexity; train64 +0.001; src256 +0.001). The manipulation
+  is close to linear as well (partner-line moves 0 / 10.1 / 19.6 / 28.8 /
+  37.9, concavity +0.7 moves at base). H4 did not fail because the run was
+  noisy or the manipulation was weak. It failed because partner lines act
+  additively at |F_j| = 4 on this benchmark, so there are no diminishing
+  returns to find.
+* **Secondary.** The interactions of FGT_all and LEARN_all are also ≈ 0
+  (|I| ≤ 0.003). The interaction of partner-line moves is slightly negative
+  (base −0.95 moves [−1.47, −0.41]): the two halves together move about one
+  edge fewer than each alone, summed. This does not show up in accuracy.
+  Line identity: base Zgd2 − Zgd2c −0.003 [−0.006, −0.000] 13/0/27 (train64
+  +0.002, src256 +0.002, both CIs include 0); the worst held-out order of
+  Zgd2 − Zgd2c is negative, as in cycle 27, and biased below zero by
+  construction (minimum of four noisy differences).
+* Absolute effects are small (owned → shared +0.014 to +0.022 ACC) and
+  every number comes from a generated graph with artificial labels. No
+  claim about synapses, biology, insect memory or BANC physiology is made.
+
 ## Reproduce
 
 ```bash

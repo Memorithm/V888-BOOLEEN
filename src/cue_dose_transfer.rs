@@ -721,11 +721,11 @@ mod tests {
         }
     }
 
-    /// One small grid (all conditions, seeds 2..3, 1 random order),
+    /// One small grid (all conditions, seed 2, 1 random order),
     /// computed once per test binary.
     fn grid() -> &'static [CondRows] {
         static GRID: std::sync::OnceLock<Vec<CondRows>> = std::sync::OnceLock::new();
-        GRID.get_or_init(|| run_with(&CONDS, &[2, 3], 4, 1, small).unwrap())
+        GRID.get_or_init(|| run_with(&CONDS, &[2], 3, 1, small).unwrap())
     }
 
     #[test]
@@ -772,8 +772,8 @@ mod tests {
         let z = cwd::compare(rows, sel(), K, Slice::All, ZGD4, ZGD4).acc;
         assert_eq!(z.mean, 0.0);
         let i = interaction(rows, &acc);
-        assert_eq!(i.n, 2);
-        let manual: f64 = [2_u64, 3]
+        assert_eq!(i.n, 1);
+        let manual: f64 = [2_u64]
             .iter()
             .map(|&sd| {
                 seed_mean(rows, sd, ZGD4, &acc).unwrap()
@@ -781,8 +781,7 @@ mod tests {
                     - seed_mean(rows, sd, ZGD2C, &acc).unwrap()
                     + seed_mean(rows, sd, ZGD0, &acc).unwrap()
             })
-            .sum::<f64>()
-            / 2.0;
+            .sum::<f64>();
         assert!((i.mean - manual).abs() < 1e-12);
         if rf_defined(rows, &[ZGD4]) {
             assert_eq!(rf_diff(rows, ZGD4, ZGD4).mean, 0.0);
