@@ -76,7 +76,9 @@ pub fn choose_sequential_throughput(
             else {
                 return ThroughputChoice::Full;
             };
-            if f == 0 || scaled_incremental >= scaled_full {
+            // A zero-duration sample is below timer resolution, not proof of speedup.
+            // Reject it rather than calibrating dispatch on an unmeasured cost.
+            if f == 0 || i == 0 || scaled_incremental >= scaled_full {
                 return ThroughputChoice::Full;
             }
             let Some(next_full) = full.checked_add(f) else {
@@ -205,6 +207,22 @@ mod tests {
         assert_eq!(
             choose_sequential_throughput(&groups, 2, 2, 20, 4096),
             ThroughputChoice::Incremental
+        );
+    }
+
+    #[test]
+    fn zero_duration_incremental_sample_is_not_a_measured_speedup() {
+        // Independent scalar oracle: no positive elapsed time was measured.
+        let a = [row(100, 0, StepVerdict::Accepted, Some(1024))];
+        let b = [row(100, 50, StepVerdict::Accepted, Some(1024))];
+        assert_eq!(a[0].incremental_with_refresh.as_nanos(), 0);
+        let groups = [
+            ValidSequence { split: DataSplit::Valid, group_id: 1, steps: &a },
+            ValidSequence { split: DataSplit::Valid, group_id: 2, steps: &b },
+        ];
+        assert_eq!(
+            choose_sequential_throughput(&groups, 2, 1, 20, 4096),
+            ThroughputChoice::Full
         );
     }
 
