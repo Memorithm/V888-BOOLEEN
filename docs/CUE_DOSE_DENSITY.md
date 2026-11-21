@@ -201,7 +201,113 @@ only, no accuracy computed, no held-out order drawn):
 
 ## 8. Results
 
-_To be filled in after the main run._
+Main run: `bench-cue-dose-density --threads 8` (seeds 801..840, 4
+conditions, 15 arms, 5 orders; 12 000 rows; wall time 4 103 s on 8 cores):
+[results/cue-dose-density-v1.csv](../results/cue-dose-density-v1.csv)
+(sha256 `5c4fbf6cd7d137f7e6425b6a2ac1f974000a2027504b83f1ffa109221a850f95`),
+[results/cue-dose-density-report-v1.txt](../results/cue-dose-density-report-v1.txt).
+All synthetic.
+
+### Gates
+
+| cond | G1 | G2a | G2b | G2c | G3 (median CN) | G4 | G5 |
+|---|---|---|---|---|---|---|---|
+| base | pass | pass | pass | pass | pass (64) | 40/40 | pass |
+| src512 | pass | pass | pass | pass | pass (57) | 40/40 | pass |
+| d256 | pass | pass | pass | pass | pass (154) | 40/40 | pass |
+| d512 | pass | pass | pass | pass | pass (122) | 40/40 | **fail** |
+
+G5 fails in d512: relative forgetting is undefined (LEARN_head − 0.5 <
+0.05) for S1 on 7 seeds and for Zbd4 on 13 seeds, because learning
+collapses there (below). No hypothesis of this cycle uses G5, so all 12
+are evaluable; RF numbers in d512 are over the defined seeds only.
+
+### Arms (held-out orders, mean over rows)
+
+| cond | arm | ACC_all | ACC_cn | LEARN_head | RET_head | FGT_all | charged writes |
+|---|---|---|---|---|---|---|---|
+| base | S1 | 0.507 | 0.515 | 0.630 | 0.502 | 0.128 | 638.7 |
+| base | E | 0.521 | 0.644 | 0.987 | 0.490 | 0.497 | 638.7 |
+| base | Zgd4 | 0.604 | 0.632 | 0.819 | 0.591 | 0.228 | 638.7 |
+| base | Zbd4 | 0.602 | 0.575 | 0.646 | 0.600 | 0.046 | 627.3 |
+| src512 | S1 | 0.506 | 0.515 | 0.613 | 0.501 | 0.112 | 1009.5 |
+| src512 | E | 0.513 | 0.564 | 0.844 | 0.492 | 0.352 | 1009.5 |
+| src512 | Zgd4 | 0.540 | 0.557 | 0.758 | 0.527 | 0.231 | 1009.5 |
+| src512 | Zbd4 | 0.535 | 0.527 | 0.583 | 0.535 | 0.049 | 958.7 |
+| d256 | S1 | 0.509 | 0.515 | 0.590 | 0.505 | 0.084 | 1781.1 |
+| d256 | E | 0.520 | 0.556 | 0.803 | 0.502 | 0.301 | 1781.1 |
+| d256 | Zgd4 | 0.543 | 0.549 | 0.650 | 0.538 | 0.112 | 1781.1 |
+| d256 | Zbd4 | 0.529 | 0.527 | 0.576 | 0.528 | 0.048 | 1780.5 |
+| d512 | S1 | 0.511 | 0.521 | 0.555 | 0.509 | 0.046 | 2415.0 |
+| d512 | E | 0.519 | 0.539 | 0.650 | 0.511 | 0.139 | 2415.0 |
+| d512 | Zgd4 | 0.529 | 0.539 | 0.579 | 0.528 | 0.051 | 2415.0 |
+| d512 | Zbd4 | 0.517 | 0.522 | 0.554 | 0.517 | 0.037 | 2415.0 |
+
+### Hypotheses (mean [95 % CI] better/ties/worse over 40 seeds)
+
+| H | contrast | value | verdict |
+|---|---|---|---|
+| H1 | LEARN_head(E) d512 − src512 | −0.193 [−0.197, −0.190] 0/0/40 | **fail** |
+| H2 | gap(src512) − gap(base) | −0.019 [−0.025, −0.013] 5/0/35 | pass (widening replicates) |
+| H3 | gap(d512) − gap(src512) | +0.114 [+0.110, +0.118] 40/0/0 | pass |
+| H4 | gap(d512) − gap(base) | +0.095 [+0.090, +0.101] 40/0/0 | pass |
+| H5 | same, non-inferior | CI lo +0.090 > −0.02 | pass |
+| H6 | ΔRET term d512 − src512 | −0.007 [−0.011, −0.003] 16/0/24 | **fail** |
+| H7 | Zbd4 vs S1: FGT non-inf. and ACC_all > 0, each cond | FGT +0.082 / +0.063 / +0.037 / +0.008; ACC +0.094 / +0.029 / +0.020 / +0.005 [+0.004, +0.007] | pass |
+| H8 | d512 ACC_cn(Zgd4) − S1 | +0.018 [+0.012, +0.024] 34/0/6 | pass |
+| H9 | d512 ACC_cn(Zbd4) − S1 | +0.001 [−0.004, +0.007] 26/0/14 | **fail** |
+| H10 | Zgd slope ACC_all, each cond | +0.023 / +0.007 / +0.004 / +0.002 [+0.001, +0.004] | pass |
+| H11 | d512 Zgd concavity | −0.000 [−0.001, +0.001] | pass |
+| H12 | d512 Zbd slope ACC_all | +0.002 [+0.001, +0.003] 30/0/10 | pass |
+
+Raw gap FGT(S1) − FGT(Zgd4) per condition: base −0.100, src512 −0.119,
+d256 −0.028, d512 −0.005 [−0.007, −0.003] (still 6/0/34 against Zgd4).
+
+Exact decomposition (Zgd4 − S1): ΔLEARN_head / ΔRET_head = base
++0.189 / +0.089; src512 +0.145 / +0.026; d256 +0.060 / +0.032; d512
++0.024 / +0.019.
+
+### Reading (descriptive)
+
+* **The pre-registered reading rule cannot be applied as written.** H3 and
+  H5 pass, which §6 would read as "the widening is caused by dilution".
+  But the manipulation check H1 **fails, strongly**: scaling fan-in to keep
+  2 edges per source did **not** restore learning; it made it much worse
+  (uncapped E LEARN_head 0.987 base, 0.844 src512, 0.803 d256, **0.650**
+  d512). So d512 is not "src512 without dilution"; it is a harder
+  condition in which every arm learns little. The rule was written
+  assuming H1 would pass; with H1 failing, **dilution is not supported as
+  the cause of the cycle 29 widening**, and we do not claim it.
+* **Why the gap "closes" at matched density: the arms stop learning, not
+  retention.** The gap moves from −0.119 (src512) to −0.005 (d512) because
+  Zgd4's learning advantage over S1 collapses (+0.145 → +0.024), while its
+  retention advantage does not improve (H6 fails: −0.007). This is the same
+  mechanism as cycle 29: raw FGT rewards not learning. **It is not an
+  improvement**; ACC_all of Zgd4 falls from 0.604 (base) to 0.529 (d512).
+* **The cycle 29 widening replicates on new seeds** (H2: −0.019, close to
+  cycle 29's −0.020). Retention advantage again shrinks with sources
+  (+0.089 → +0.026) faster than learning advantage (+0.189 → +0.145).
+* **Supervised control at equal budget.** The block guard still forgets
+  less than S1 and is more accurate in every condition (H7), but the
+  margins shrink to almost nothing at d512 (ACC_all +0.005, FGT +0.008).
+  On novel pairs, Zgd4 beats S1 at d512 (+0.018, H8) but Zbd4 does not
+  (+0.001, H9 fails). At base, Zgd4 vs S1 ACC_cn is +0.117 and Zbd4 vs S1
+  +0.060.
+* **The dose effect stays positive and linear** in every condition (H10,
+  H11, H12), but its size falls with every change away from base
+  (+0.023 → +0.002 per full dose).
+* **Open question, not tested here:** why fan-in 32 with 6 active inputs
+  and 4-bit weights learns less. One candidate is that a target's response
+  is dominated by many untrained inputs; a fan-in sweep at fixed sources
+  would separate fan-in from density. No claim is made.
+* Absolute effects are small, every number comes from a generated graph
+  with artificial labels, and no claim about synapses, biology, insect
+  memory or BANC physiology is made.
+
+### Reproducibility
+
+_RERUN_PLACEHOLDER_
+
 
 ## Reproduce
 
