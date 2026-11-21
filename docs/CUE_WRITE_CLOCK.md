@@ -228,6 +228,43 @@ can only lead to stopping the cycle before the main run (e.g. if a
 manipulation cannot bind); it cannot change a threshold, an arm or a
 hypothesis above.
 
+## Pilot result (label-free, seeds 1..5, identity order; written before the main run)
+
+File: `results/cue-write-clock-census-v1.txt` (no accuracy computed, no held-out
+order drawn; sha256
+`5f7b7db08852f32c04461f1bfcdaf200d4a9789e230721451cfcc61abfdb8cdd`).
+Means over the 5 pilot seeds:
+
+| k, flip | partner-line moves, write-half 1 / 2: Zg2m | Zge2m | Zgl2m | Zgl2m skips half 1 | write-clock split / n | cue writes Zg1 / Zg2m / Zgo2m / Zgl2m / Zge2m |
+|---|---|---|---|---|---|---|
+| 16, 100 | 43.4 / 39.8 | 46.4 / 0.0 | 0.0 / 40.4 | 66.4 | 5.8 / 256 | 305.8 / 491.8 / 309.8 / 404.6 / 392.2 |
+| 16, 50 | 31.6 / 33.8 | 29.6 / 0.0 | 0.0 / 36.2 | 51.2 | 5.2 / 256 | 118.6 / 207.8 / 122.6 / 168.6 / 156.6 |
+| 24, 100 | 51.4 / 40.0 | 54.6 / 0.0 | 0.0 / 42.2 | 77.2 | 8.4 / 256 | 431.8 / 766.8 / 434.8 / 612.8 / 569.4 |
+| 24, 50 | 38.8 / 34.0 | 37.2 / 0.0 | 0.0 / 37.6 | 66.8 | 8.0 / 256 | 171.4 / 323.6 / 180.0 / 255.8 / 230.8 |
+
+* The write clock sits at episode ≈ 5–8 of 256, far before the cycle 25
+  episode mid-point (128). Under the shared write, partner-line edge changes
+  are now split across the two write-halves (unlike #184, where almost every
+  partner move fell in the first *episode*-half). The early window (Zge2m)
+  reproduces the shared code's first-half partner moves and then stops; the
+  late window (Zgl2m) has zero first-half partner moves, first-half skips in
+  every run, and ≈ 36–42 partner-line edge changes in its second write-half
+  (vs ≈ 1 under the episode clock of #184).
+* Cue writes of Zgl2m sit between the owned and shared codes (e.g. 404.6
+  at k = 16, flip 100, vs 309.8 owned and 491.8 shared): the late window
+  now actually receives partner-block writes.
+* Pilot fraction of identity-order Zgl2m runs with a second-write-half
+  partner move (G2 (a)): **1.0** at (16, 50), (16, 100), (24, 50) and
+  (24, 100). Skips (G2 (b)), early moves (G2 (c)) and the write clock
+  earlier than `n / 2` (G2 (e)) bind in 5/5. Frozen moves are 0 in every
+  row.
+* **Expectation stated before the main run:** G2 is expected to pass, so
+  H1–H13 should be evaluable. The late window is no longer empty, so the
+  cycle can test whether *when* partner writes happen changes the #139
+  trade-off; the pilot does not measure accuracy and does not change a
+  threshold, arm or hypothesis. The main run is executed exactly as
+  pre-registered above.
+
 ## Reproduce
 
 ```bash
