@@ -17,8 +17,10 @@ pub enum TransactionError {
 /// the next state independently; rebuild computes the canonical cache from it.
 /// On mismatch or incremental error, Full wins and its cache is rebuilt.
 /// Timings are paired and include the incremental callback's cache maintenance.
-/// Rebuild is additionally timed and charged to incremental cost on recovery.
-/// The oracle rebuild itself is not a production incremental speed measurement.
+/// The canonical oracle rebuild is charged on every step: this reports the
+/// conservative cost of *verified execution*, not unverified production latency.
+/// Full timing remains the standalone reference, so these paired figures are
+/// unsuitable for claims of production speedup without a separate benchmark.
 pub fn execute_verified_sequence<S, C, I, E, F, D, R>(
     initial_state: S,
     initial_cache: C,
@@ -47,7 +49,7 @@ where
         let full_time = start.elapsed();
         let start = Instant::now();
         let candidate = incremental(&state, &cache, input);
-        let mut incremental_time = start.elapsed();
+        let incremental_time = start.elapsed();
         // Independent cache reconstruction is outside the timed fast path.
         // It is a correctness oracle, not a claimed incremental cost.
         let rebuild_start = Instant::now();
@@ -72,16 +74,14 @@ where
                 StepVerdict::IncrementalError
             }
         };
-        // The canonical rebuild already performed above IS the recovery cache.
-        // Charge its actual measured cost on failed incremental paths; do not
-        // rebuild twice and accidentally undercount the first reconstruction.
-        if verdict != StepVerdict::Accepted {
-            incremental_time = incremental_time.saturating_add(rebuild_time);
-        }
+        // Charge verification on accepted paths too: a verified execution
+        // cannot omit the oracle's reconstruction from its measured cost.
+        // The same canonical cache is reused on recovery (no second rebuild).
+        let verified_time = incremental_time.saturating_add(rebuild_time);
         rows.push(StepMeasurement {
             verdict,
             full: full_time,
-            incremental_with_refresh: incremental_time,
+            incremental_with_refresh: verified_time,
             peak_rss_kib: process_vm_hwm_kib(),
         });
     }
@@ -146,6 +146,24 @@ mod tests {
         assert_eq!(rebuild_calls.get(), 3);
         assert_eq!((state, cache), (3, 3));
         assert!(rows.iter().all(|r| r.verdict == StepVerdict::Mismatch));
+    }
+
+    #[test]
+    fn accepted_step_accounts_for_canonical_verification_cost() {
+        use std::time::Duration;
+        let (_, _, rows) = execute_verified_sequence(
+            0_u8, 0_u8, &[1_u8],
+            |s, d| Ok::<_, ()>(s + d),
+            |s, _, d| Ok::<_, ()>((s + d, s + d)),
+            |s| {
+                if *s == 1 {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Ok::<_, ()>(*s)
+            },
+        ).unwrap();
+        assert_eq!(rows[0].verdict, StepVerdict::Accepted);
+        assert!(rows[0].incremental_with_refresh >= Duration::from_millis(5));
     }
 
     #[test]
