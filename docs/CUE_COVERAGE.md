@@ -196,7 +196,117 @@ LEARN = LEARN_head(E).
 
 ## 8. Results (seeds 881..920)
 
-*(Filled in after the main run.)*
+`bench-cue-coverage --threads 8` (wall time ≈ 26 min;
+[results/cue-coverage-report-v1.txt](../results/cue-coverage-report-v1.txt),
+[results/cue-coverage-v1.csv](../results/cue-coverage-v1.csv), 12 000 rows).
+Every number is synthetic.
+
+### Gates
+
+| cond | G1 | G2a | G2b | G2c | G3 (median CN ≥ 20) | G4 | G5 | evaluable |
+|---|---|---|---|---|---|---|---|---|
+| base | ✓ | ✓ | ✓ | ✓ | ✓ (62) | ✓ 40/40 | ✓ | yes |
+| f32 | ✓ | ✓ | ✓ | ✓ | ✓ (1653) | ✓ 40/40 | ✗ | yes |
+| basec | ✓ | ✓ | ✓ | ✓ | **✗ (18)** | ✓ 40/40 | ✓ | **no** |
+| f32c | ✓ | ✓ | ✓ | ✓ | ✓ (1041) | ✓ 40/40 | ✗ | yes |
+
+**basec fails G3**: with 128 training patterns per task at fan-in 8, 98 %
+of TEST pairs have a trained configuration, so the median number of novel
+(CN) pairs falls to 18 < 20. By the pre-registered rule (§5) every
+hypothesis that uses basec (**H2, H3**) is **not evaluable**. This was not
+anticipated in the pre-registration and is reported, not repaired. G5 (RF
+denominator) fails at f32 and f32c because S1 learns almost nothing there;
+no hypothesis uses G5.
+
+### Edge coverage on the run seeds (label-free)
+
+| cond | covered share | active edges / pair | share m ≥ 2 | Seen share |
+|---|---|---|---|---|
+| base | 0.983 | 1.090 | 0.087 | 0.911 |
+| f32 | 0.932 | 1.594 | 0.456 | 0.392 |
+| basec | 1.000 | 1.088 | 0.085 | 0.980 |
+| f32c | 1.000 | 1.592 | 0.454 | 0.657 |
+
+### Summary (held-out orders, mean over rows; selected arms)
+
+| cond | arm | ACC_all | ACC_cn | LEARN_head | RET_head | FGT_all | charged writes |
+|---|---|---|---|---|---|---|---|
+| base | S1 | 0.507 | 0.511 | 0.625 | 0.501 | 0.123 | 645 |
+| base | E | 0.522 | 0.646 | 0.986 | 0.491 | 0.495 | 645 |
+| base | Zgd4 | 0.596 | 0.620 | 0.817 | 0.583 | 0.235 | 645 |
+| base | Zbd4 | 0.594 | 0.569 | 0.642 | 0.593 | 0.049 | 636 |
+| f32 | S1 | 0.512 | 0.510 | 0.539 | 0.511 | 0.028 | 4 293 |
+| f32 | E | 0.587 | 0.613 | 0.908 | 0.565 | 0.343 | 4 293 |
+| f32 | Zgd4 | 0.537 | 0.537 | 0.592 | 0.537 | 0.055 | 4 293 |
+| f32 | Zbd4 | 0.529 | 0.529 | 0.585 | 0.530 | 0.056 | 4 293 |
+| f32c | S1 | 0.510 | 0.503 | 0.538 | 0.510 | 0.029 | 5 167 |
+| f32c | E | 0.603 | 0.682 | **0.999** | 0.576 | 0.423 | 5 167 |
+| f32c | Zgd4 | 0.534 | 0.541 | 0.591 | 0.534 | 0.058 | 5 167 |
+| f32c | Zbd4 | 0.527 | 0.533 | 0.586 | 0.527 | 0.059 | 5 167 |
+
+(basec is listed in the report; it is not evaluable.)
+
+### Hypotheses
+
+| H | measured (mean [95 % CI] better/ties/worse, 40 seeds) | verdict |
+|---|---|---|
+| H1 **(primary)** | LEARN f32c − f32 **+0.092 [+0.089, +0.094] 40/0/0** | **pass** |
+| H2 | LEARN f32c − basec −0.001 [−0.001, −0.001] 0/0/40 (descriptive only) | **not evaluable** (basec G3) |
+| H3 | interaction +0.077 [+0.074, +0.080] 40/0/0 (descriptive only) | **not evaluable** (basec G3) |
+| H4 | LEARN f32 − base −0.078 [−0.080, −0.075] 0/0/40 | pass |
+| H5 | covered share f32c − f32 +0.068 [+0.065, +0.071] 40/0/0; basec − base +0.017 [+0.015, +0.018] 40/0/0 | pass |
+| H6 | ΔLEARN_head(Zgd4 − S1) f32c − f32 −0.001 [−0.005, +0.003] 17/0/23 | **fail** |
+| H7 | ΔRET_head(Zgd4 − S1) f32c − f32 −0.002 [−0.006, +0.002] 15/0/25 | **fail** |
+| H8 | f32c: FGT(S1) − FGT(Zbd4) **−0.030 [−0.033, −0.027]** 0/0/40; ACC_all(Zbd4 − S1) +0.017 [+0.014, +0.019] 40/0/0 | **fail** (FGT) |
+| H9 | f32c: ACC_all(Zgd4 − S1) +0.024 [+0.020, +0.027] 40/0/0; ACC_cn +0.038 [+0.035, +0.042] 40/0/0 | pass |
+| H10 | f32: FGT(S1) − FGT(Zbd4) −0.028 [−0.031, −0.026] 0/0/40 | pass (the cycle 31 negative replicates) |
+| H11 | f32c Zgd0..4 slope ACC_all +0.001 [−0.001, +0.003] 21/0/19 | **fail** |
+
+Raw gap FGT(S1) − FGT(Zgd4): base −0.111, f32 −0.027, f32c −0.029;
+gap change f32c − f32 −0.002 [−0.004, +0.001].
+
+### Reading (pre-registered rules of §6, then descriptive)
+
+* **Rule 2/1 cannot be applied: H2 is not evaluable.** H5 and H1 pass, so
+  coverage raises the learning of uncapped E at fan-in 32 (0.908 → 0.999,
+  40/40 seeds), and descriptively f32c ends 0.001 below basec. But basec
+  failed its novel-pair gate, so the pre-registered statement "coverage
+  removes the fan-in loss" is **not** claimed. The descriptive picture is
+  consistent with the coverage mechanism for E: at f32c every TEST pair has
+  all its edges trained in the task, and E reaches balanced accuracy 0.999
+  right after each task, which requires the ≈ 34 % of compositional (not
+  Seen) pairs to be right as well,
+  so the gain is not only memorised configurations (confound 2 cannot,
+  however, be fully excluded with this design).
+* **Coverage does not help any capped arm (H6, H7 fail).** At equal
+  `paced100` budget the learning of S1, Zgd4 and Zbd4 stays collapsed at
+  f32c (LEARN_head 0.538 / 0.591 / 0.586, unchanged from f32), and so does
+  the retention term. The fan-in loss of the **budgeted** arms is therefore
+  **not** a coverage effect; in this benchmark it is what the write cap
+  does at fan-in 32 (the budget is +20 % higher at f32c and still does not
+  help). This is the main negative of the cycle.
+* **Supervised control at equal budget.** The block guard still forgets
+  more than S1 at fan-in 32 with full coverage (H8 fails, −0.030; the
+  cycle 31 H10 failure replicates at f32, −0.028, H10). Zgd4 still beats S1
+  on generalisation at f32c (H9: ACC_all +0.024, ACC_cn +0.038), less than
+  at base (+0.089 / +0.109). S1 learns almost nothing at fan-in 32
+  (LEARN_head ≈ 0.54), so its low raw FGT is not retention.
+* **No dose effect at fan-in 32 (H11 fails):** Zgd slope +0.001 at f32c,
+  +0.002 at f32 vs +0.022 at base. The cue-code dose advantage does not
+  survive high fan-in in this benchmark, with or without full coverage.
+* **Uncapped E is the most accurate arm at fan-in 32** (descriptive):
+  ACC_all E 0.603 vs Zgd4 0.534 vs S1 0.510 at f32c; E − S1 +0.092
+  (+0.075 at f32). E forgets the most (FGT 0.423).
+* Absolute effects are small, every number comes from a generated graph
+  with artificial labels, and no claim about synapses, biology, insect
+  memory or BANC physiology is made.
+
+### What follows (not pre-registered here)
+
+The capped arms' collapse at fan-in 32 is the open question. Candidate
+next manipulation: the write cap itself (e.g. caps scaled by edges, or an
+uncapped Zgd4), with a design that keeps G3 (fewer extra training patterns
+at fan-in 8, or a larger TEST set).
 
 ## Reproduce
 
