@@ -358,6 +358,12 @@ pub struct VerifiedSequenceProfile {
     pub steps: usize,
     pub accepted: usize,
     pub recovered: usize,
+    /// Sum of verified costs for accepted steps only.
+    pub accepted_verified_nanos: u128,
+    /// Sum of verified costs for recovered steps only.
+    pub recovered_verified_nanos: u128,
+    /// Maximum observed process VmHWM among recovered steps.
+    pub recovered_peak_rss_kib: Option<u64>,
     pub cold_start_nanos: u128,
     pub full_nanos: u128,
     pub verified_step_nanos: u128,
@@ -378,6 +384,9 @@ pub fn profile_verified_sequence(
     let mut accepted = 0_usize;
     let mut recovered = 0_usize;
     let mut full_nanos = 0_u128;
+    let mut accepted_verified_nanos = 0_u128;
+    let mut recovered_verified_nanos = 0_u128;
+    let mut recovered_peak_rss_kib: Option<u64> = None;
     let mut verified_step_nanos = 0_u128;
     let mut peak = 0_u64;
     for row in rows {
@@ -389,6 +398,17 @@ pub fn profile_verified_sequence(
         }
         let observed = row.peak_rss_kib.filter(|&value| value > 0)?;
         peak = peak.max(observed);
+        if row.incremental_with_refresh < row.full { return None; }
+        match row.verdict {
+            StepVerdict::Accepted => {
+                accepted_verified_nanos = accepted_verified_nanos.checked_add(row.incremental_with_refresh.as_nanos())?;
+            }
+            StepVerdict::Mismatch | StepVerdict::IncrementalError => {
+                recovered_verified_nanos = recovered_verified_nanos.checked_add(row.incremental_with_refresh.as_nanos())?;
+                recovered_peak_rss_kib = Some(recovered_peak_rss_kib.unwrap_or(0).max(observed));
+            }
+            StepVerdict::FullError => return None,
+        }
         full_nanos = full_nanos.checked_add(row.full.as_nanos())?;
         verified_step_nanos =
             verified_step_nanos.checked_add(row.incremental_with_refresh.as_nanos())?;
@@ -405,6 +425,9 @@ pub fn profile_verified_sequence(
         steps: rows.len(),
         accepted,
         recovered,
+        accepted_verified_nanos,
+        recovered_verified_nanos,
+        recovered_peak_rss_kib,
         cold_start_nanos,
         full_nanos,
         verified_step_nanos,
@@ -439,8 +462,22 @@ mod profile_tests {
         assert_eq!((profile.steps, profile.accepted, profile.recovered), (2, 1, 1));
         assert_eq!((profile.full_nanos, profile.verified_step_nanos), (28, 74));
         assert_eq!(profile.total_verified_nanos, 100);
+        assert_eq!(profile.accepted_verified_nanos, 31);
+        assert_eq!(profile.recovered_verified_nanos, 43);
+        assert_eq!(profile.recovered_peak_rss_kib, Some(4096));
         assert_eq!(profile.throughput_steps_per_second, Some(20_000_000));
         assert_eq!(profile.process_peak_rss_kib, 4096);
+    }
+
+    #[test]
+    fn rejects_verified_cost_below_full_oracle() {
+        let row = StepMeasurement {
+            verdict: StepVerdict::Mismatch,
+            full: Duration::from_nanos(20),
+            incremental_with_refresh: Duration::from_nanos(19),
+            peak_rss_kib: Some(512),
+        };
+        assert!(profile_verified_sequence(&[row], Duration::ZERO).is_none());
     }
 
     #[test]
