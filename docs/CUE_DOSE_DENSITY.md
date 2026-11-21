@@ -313,7 +313,7 @@ Both pre-registered checks pass (§4):
   **byte-identical** to the header plus the `base` and `d512` rows of the
   main `--threads 8` CSV (sha256 of both:
   `6b48780ae3e21a5e166974cf39119f8f6ea3ac98f1c0e3d276c63291ef903bf1`).
-  src256-free subset only: src512 and d256 were not re-run.
+  Subset only: src512 and d256 were not re-run.
 * **Cycle 29 (open item from #188):** `bench-cue-dose-guard --conds base
   --threads 6` (built from this branch, whose only change to
   `cue_dose_guard` is the two new `Cond` variants and visibility) gives
