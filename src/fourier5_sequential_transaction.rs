@@ -347,3 +347,113 @@ mod tests {
         assert!(matches!(result, Err(TransactionError::Full)));
     }
 }
+
+
+/// Exact accounting for a *verified* heterogeneous sequential run.
+/// This is not a production Incremental benchmark: every step also runs Full
+/// and rebuilds a canonical cache. None means a missing observation or
+/// arithmetic overflow; no partial throughput is published.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifiedSequenceProfile {
+    pub steps: usize,
+    pub accepted: usize,
+    pub recovered: usize,
+    pub cold_start_nanos: u128,
+    pub full_nanos: u128,
+    pub verified_step_nanos: u128,
+    pub total_verified_nanos: u128,
+    /// Steps per second, rounded down. None for zero elapsed time.
+    pub throughput_steps_per_second: Option<u128>,
+    /// Process lifetime high-water mark, not a workload allocation.
+    pub process_peak_rss_kib: u64,
+}
+
+/// Fail closed if any row has no valid memory observation, or if a timing
+/// aggregate overflows. Includes rejected/recovered steps and cold start.
+#[must_use]
+pub fn profile_verified_sequence(
+    rows: &[StepMeasurement],
+    initial_rebuild: std::time::Duration,
+) -> Option<VerifiedSequenceProfile> {
+    let mut accepted = 0_usize;
+    let mut recovered = 0_usize;
+    let mut full_nanos = 0_u128;
+    let mut verified_step_nanos = 0_u128;
+    let mut peak = 0_u64;
+    for row in rows {
+        match row.verdict {
+            StepVerdict::Accepted => accepted = accepted.checked_add(1)?,
+            StepVerdict::Mismatch | StepVerdict::IncrementalError =>
+                recovered = recovered.checked_add(1)?,
+            StepVerdict::FullError => return None,
+        }
+        let observed = row.peak_rss_kib.filter(|&value| value > 0)?;
+        peak = peak.max(observed);
+        full_nanos = full_nanos.checked_add(row.full.as_nanos())?;
+        verified_step_nanos =
+            verified_step_nanos.checked_add(row.incremental_with_refresh.as_nanos())?;
+    }
+    let cold_start_nanos = initial_rebuild.as_nanos();
+    let total_verified_nanos = cold_start_nanos.checked_add(verified_step_nanos)?;
+    let throughput_steps_per_second = if total_verified_nanos == 0 {
+        None
+    } else {
+        Some((rows.len() as u128).checked_mul(1_000_000_000)?
+            / total_verified_nanos)
+    };
+    Some(VerifiedSequenceProfile {
+        steps: rows.len(),
+        accepted,
+        recovered,
+        cold_start_nanos,
+        full_nanos,
+        verified_step_nanos,
+        total_verified_nanos,
+        throughput_steps_per_second,
+        process_peak_rss_kib: peak,
+    })
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn independent_arithmetic_oracle_includes_recovery_and_cold_start() {
+        let rows = [
+            StepMeasurement {
+                verdict: StepVerdict::Accepted,
+                full: Duration::from_nanos(11),
+                incremental_with_refresh: Duration::from_nanos(31),
+                peak_rss_kib: Some(2048),
+            },
+            StepMeasurement {
+                verdict: StepVerdict::Mismatch,
+                full: Duration::from_nanos(17),
+                incremental_with_refresh: Duration::from_nanos(43),
+                peak_rss_kib: Some(4096),
+            },
+        ];
+        let profile = profile_verified_sequence(&rows, Duration::from_nanos(26)).unwrap();
+        assert_eq!((profile.steps, profile.accepted, profile.recovered), (2, 1, 1));
+        assert_eq!((profile.full_nanos, profile.verified_step_nanos), (28, 74));
+        assert_eq!(profile.total_verified_nanos, 100);
+        assert_eq!(profile.throughput_steps_per_second, Some(20_000_000));
+        assert_eq!(profile.process_peak_rss_kib, 4096);
+    }
+
+    #[test]
+    fn missing_peak_and_zero_duration_fail_closed() {
+        let mut row = StepMeasurement {
+            verdict: StepVerdict::Accepted,
+            full: Duration::ZERO,
+            incremental_with_refresh: Duration::ZERO,
+            peak_rss_kib: None,
+        };
+        assert!(profile_verified_sequence(&[row.clone()], Duration::ZERO).is_none());
+        row.peak_rss_kib = Some(1024);
+        let profile = profile_verified_sequence(&[row], Duration::ZERO).unwrap();
+        assert_eq!(profile.throughput_steps_per_second, None);
+    }
+}
