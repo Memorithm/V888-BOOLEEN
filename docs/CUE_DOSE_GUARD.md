@@ -244,6 +244,104 @@ computed, no held-out order drawn; sha256
   condition, seed or hypothesis. The main run is executed exactly as
   pre-registered above.
 
+## 9. Main run result (seeds 761..800, held-out orders; synthetic graph)
+
+Files: `results/cue-dose-guard-report-v1.txt`, `results/cue-dose-guard-v1.csv`
+(9 000 rows = 3 conditions × 40 seeds × 5 orders × 15 arms; sha256
+`1cae8f9c0d2b1c63cbce4a34c9b933fd35e22658057ff907317a28628fe1d4f1`, report
+sha256 `234da46d4448f5a5a190562ee379823a56ca727dd3159f1338baa4e47fa48d0b`).
+The run was executed exactly as pre-registered above, from the binary of
+the pilot commit; no threshold, arm, condition, seed or hypothesis was
+changed after the pilot (wall time 48 min 56 s).
+
+**Deviations:** none from the hypotheses, thresholds, arms, conditions or
+seeds. The declared design choices of §3 (order salt reused, train64 and
+the interaction hypotheses dropped) were stated before measuring.
+**One pre-registered check is not done:** the §4 reproducibility rerun
+with a different thread count (`--threads 6`) was started but interrupted
+before it wrote its CSV, and it was not restarted in this cycle. The
+byte-identical-CSV claim is therefore **not verified for cycle 29**; only
+the sha256 of the single main run is reported above. (The same check
+passed in cycles 27 and 28 on the unchanged cycle 27 engine; that is not
+evidence for the new block arms.) The rerun stays open for a later cycle;
+no verdict above depends on it.
+
+### Design gates
+
+| condition | G1 | G2a partner moves Zgd0..4 | G2b blocked rows Zbd0..4 | G2c partner moves Zbd0..4 | G3 median CN | G4 leak-free | G5 |
+|---|---|---|---|---|---|---|---|
+| base | pass | 0 / 9.7 / 19.3 / 29.0 / 37.0 | 100 % each | 0 / 9.7 / 19.1 / 27.8 / 35.7 | 65 | 40/40 | pass |
+| src256 | pass | 0 / 10.6 / 20.5 / 30.4 / 40.3 | 100 % each | 0 / 11.9 / 22.4 / 32.6 / 41.8 | 64 | 40/40 | pass |
+| src512 | pass | 0 / 9.2 / 17.8 / 26.6 / 35.3 | 100 % each | 0 / 10.5 / 20.7 / 29.6 / 37.8 | 56 | 40/40 | pass |
+
+Every gate passes in every condition; all 13 hypotheses are evaluable.
+
+### Arms (base, held-out orders, mean over rows)
+
+| arm | ACC_all | LEARN_head | RET_head | FGT_all | RF | charged writes | cue writes | blocked |
+|---|---|---|---|---|---|---|---|---|
+| S1 | 0.507 | 0.635 | 0.501 | 0.133 | 0.991 | 644.1 | 0 | – |
+| Zgd0 | 0.578 | 0.872 | 0.561 | 0.311 | 0.838 | 639.4 | 229.3 | – |
+| Zgd4 | 0.600 | 0.823 | 0.587 | 0.236 | 0.732 | 643.5 | 335.7 | – |
+| Zbd0 | 0.580 | 0.624 | 0.578 | 0.045 | 0.372 | 603.4 | 515.9 | 11 165 |
+| Zbd4 | 0.600 | 0.646 | 0.599 | 0.047 | 0.330 | 628.2 | 553.8 | 10 423 |
+
+### Hypotheses (mean [95 % CI] better/ties/worse over 40 seeds)
+
+| H | contrast | value | verdict |
+|---|---|---|---|
+| H1 | base RET_head(Zgd4) − RET_head(S1) | +0.086 [+0.079, +0.092] 40/0/0 | pass |
+| H2 | base FGT(S1) − FGT(Zgd4), CI hi < −0.02 | −0.103 [−0.110, −0.096] 0/0/40 | pass |
+| H3 | gap(src512) − gap(base) > 0 | −0.020 [−0.027, −0.013] 8/0/32 | **fail** (as predicted) |
+| H4 | base FGT(S1) − FGT(Zbd4) non-inferior | +0.086 [+0.081, +0.090] 40/0/0 | pass |
+| H5 | base ACC_all(Zbd4) − ACC_all(S1) | +0.094 [+0.085, +0.102] 40/0/0 | pass |
+| H6 | H4 ∧ H5 in src256 and src512 | FGT +0.075 / +0.064, ACC +0.051 / +0.028, all 40/0/0 | pass |
+| H7 | base RET_head(Zbd4) − RET_head(Zgd4) | +0.012 [+0.008, +0.015] 31/0/9 | pass |
+| H8 | base ACC_all(Zbd4) − ACC_all(Zgd4) non-inferior | −0.000 [−0.004, +0.003] 20/0/20 | pass |
+| H9 | Zgd0..4 slope ACC_all, each condition | +0.023 / +0.012 / +0.007 (40/0/0, 36/0/4, 37/0/3) | pass |
+| H10 | base Zgd concavity ACC_all ≡ 0 | +0.000 [−0.001, +0.002] | pass |
+| H11 | base Zbd0..4 slope ACC_all | +0.021 [+0.018, +0.023] 40/0/0 | pass |
+| H12 | base Zbd concavity ACC_all ≡ 0 | −0.001 [−0.002, +0.001] | pass |
+| H13 | base RF(S1) − RF(Zbd4) | +0.661 [+0.631, +0.690] 40/0/0 | pass |
+
+### Reading (descriptive)
+
+* **Why raw forgetting loses while relative forgetting wins.** The exact
+  split FGT(S1) − FGT(x) = ΔRET_head − ΔLEARN_head answers it. At the end
+  of the sequence Zgd4 retains **more** of the old tasks than S1 (+0.086,
+  40/0/0), but it learned far more (+0.189), so its raw drop is larger
+  (−0.103). S1 forgets little in raw terms because it learns little and
+  ends at chance (RET_head 0.501). Raw FGT rewards not learning; RF and
+  RET_head do not.
+* **More sources do not close the raw gap; it widens:** −0.103 (128),
+  −0.117 (256), −0.123 (512). With more sources the retention advantage
+  of Zgd4 over S1 shrinks faster (+0.086 → +0.042 → +0.023) than its
+  learning advantage (+0.189 → +0.159 → +0.146).
+* **The block guard closes the raw gap, mostly by learning less.** Zbd4
+  forgets 0.086 *less* than S1 (base; +0.075 src256, +0.064 src512, all
+  40/0/0) and still beats S1 on ACC_all (+0.094 / +0.051 / +0.028). Its
+  ACC_all is the same as Zgd4's (−0.000 base, +0.001 src256, −0.004
+  [−0.006, −0.001] src512). The decomposition shows how: Zbd4 learns
+  0.177 less than Zgd4 (LEARN_head 0.646, close to S1's 0.635) and
+  retains a little more (+0.012 base, +0.014 src256, +0.009 src512). It
+  converts learning that would have been overwritten into a flat profile:
+  it learns each task only a little but keeps almost all of it (RF 0.33
+  vs 0.73). **This is a different trade-off at the same accuracy, not an
+  accuracy improvement over last-resort.** H4 passing is mostly a
+  learning effect, and H7 shows a small real retention gain.
+* **The linear dose effect is unchanged.** The last-resort dose slope
+  replicates in every condition (smaller with more sources: +0.023,
+  +0.012, +0.007), with no curvature. Under the block guard the dose
+  still raises ACC_all linearly (+0.021, concavity ≈ 0). But it no longer
+  cuts forgetting (−slope FGT −0.002 [−0.004, −0.000]), because FGT is
+  already ≈ 0.047 at every dose. The dose then acts through retention.
+* Under the block guard the novel-pair gain over S1 shrinks with sources
+  (ACC_cn +0.065 base, +0.027 src256, +0.007 [−0.003, +0.017] src512) and
+  is below the last-resort arms' (base Zgd4 ACC_cn 0.628 vs Zbd4 0.578).
+* Absolute effects are small, and every number comes from a generated
+  graph with artificial labels. No claim about synapses, biology, insect
+  memory or BANC physiology is made.
+
 ## Reproduce
 
 ```bash
