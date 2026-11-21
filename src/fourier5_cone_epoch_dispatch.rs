@@ -67,6 +67,36 @@ pub fn next_committed_epoch(current: u64) -> Option<CacheEpoch> {
     Some(CacheEpoch { state_revision: revision, cache_revision: revision })
 }
 
+
+/// Evidence produced by the caller after an accepted sequential intervention.
+/// The canonical Full oracle must compare the *entire* state and cache, not
+/// merely the requested output bit. This gate does not run the oracle itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CommitEvidence {
+    pub previous_epoch: CacheEpoch,
+    pub full_state_equal: bool,
+    pub canonical_cache_equal: bool,
+    pub cache_refresh_complete: bool,
+}
+
+/// Fail closed: never publish a new cache epoch after an unverified mutation.
+/// The caller must keep the previous committed snapshot on `None`.
+#[must_use]
+pub fn commit_verified_epoch(
+    committed_revision: u64,
+    evidence: CommitEvidence,
+) -> Option<CacheEpoch> {
+    if evidence.previous_epoch.state_revision != committed_revision
+        || evidence.previous_epoch.cache_revision != committed_revision
+        || !evidence.full_state_equal
+        || !evidence.canonical_cache_equal
+        || !evidence.cache_refresh_complete
+    {
+        return None;
+    }
+    next_committed_epoch(committed_revision)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,6 +169,46 @@ mod tests {
             };
             assert_eq!(choose(input, &table, 1, 4096), expected);
         }
+    }
+
+
+    #[test]
+    fn independent_truth_table_for_verified_sequential_commit() {
+        for state_ok in [false, true] {
+            for cache_ok in [false, true] {
+                for refresh_ok in [false, true] {
+                    for state_revision in [6, 7, 8] {
+                        for cache_revision in [6, 7, 8] {
+                            let evidence = CommitEvidence {
+                                previous_epoch: CacheEpoch { state_revision, cache_revision },
+                                full_state_equal: state_ok,
+                                canonical_cache_equal: cache_ok,
+                                cache_refresh_complete: refresh_ok,
+                            };
+                            let expected = state_ok && cache_ok && refresh_ok
+                                && state_revision == 7 && cache_revision == 7;
+                            assert_eq!(
+                                commit_verified_epoch(7, evidence),
+                                expected.then_some(CacheEpoch {
+                                    state_revision: 8,
+                                    cache_revision: 8,
+                                }),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        let evidence = CommitEvidence {
+            previous_epoch: CacheEpoch {
+                state_revision: u64::MAX,
+                cache_revision: u64::MAX,
+            },
+            full_state_equal: true,
+            canonical_cache_equal: true,
+            cache_refresh_complete: true,
+        };
+        assert_eq!(commit_verified_epoch(u64::MAX, evidence), None);
     }
 
     #[test]
