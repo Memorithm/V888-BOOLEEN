@@ -340,3 +340,6 @@ pub mod fourier5_sequential_throughput;
 
 /// Transactional sequential cache recovery checked by independent Full/rebuild oracles.
 pub mod fourier5_sequential_transaction;
+
+/// VALID-only admission using production-path timings, never verified oracle totals.
+pub mod fourier5_production_cost_admission;
