@@ -351,3 +351,6 @@ pub mod fourier5_sequential_transaction;
 
 /// VALID-only admission using production-path timings, never verified oracle totals.
 pub mod fourier5_production_cost_admission;
+
+/// Fail-closed runtime cone dispatch bound to exact state/cache epochs.
+pub mod fourier5_cone_epoch_dispatch;
