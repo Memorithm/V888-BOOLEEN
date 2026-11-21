@@ -169,7 +169,30 @@ LEARN = LEARN_head(E).
 
 ## 7. Label-free pilot (seeds 1..5)
 
-*(Filled in after the pilot; no accuracy is computed by `--census`.)*
+`bench-cue-coverage --census` (identity order, training only, no accuracy;
+[results/cue-coverage-census-v1.txt](../results/cue-coverage-census-v1.txt),
+6.8 s):
+
+| cond | train / rounds | covered share | active edges / pair | share m ≥ 2 | Seen share | E charged writes |
+|---|---|---|---|---|---|---|
+| base | 32 / 8 | 0.987 | 1.093 | 0.089 | 0.918 | 914.8 |
+| f32 | 32 / 8 | 0.934 | 1.601 | 0.460 | 0.386 | 5 959.4 |
+| basec | 128 / 2 | 1.000 | 1.103 | 0.096 | 0.979 | 943.0 |
+| f32c | 128 / 2 | 1.000 | 1.601 | 0.462 | 0.651 | 7 813.2 |
+
+* **The manipulation binds (label-free):** covered share f32c − f32
+  +0.066 [+0.062, +0.069] 5/0/0, basec − base +0.013 [+0.009, +0.016]
+  5/0/0; at f32 6.6 % of TEST pairs contain an edge untrained in the task,
+  at f32c none.
+* `m` is unchanged by the manipulation (1.601 vs 1.601), as intended: the
+  fan-in, not the pattern count, sets the number of active edges per pair.
+* **Confound 2 is large:** the Seen share rises 0.386 → 0.651 at fan-in 32
+  (0.918 → 0.979 at fan-in 8). ACC_cn is therefore essential to read H1/H9.
+* **Confound 3 is visible:** the uncapped E write budget is +31 % at f32c
+  vs f32 (+3 % at basec vs base). Within a condition the caps are equal
+  across arms.
+* Leakage: 5/5 leak-free fixtures in every condition. No threshold, arm or
+  hypothesis was changed after the pilot.
 
 ## 8. Results (seeds 881..920)
 
