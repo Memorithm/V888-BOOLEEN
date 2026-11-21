@@ -38,15 +38,25 @@ pub fn choose(
     {
         return EngineChoice::Full;
     }
-    let mut matches = 0_usize;
+    // Validate the entire frozen admission table: duplicate unrelated buckets
+    // must not make a partially corrupted policy appear admissible.
+    let mut seen = std::collections::HashSet::with_capacity(admissions.len());
     let mut admitted = false;
+    let mut found = false;
     for bucket in admissions {
+        if !seen.insert(bucket.cone_bucket) {
+            return EngineChoice::Full;
+        }
         if bucket.cone_bucket == input.cone_bucket {
-            matches += 1;
+            found = true;
             admitted = bucket.valid_admitted && input.changed_gates <= bucket.max_changed_gates;
         }
     }
-    if matches == 1 && admitted { EngineChoice::Incremental } else { EngineChoice::Full }
+    if found && admitted {
+        EngineChoice::Incremental
+    } else {
+        EngineChoice::Full
+    }
 }
 
 /// Advance both state and cache revisions after a verified commit.
@@ -100,6 +110,37 @@ mod tests {
         assert_eq!(choose(input, &[entry], 1, 1024), EngineChoice::Full);
         assert_eq!(choose(input, &[entry], 1, 0), EngineChoice::Full);
     }
+    #[test]
+    fn independent_oracle_rejects_unrelated_duplicate_admissions() {
+        let selected = ConeAdmission {
+            valid_admitted: true,
+            cone_bucket: 0,
+            max_changed_gates: 2,
+        };
+        let other = ConeAdmission {
+            valid_admitted: true,
+            cone_bucket: 1,
+            max_changed_gates: 2,
+        };
+        let input = sample(1, 1, 0, 1);
+        // The oracle counts unique bucket identifiers across the *whole* table.
+        for table in [
+            vec![selected, other],
+            vec![other, selected],
+            vec![selected, other, other],
+            vec![other, other, selected],
+        ] {
+            let unique = table.iter().map(|a| a.cone_bucket)
+                .collect::<std::collections::HashSet<_>>().len() == table.len();
+            let expected = if unique {
+                EngineChoice::Incremental
+            } else {
+                EngineChoice::Full
+            };
+            assert_eq!(choose(input, &table, 1, 4096), expected);
+        }
+    }
+
     #[test]
     fn epoch_commit_is_atomic_and_overflow_checked() {
         assert_eq!(next_committed_epoch(9), Some(CacheEpoch { state_revision: 10, cache_revision: 10 }));
