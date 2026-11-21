@@ -865,3 +865,149 @@ mod sequential_memory_tests {
         );
     }
 }
+
+
+/// A sequential measurement is bound to the stable VALID sample identity.
+/// Positional joins are unsafe because shuffled or cross-split timings can
+/// otherwise silently calibrate the dispatch policy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IdentifiedSequentialMemorySample {
+    pub sample_id: u64,
+    pub measurement: SequentialMemorySample,
+}
+
+/// Joint admission requires independent VALID groups and exactly one measured
+/// sequential cost for each VALID sample, in intervention order. No TRAIN,
+/// TEST or OOD measurement can enter the sequential policy. This is an
+/// admission contract, not a benchmark or a cache implementation.
+#[must_use]
+pub fn choose_with_bound_sequential_valid(
+    observations: &[GroupedSplitPair],
+    valid_sequence: &[IdentifiedSequentialMemorySample],
+    target: Geometry,
+    minimum_distinct: usize,
+    minimum_samples: usize,
+    minimum_saving_percent: u8,
+    max_incremental_vmhwm_kib: u64,
+) -> EngineChoice {
+    if choose_with_group_balanced_margin(
+        observations,
+        target,
+        minimum_distinct,
+        minimum_samples,
+        minimum_saving_percent,
+    ) != EngineChoice::Incremental {
+        return EngineChoice::Full;
+    }
+    let valid_count = observations
+        .iter()
+        .filter(|row| row.observation.split == Split::Valid)
+        .count();
+    if valid_count != valid_sequence.len() {
+        return EngineChoice::Full;
+    }
+    let mut seen = std::collections::HashSet::with_capacity(valid_count);
+    let valid_ids: std::collections::HashSet<u64> = observations
+        .iter()
+        .filter(|row| row.observation.split == Split::Valid)
+        .map(|row| row.observation.sample_id)
+        .collect();
+    let mut measurements = Vec::with_capacity(valid_count);
+    for item in valid_sequence {
+        if !valid_ids.contains(&item.sample_id) || !seen.insert(item.sample_id) {
+            return EngineChoice::Full;
+        }
+        measurements.push(item.measurement);
+    }
+    choose_for_sequential_memory(
+        &measurements,
+        minimum_samples,
+        minimum_saving_percent,
+        max_incremental_vmhwm_kib,
+    )
+}
+
+#[cfg(test)]
+mod bound_sequential_tests {
+    use super::*;
+
+    fn group(id: u64, group_id: u64, split: Split, cone: u64) -> GroupedSplitPair {
+        GroupedSplitPair {
+            group_id,
+            observation: SplitPair {
+                sample_id: id,
+                split,
+                pair: ValidPair {
+                    geometry: Geometry { gates: 100, cone },
+                    full_ns: 100,
+                    incremental_refresh_ns: 10,
+                    oracle_equal: true,
+                },
+            },
+        }
+    }
+
+    fn measurement(id: u64) -> IdentifiedSequentialMemorySample {
+        IdentifiedSequentialMemorySample {
+            sample_id: id,
+            measurement: SequentialMemorySample {
+                cost: SequentialCost {
+                    full_ns: 100,
+                    incremental_ns: 10,
+                    cache_update_ns: 10,
+                    accepted: true,
+                    exact_state_equal: true,
+                },
+                full_vmhwm_kib: 100,
+                incremental_vmhwm_kib: 120,
+            },
+        }
+    }
+
+    #[test]
+    fn valid_grouped_sequence_is_admitted() {
+        let rows = [
+            group(1, 10, Split::Valid, 12),
+            group(2, 20, Split::Valid, 20),
+            group(3, 30, Split::Test, 12),
+        ];
+        assert_eq!(
+            choose_with_bound_sequential_valid(
+                &rows,
+                &[measurement(1), measurement(2)],
+                Geometry { gates: 100, cone: 10 },
+                2, 2, 20, 150,
+            ),
+            EngineChoice::Incremental
+        );
+    }
+
+    #[test]
+    fn test_timing_and_duplicate_identity_are_rejected() {
+        let rows = [group(1, 10, Split::Valid, 12), group(2, 20, Split::Valid, 20),
+                    group(3, 30, Split::Test, 12)];
+        let target = Geometry { gates: 100, cone: 10 };
+        for timings in [[measurement(1), measurement(3)], [measurement(1), measurement(1)]] {
+            assert_eq!(
+                choose_with_bound_sequential_valid(&rows, &timings, target, 2, 2, 20, 150),
+                EngineChoice::Full
+            );
+        }
+    }
+
+    #[test]
+    fn incomplete_sequence_and_oracle_divergence_are_rejected() {
+        let rows = [group(1, 10, Split::Valid, 12), group(2, 20, Split::Valid, 20)];
+        let target = Geometry { gates: 100, cone: 10 };
+        assert_eq!(
+            choose_with_bound_sequential_valid(&rows, &[measurement(1)], target, 2, 2, 20, 150),
+            EngineChoice::Full
+        );
+        let mut bad = [measurement(1), measurement(2)];
+        bad[1].measurement.cost.exact_state_equal = false;
+        assert_eq!(
+            choose_with_bound_sequential_valid(&rows, &bad, target, 2, 2, 20, 150),
+            EngineChoice::Full
+        );
+    }
+}
