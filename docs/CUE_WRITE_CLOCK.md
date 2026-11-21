@@ -265,6 +265,81 @@ Means over the 5 pilot seeds:
   threshold, arm or hypothesis. The main run is executed exactly as
   pre-registered above.
 
+## Main run result (seeds 641..680, held-out orders; synthetic graph)
+
+Files: `results/cue-write-clock-report-v1.txt`, `results/cue-write-clock-v1.csv`
+(16 200 rows; sha256 `23cfe7e606b68614080028ad352796e276e824e8b33247bc4063d3b850f84dbe`).
+The run was executed exactly as pre-registered above; no threshold, arm,
+seed or hypothesis was changed after the pilot. Reproducibility: the CSV is
+byte-identical with `--threads 8` and `--threads 6` (same sha256; report
+sha256 `6ac87a2a70384a5be0dbb137c7f63b9ecd64b230b87d261d640a6d4133658323`
+in both).
+
+### Design gates
+
+| gate | result | detail |
+|---|---|---|
+| G1 integrity | **pass** | topology unchanged in every row, charged writes ≤ allowance, frozen moves = 0, guard/ledger counters, orders, codes and write-clock splits consistent |
+| G2 manipulation | **FAIL** | (a) fraction of held-out Zgl2m rows with a second-write-half partner-line move: **1.000** at k 16 and 24, flips 50 and 100 (pass). (b) first-write-half skips 1.000 everywhere (pass). (c) Zge2m first-write-half moves 1.000 everywhere (pass). (d) mean matched − random partner agreement (identity order) 0.362 / 0.429 at flip 100 and 0.082 / 0.077 at flip 50 for k 16 / 24 (pass). **(e) fails at k = 16, flip 100:** 7 of 160 held-out Zgl2m rows have mean write-clock split ≥ `n / 2` = 128 (max 193.375). Those rows have E write-fraction sums of 0.25 or 0.50: 8 or 12 of the 16 stages have a zero-write uncapped E curve, for which the pre-registered `budget_split` returns `n`, and the row mean is pulled to ≥ 128. Identity and reversed orders are unaffected (mean split ≈ 5.9). k = 24, flip 100: max row mean 123.3 < 128 (pass). |
+| G3 novel pairs | **pass** | median CN pairs at k 24, flip 50 = 106 ≥ 20 |
+
+**G2 fails, so H1–H13 are declared not evaluable**, as pre-registered.
+This is a different failure from #184: the late-window manipulation itself
+(G2 (a)–(d)) binds — every held-out Zgl2m row at the required (k, flip)
+makes second-write-half partner-line moves (mean ≈ 25 at k = 16, flip 100,
+vs ≈ 1 under the episode clock of #184). G2 (e) is the only failing clause:
+on some seeded random orders at flip 100, many stages of uncapped E write
+nothing, so `budget_split` returns `n` and the row's mean split is no longer
+earlier than the cycle 25 mid-point. The cycle therefore does **not** answer
+its question under the pre-registered rule.
+
+### Hypotheses (official verdict: not evaluable; descriptive values only)
+
+The numbers below are reported for transparency only. Because G2 failed they
+are **not** hypothesis tests and must not be read as pass/fail evidence. The
+"would be" column applies the pre-registered rule mechanically.
+Mean ± sd [95 % bootstrap CI] better/ties/worse over 40 seeds (k = 16 unless
+stated; FGT difference signed so that + = Zgl2m forgets less, except H4
+which is already `FGT(Zgo2m) − FGT(Zgl2m)`).
+
+| H | contrast | value | would be |
+|---|---|---|---|
+| H1 | flip 100, ACC Zgl2m − Zg2m | −0.010 [−0.012, −0.008] 2/0/38 | fail |
+| H2 | flip 100, ACC Zgl2m − Zgo2m | +0.014 [+0.012, +0.016] 37/0/3 | pass |
+| H3 | flip 100, LEARN Zgl2m − Zg2m | +0.021 [+0.019, +0.023] 40/0/0 | pass |
+| H4 | flip 100, FGT Zgo2m − Zgl2m | +0.046 [+0.043, +0.049] 40/0/0 | pass |
+| H5 | flip 100, ACC Zgl2m − Zge2m | −0.002 [−0.004, +0.001] 15/0/25 | fail |
+| H6 | flip 100, Zgl2m vs S1 sequence rule | ΔACC +0.080 [+0.075, +0.086] 40/0/0, ΔLAST +0.226, ΔLEARN +0.208 | pass |
+| H7 | flip 50, ACC Zgl2m − Zg2m | −0.005 [−0.007, −0.004] 6/0/34 | fail |
+| H8 | flip 50, Zgl2m vs S1 sequence rule | ΔACC +0.056 [+0.052, +0.060] 40/0/0, ΔLAST +0.286, ΔLEARN +0.267 | pass |
+| H9 | k 24, flip 100, ACC Zgl2m − Zg2m | −0.002 [−0.003, −0.001] 8/0/32 | fail |
+| H10 | flip 100, ACC Zgl2m − Zgl2r | +0.024 [+0.018, +0.029] 36/0/4 | pass |
+| H11 | flip 100, ACC Zgl2m − Zg1 | +0.031 [+0.027, +0.035] 39/0/1 | pass |
+| H12 | flip 50, ACC Zgl2m − Zgo2m | +0.008 [+0.006, +0.011] 36/0/4 | pass |
+| H13 | flip 100, ACC_cn Zgl2m − Zg2m | −0.007 [−0.014, −0.001] 17/0/23 | fail |
+
+### Readings (descriptive, synthetic benchmark only)
+
+* Unlike #184, the late window no longer collapses onto the owned code, nor
+  the early window onto the shared code. At k = 16, flip 100, held-out ACC
+  is 0.597 (Zg2m), 0.589 (Zge2m), 0.588 (Zgl2m), 0.574 (Zgo2m), 0.557
+  (Zg1) and 0.507 (S1). Late and early are tied (H5 would fail; CI
+  includes 0). Late sits between share and owned: it learns more than the
+  shared write (H3) and forgets less than the owned write (H4), and it
+  beats owned on accuracy (H2) but not the shared write (H1). Cue writes
+  of Zgl2m (299) are also between owned (236) and shared (344).
+* The timing contrast (late vs early at equal partner-writable budget) is
+  a wash on accuracy. What still ranks the arms is how many partner-block
+  writes they make, not when those writes occur — the same reading as
+  #139 / #184, now with a late window that actually writes.
+* The cued, guarded arms still beat the supervised control at equal write
+  budget (Zgl2m − S1 ACC +0.080 at flip 100, +0.056 at flip 50), with much
+  larger learning and much larger forgetting than S1 — the same pattern as
+  #131–#184. Shared Zg2m remains the most accurate cued arm (+0.090 vs S1
+  at flip 100).
+* No claim about synapses, biology, insect memory or BANC physiology is made;
+  every number comes from the generated graph and an artificial task.
+
 ## Reproduce
 
 ```bash
