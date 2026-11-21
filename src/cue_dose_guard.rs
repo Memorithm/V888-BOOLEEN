@@ -115,6 +115,12 @@ pub enum Cond {
     /// fan-in 32, i.e. the edge density per source of `Base` (2 edges per
     /// source). Not in [`CONDS`]: the cycle 29 grid is unchanged.
     D512,
+    /// B888-4 cycle 31 (`docs/CUE_FANIN.md`): 128 graph sources (as `Base`)
+    /// with fan-in 16. Not in [`CONDS`].
+    F16,
+    /// B888-4 cycle 31 (`docs/CUE_FANIN.md`): 128 graph sources (as `Base`)
+    /// with fan-in 32. Not in [`CONDS`].
+    F32,
 }
 
 /// Conditions in CSV / report order.
@@ -129,6 +135,8 @@ impl Cond {
             Self::Src512 => "src512",
             Self::D256 => "d256",
             Self::D512 => "d512",
+            Self::F16 => "f16",
+            Self::F32 => "f32",
         }
     }
     /// Parse a condition name.
@@ -142,7 +150,7 @@ impl Cond {
     #[must_use]
     pub fn sources(self) -> usize {
         match self {
-            Self::Base => cwd::DESIGN.shape.sources,
+            Self::Base | Self::F16 | Self::F32 => cwd::DESIGN.shape.sources,
             Self::Src256 | Self::D256 => 256,
             Self::Src512 | Self::D512 => 512,
         }
@@ -152,8 +160,8 @@ impl Cond {
     #[must_use]
     pub fn fan_in(self) -> usize {
         match self {
-            Self::D256 => 16,
-            Self::D512 => 32,
+            Self::D256 | Self::F16 => 16,
+            Self::D512 | Self::F32 => 32,
             _ => cwd::DESIGN.shape.fan_in,
         }
     }

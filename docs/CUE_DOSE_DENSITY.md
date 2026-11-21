@@ -300,6 +300,10 @@ Exact decomposition (Zgd4 − S1): ΔLEARN_head / ΔRET_head = base
   and 4-bit weights learns less. One candidate is that a target's response
   is dominated by many untrained inputs; a fan-in sweep at fixed sources
   would separate fan-in from density. No claim is made.
+  *Follow-up (cycle 31, [CUE_FANIN.md](CUE_FANIN.md)):* at fixed 128
+  sources fan-in alone lowers E's learning (−0.078 at fan-in 32) while the
+  density rises, but fan-in and sources interact strongly (−0.115), so
+  fan-in alone does not account for the size of the d512 loss.
 * Absolute effects are small, every number comes from a generated graph
   with artificial labels, and no claim about synapses, biology, insect
   memory or BANC physiology is made.
