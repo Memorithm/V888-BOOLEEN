@@ -906,15 +906,16 @@ pub fn choose_with_bound_sequential_valid(
     if valid_count != valid_sequence.len() {
         return EngineChoice::Full;
     }
-    let mut seen = std::collections::HashSet::with_capacity(valid_count);
-    let valid_ids: std::collections::HashSet<u64> = observations
+    // The VALID observations encode intervention order. An arbitrary
+    // permutation changes cache history, even when the ID sets match.
+    // Check the ordered identity stream before evaluating sequential costs.
+    let mut valid_ids = observations
         .iter()
         .filter(|row| row.observation.split == Split::Valid)
-        .map(|row| row.observation.sample_id)
-        .collect();
+        .map(|row| row.observation.sample_id);
     let mut measurements = Vec::with_capacity(valid_count);
     for item in valid_sequence {
-        if !valid_ids.contains(&item.sample_id) || !seen.insert(item.sample_id) {
+        if valid_ids.next() != Some(item.sample_id) {
             return EngineChoice::Full;
         }
         measurements.push(item.measurement);
@@ -1008,6 +1009,43 @@ mod bound_sequential_tests {
                 EngineChoice::Full
             );
         }
+    }
+
+    #[test]
+    fn permuted_valid_interventions_are_not_a_valid_cache_history() {
+        let rows = [
+            group(1, 10, Split::Valid, 12),
+            group(2, 20, Split::Valid, 20),
+        ];
+        let target = Geometry { gates: 100, cone: 10 };
+        // Independent order oracle: the two identity streams differ.
+        let expected_order = [1_u64, 2];
+        let actual_order = [2_u64, 1];
+        assert_ne!(expected_order, actual_order);
+        assert_eq!(
+            choose_with_bound_sequential_valid(
+                &rows,
+                &[measurement(2), measurement(1)],
+                target,
+                2,
+                2,
+                20,
+                150,
+            ),
+            EngineChoice::Full
+        );
+        assert_eq!(
+            choose_with_bound_sequential_valid(
+                &rows,
+                &[measurement(1), measurement(2)],
+                target,
+                2,
+                2,
+                20,
+                150,
+            ),
+            EngineChoice::Incremental
+        );
     }
 
     #[test]
