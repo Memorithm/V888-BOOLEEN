@@ -301,6 +301,23 @@ gap change f32c − f32 −0.002 [−0.004, +0.001].
   with artificial labels, and no claim about synapses, biology, insect
   memory or BANC physiology is made.
 
+### Reproducibility
+
+The pre-registered check passes (§4): `bench-cue-coverage --conds f32c
+--threads 5` (wall time ≈ 9 min, partly concurrent with `cargo test`) gives
+3 001 lines (header + 3 000 rows) that are **byte-identical** to the header
+plus the `f32c` rows of the main `--threads 8` CSV (sha256 of both:
+`0a70ff029ea910cdcfc9571d8225e31109b1d30cc19ad133a7d162bd5d65e1fb`).
+Subset only: base, f32 and basec were not re-run.
+
+**Tests:** `cargo +1.89 test` 985 passed, 0 failed (lib 921). Three new unit
+tests (conditions and unchanged earlier grids, label-free edge coverage,
+readings/report/CSV on a one-seed reduced grid of the four conditions;
+≈ 10 s together). No engine code changed: the only non-test change outside
+the new module is the two `Cond` variants (`BaseC`, `F32C`), their
+`name`/`sources`/`fan_in` arms, `Cond::more_patterns`, `COVERAGE_FACTOR`, and
+the `spec` field of `Cond::design` for those two variants.
+
 ### What follows (not pre-registered here)
 
 The capped arms' collapse at fan-in 32 is the open question. Candidate
