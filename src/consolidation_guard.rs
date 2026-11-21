@@ -1026,10 +1026,48 @@ impl StageMask {
 }
 
 /// Episode at which a stage of `episodes` episodes switches from the early
-/// to the late mask (`⌊episodes / 2⌋`).
+/// to the late mask (`⌊episodes / 2⌋`). Cycle 25's default clock.
 #[must_use]
 pub const fn phase_split(episodes: usize) -> usize {
     episodes / 2
+}
+
+/// First episode at which the per-episode cumulative write curve `cum` has
+/// reached half of the stage total (`⌊cap / 2⌋`). Episodes `0..split` are
+/// the first write-half, `split..n` the second. An empty curve or a
+/// zero-write stage returns `cum.len()` (the whole stage is the first half).
+/// This is a pure function of the uncapped error-gated curve that already
+/// sets the `paced100` budget; it does not depend on the measured arm.
+#[must_use]
+pub fn budget_split(cum: &[u64]) -> usize {
+    let cap = cum.last().copied().unwrap_or(0);
+    if cum.is_empty() || cap == 0 {
+        return cum.len();
+    }
+    let half = cap / 2;
+    cum.iter().position(|&w| w >= half).unwrap_or(cum.len())
+}
+
+/// [`budget_split`] of each stage's cumulative write curve, in training
+/// order (the same order as `paced_limits`).
+#[must_use]
+pub fn budget_splits(curves: &[Vec<u64>]) -> Vec<usize> {
+    curves.iter().map(|c| budget_split(c)).collect()
+}
+
+/// Fraction of the stage total written in each write-half under `cum`
+/// (index 0 = episodes `0..split`, 1 = `split..n`). The crossing episode
+/// belongs to the second half, so the first-half fraction is ≤ 0.5.
+#[must_use]
+pub fn budget_fractions(cum: &[u64]) -> [f64; 2] {
+    let cap = cum.last().copied().unwrap_or(0);
+    if cap == 0 {
+        return [0.0, 0.0];
+    }
+    let split = budget_split(cum);
+    let first = if split == 0 { 0 } else { cum[split - 1] };
+    let a = first as f64 / cap as f64;
+    [a, 1.0 - a]
 }
 
 /// Per-half counters of one scheduled stage (index 0 = early half,
@@ -1064,6 +1102,32 @@ pub fn train_range_scheduled(
 ) -> io::Result<()> {
     let task = cp.inner.inner.inner.task;
     let split = phase_split(ts::task_order(spec, seed, task).len());
+    train_range_scheduled_at(
+        circuit, fx, spec, seed, s, limit, cp, end, mask, split, skipped,
+    )
+}
+
+/// [`train_range_scheduled`] with an explicit episode split (cycle 26 write
+/// clock: `split = budget_split` of the stage's uncapped E curve). `split`
+/// is clamped to the stage length. The schedule stays a pure function of
+/// the caller-supplied split and the episode index, so save/load anywhere
+/// is bit-exact.
+#[allow(clippy::too_many_arguments)]
+pub fn train_range_scheduled_at(
+    circuit: &mut PlasticCircuit,
+    fx: &Fixture,
+    spec: &GenSpec,
+    seed: u64,
+    s: Setting,
+    limit: &Limit,
+    cp: &mut Checkpoint,
+    end: usize,
+    mask: &StageMask,
+    split: usize,
+    skipped: &mut [u64; 2],
+) -> io::Result<()> {
+    let task = cp.inner.inner.inner.task;
+    let split = split.min(ts::task_order(spec, seed, task).len());
     let at = cp.inner.inner.inner.episode;
     if at < split {
         let e = end.min(split);
@@ -1117,7 +1181,43 @@ pub fn train_stage_scheduled(
 ) -> io::Result<(sg::Checkpoint, GuardLog, PhaseCount)> {
     let t = *order.get(i).ok_or_else(|| bad("stage out of range"))?;
     let episodes = ts::task_order(spec, seed, t).len();
-    let split = phase_split(episodes);
+    train_stage_scheduled_at(
+        circuit,
+        fx,
+        spec,
+        seed,
+        s,
+        order,
+        i,
+        limit,
+        dir,
+        stamp,
+        mask,
+        watch,
+        phase_split(episodes),
+    )
+}
+
+/// [`train_stage_scheduled`] with an explicit episode split.
+#[allow(clippy::too_many_arguments)]
+pub fn train_stage_scheduled_at(
+    circuit: &mut PlasticCircuit,
+    fx: &Fixture,
+    spec: &GenSpec,
+    seed: u64,
+    s: Setting,
+    order: &[usize],
+    i: usize,
+    limit: &Limit,
+    dir: &mut [i8],
+    stamp: &mut [u8],
+    mask: &StageMask,
+    watch: &[usize],
+    split: usize,
+) -> io::Result<(sg::Checkpoint, GuardLog, PhaseCount)> {
+    let t = *order.get(i).ok_or_else(|| bad("stage out of range"))?;
+    let episodes = ts::task_order(spec, seed, t).len();
+    let split = split.min(episodes);
     let start = circuit.weights().to_vec();
     let mut pc = PhaseCount::default();
     let (inner, stats, mid) = match s.guard() {
@@ -1133,7 +1233,7 @@ pub fn train_stage_scheduled(
         }
         Some(gd) => {
             let mut cp = Checkpoint::start(order, i, limit, gd, dir, stamp, &start)?;
-            train_range_scheduled(
+            train_range_scheduled_at(
                 circuit,
                 fx,
                 spec,
@@ -1143,10 +1243,11 @@ pub fn train_stage_scheduled(
                 &mut cp,
                 split,
                 mask,
+                split,
                 &mut pc.skipped,
             )?;
             let mid = circuit.weights().to_vec();
-            train_range_scheduled(
+            train_range_scheduled_at(
                 circuit,
                 fx,
                 spec,
@@ -1156,6 +1257,7 @@ pub fn train_stage_scheduled(
                 &mut cp,
                 episodes,
                 mask,
+                split,
                 &mut pc.skipped,
             )?;
             (cp.inner, Some(cp.g), mid)
@@ -1199,6 +1301,24 @@ pub fn run_setting_scheduled(
     masks: &[StageMask],
     watch: &[Vec<usize>],
 ) -> io::Result<(Run, Vec<PhaseCount>)> {
+    run_setting_scheduled_at(fx, spec, seed, s, order, limits, masks, watch, &[])
+}
+
+/// [`run_setting_scheduled`] with per-stage episode splits (same order as
+/// `limits`). An empty `splits` slice uses [`phase_split`] of each stage
+/// (cycle 25 default). A split list must have one entry per task.
+#[allow(clippy::too_many_arguments)]
+pub fn run_setting_scheduled_at(
+    fx: &Fixture,
+    spec: &GenSpec,
+    seed: u64,
+    s: Setting,
+    order: &[usize],
+    limits: &[Limit],
+    masks: &[StageMask],
+    watch: &[Vec<usize>],
+    splits: &[usize],
+) -> io::Result<(Run, Vec<PhaseCount>)> {
     let graph = &fx.graph;
     let k = fx.task.train.len();
     if fx.cues.len() != k || fx.splits.len() != k || limits.len() != k {
@@ -1206,6 +1326,9 @@ pub fn run_setting_scheduled(
     }
     if (!masks.is_empty() && masks.len() != k) || (!watch.is_empty() && watch.len() != k) {
         return Err(bad("need no schedule or one entry per task"));
+    }
+    if !splits.is_empty() && splits.len() != k {
+        return Err(bad("need no splits or one split per stage"));
     }
     let lines = masks
         .iter()
@@ -1233,7 +1356,9 @@ pub fn run_setting_scheduled(
     for i in 0..k {
         let m = masks.get(order[i]).unwrap_or(&none);
         let w: &[usize] = watch.get(order[i]).map_or(&[], Vec::as_slice);
-        let (inner, gl, pc) = train_stage_scheduled(
+        let n = ts::task_order(spec, seed, order[i]).len();
+        let split = splits.get(i).copied().unwrap_or_else(|| phase_split(n));
+        let (inner, gl, pc) = train_stage_scheduled_at(
             &mut circuit,
             fx,
             spec,
@@ -1246,6 +1371,7 @@ pub fn run_setting_scheduled(
             &mut stamp,
             m,
             w,
+            split,
         )?;
         phases.push(pc);
         glogs.push(gl);
@@ -2634,5 +2760,89 @@ mod tests {
                 assert_eq!(v[2], Some(0));
             }
         }
+    }
+
+    #[test]
+    fn budget_split_is_the_first_episode_at_half_the_stage_total() {
+        assert_eq!(budget_split(&[]), 0);
+        assert_eq!(budget_split(&[0, 0, 0]), 3);
+        assert_eq!(budget_split(&[1, 2, 3, 4]), 1);
+        assert_eq!(budget_split(&[1, 2, 3, 4, 5]), 1);
+        // Front-loaded: first episode already has ≥ half the writes.
+        assert_eq!(budget_split(&[8, 9, 10]), 0);
+        // Back-loaded: half is reached only in the last episode.
+        assert_eq!(budget_split(&[0, 0, 10]), 2);
+        assert_eq!(budget_splits(&[vec![1, 2, 4], vec![8, 9, 10]]), vec![1, 0]);
+        let f = budget_fractions(&[1, 2, 3, 4]);
+        assert!((f[0] - 0.25).abs() < 1e-12 && (f[1] - 0.75).abs() < 1e-12);
+        assert_eq!(budget_fractions(&[]), [0.0, 0.0]);
+    }
+
+    #[test]
+    fn scheduled_at_with_phase_split_matches_scheduled_and_constant_masks_stay_masked() {
+        let d = small();
+        let (k, seed, flip) = (6, 2u64, 50u32);
+        let spec = GenSpec {
+            flip_pct: flip,
+            ..d.spec
+        };
+        let fx = sg::fixture(None, &d, k, flip, seed).unwrap();
+        let order: Vec<usize> = (0..k).rev().collect();
+        let e = run_setting(&fx, &spec, seed, Setting::Err, &order, &sg::free(k)).unwrap();
+        let curves: Vec<Vec<u64>> = e.logs.iter().map(|t| t.ledger.cum.clone()).collect();
+        let paced = paced_limits(&curves);
+        let n = ts::task_order(&spec, seed, order[0]).len();
+        let phase: Vec<usize> = (0..k).map(|_| phase_split(n)).collect();
+        let write = budget_splits(&curves);
+        assert!(
+            write.iter().any(|&s| s != phase_split(n)),
+            "write clock should differ"
+        );
+        for s in [Setting::Sup, Setting::Zg] {
+            let (a, pa) =
+                run_setting_scheduled(&fx, &spec, seed, s, &order, &paced, &[], &[]).unwrap();
+            let (b, pb) =
+                run_setting_scheduled_at(&fx, &spec, seed, s, &order, &paced, &[], &[], &phase)
+                    .unwrap();
+            assert_eq!(a.weights, b.weights, "{}", s.name());
+            assert_eq!(a.logs, b.logs);
+            assert_eq!(pa, pb);
+        }
+        // Constant mask: any split is bit-identical to the #139 mask path
+        // (both halves freeze the same lines).
+        let frozen: Vec<Vec<usize>> = fx.cues.to_vec();
+        let masks: Vec<StageMask> = frozen.iter().map(|c| StageMask::constant(c)).collect();
+        let (x, m) =
+            run_setting_masked(&fx, &spec, seed, Setting::Zg, &order, &paced, &frozen).unwrap();
+        for splits in [phase, write] {
+            let (y, p) = run_setting_scheduled_at(
+                &fx,
+                &spec,
+                seed,
+                Setting::Zg,
+                &order,
+                &paced,
+                &masks,
+                &[],
+                &splits,
+            )
+            .unwrap();
+            assert_eq!(x.weights, y.weights);
+            assert_eq!(x.logs, y.logs);
+            let per: Vec<u64> = p.iter().map(|c| c.skipped[0] + c.skipped[1]).collect();
+            assert_eq!(per, m.skipped);
+        }
+        assert!(run_setting_scheduled_at(
+            &fx,
+            &spec,
+            seed,
+            Setting::Zg,
+            &order,
+            &paced,
+            &[],
+            &[],
+            &[0]
+        )
+        .is_err());
     }
 }

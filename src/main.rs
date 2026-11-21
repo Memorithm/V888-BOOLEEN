@@ -23,6 +23,7 @@ use v888_booleen::cue_partner as cpart;
 use v888_booleen::cue_reach as cr;
 use v888_booleen::cue_robustness as crob;
 use v888_booleen::cue_similarity as csim;
+use v888_booleen::cue_write_clock as cwc;
 use v888_booleen::eligibility_trace as et;
 use v888_booleen::engine::BooleanEngine;
 use v888_booleen::error_gated as eg;
@@ -159,6 +160,7 @@ fn help() {
     println!("  bench-cue-partner [--graph brain.v888b] [--seeds 521,..,560] [--flips 25,50,100] [--ks 8,16,24] [--random-orders 3] [--threads N] [--csv out.csv] [--census]  (B888-4 cycle 23: PARTNER TOURS — share-2 cue codes over the same reserved lines whose partner task follows the best (matched) / worst (anti) of the cyclic tour and the greedy task-agreement tour from every start, so matched >= cyclic >= anti in every seed, plus a seeded random partner cycle (Zg2r); silent cue + last-resort guard vs private cues and supervised/reward/error-gated at equal paced100 writes, k = 8, 16, 24, flips 25/50/100, identity + reversed + seeded held-out orders; --census = identity order, partner agreement, writes, guard counters and cue reach only, no accuracy; GENERATED synthetic graph by default)");
     println!("  bench-cue-ownership [--graph brain.v888b] [--seeds 561,..,600] [--flips 25,50,100] [--ks 8,16,24] [--random-orders 3] [--threads N] [--csv out.csv] [--census]  (B888-4 cycle 24: CUE OWNERSHIP — the #136 matched share-2 cue code where each task writes only its own block and the partner block is active but frozen (Zgo2m), vs the shared-write code (Zg2m), private cues, owned cyclic/random codes and supervised/reward/error-gated at equal paced100 writes, k = 8, 16, 24, flips 25/50/100, identity + reversed + seeded held-out orders; --census = identity order, partner agreement, writes, guard counters, frozen skips and cue reach only, no accuracy; GENERATED synthetic graph by default)");
     println!("  bench-cue-defer [--graph brain.v888b] [--seeds 601,..,640] [--flips 25,50,100] [--ks 8,16,24] [--random-orders 3] [--threads N] [--csv out.csv] [--census]  (B888-4 cycle 25: DEFERRED PARTNER WRITES — the #136 matched share-2 cue code with the partner block frozen in the first half of each task's training and writable in the second (Zgl2m), vs share (Zg2m), owned (Zgo2m), early-window (Zge2m), late random code (Zgl2r), private cues and supervised/reward/error-gated at equal paced100 writes, k = 8, 16, 24, flips 25/50/100, identity + reversed + seeded held-out orders; --census = identity order, partner agreement, writes, guard counters, per-half skips and partner-line moves, cue reach only, no accuracy; GENERATED synthetic graph by default)");
+    println!("  bench-cue-write-clock [--graph brain.v888b] [--seeds 641,..,680] [--flips 25,50,100] [--ks 8,16,24] [--random-orders 3] [--threads N] [--csv out.csv] [--census]  (B888-4 cycle 26: WRITE-CLOCK DEFERRED PARTNER WRITES — same late/early/share/owned modes as cycle 25, but the partner-block window is cut on the write clock: first episode at which the uncapped error-gated cumulative write curve of the stage reaches floor(cap/2) (Zgl2m late, Zge2m early), vs share (Zg2m), owned (Zgo2m), late random code (Zgl2r), private cues and supervised/reward/error-gated at equal paced100 writes, k = 8, 16, 24, flips 25/50/100, identity + reversed + seeded held-out orders; --census = identity order, partner agreement, writes, guard counters, per-write-half skips and partner-line moves, write-clock split, cue reach only, no accuracy; GENERATED synthetic graph by default)");
     println!("  bench-cue-similarity [--graph brain.v888b] [--seeds 481,..,520] [--flips 25,50,100] [--ks 8,16,24] [--random-orders 3] [--threads N] [--csv out.csv] [--census]  (B888-4 cycle 22: CUE SHARING BY TASK AGREEMENT — share-2 cue codes over the same reserved lines whose partner task is chosen by task-rule agreement (matched), against it (anti) or by task id (cyclic, = cycle 21 share 2), silent cue + last-resort guard vs private cues and supervised/reward/error-gated at equal paced100 writes, k = 8, 16, 24, flips 25/50/100, identity + reversed + seeded held-out orders; --census = identity order, partner agreement, writes, guard counters and cue reach only, no accuracy; GENERATED synthetic graph by default)");
     println!("  bench-cue-capacity [--graph brain.v888b] [--seeds 441,..,480] [--flips 25,50,100] [--ks 8,16,24] [--random-orders 3] [--threads N] [--csv out.csv] [--census]  (B888-4 cycle 21: CUE CAPACITY BY LINE SHARING — the silent cue (E/E-cue0) and silent cue + last-resort guard with share-r codes (each task's cue = union of r cyclic cycle 20 blocks over the same reserved lines, r = 1, 2, 4) vs supervised/reward/error-gated at equal paced100 writes, k = 8, 16 and 24 tasks, identity + reversed + seeded held-out orders; --census = identity order, writes, guard counters and cue reach only, no accuracy; GENERATED synthetic graph by default)");
     println!("  bench-cue-robustness [--graph brain.v888b] [--seeds 401,..,440] [--flips 25,50,100] [--ks 8,12,16] [--random-orders 3] [--threads N] [--csv out.csv] [--census]  (B888-4 cycle 20: CUE ROBUSTNESS — the cycle 19 silent cue + last-resort guard (E/E-cue0+last-resort) vs supervised/reward/error-gated/E/E-cue0 at equal paced100 writes on fresh seeds, k = 8, 12 and 16 tasks (64 cue lines split over k cues), identity + reversed + seeded held-out orders; per-order and worst-order statistics; cue-capacity use; --census = identity order, writes and guard counters only, no accuracy; GENERATED synthetic graph by default)");
@@ -2102,6 +2104,118 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "topology_unchanged_all={}",
                 rows.iter().all(|r| r.inner.topology_unchanged)
             );
+            println!("evaluation_scope=synthetic_or_unverified_graph_artificial_labels_not_BANC_not_biological");
+        }
+        Some("bench-cue-write-clock") => {
+            let allowed = [
+                "--graph",
+                "--seeds",
+                "--flips",
+                "--ks",
+                "--random-orders",
+                "--threads",
+                "--csv",
+                "--census",
+            ];
+            for flag in args.iter().skip(1).filter(|arg| arg.starts_with("--")) {
+                if !allowed.contains(&flag.as_str()) {
+                    return Err(format!("unknown bench-cue-write-clock option: {flag}").into());
+                }
+            }
+            let census = args.iter().any(|a| a == "--census");
+            let seeds: Vec<u64> = match optional(&args, "--seeds") {
+                Some(s) => s
+                    .split(',')
+                    .map(str::parse::<u64>)
+                    .collect::<Result<Vec<_>, _>>()?,
+                None if census => cwc::PILOT_SEEDS.collect(),
+                None => cwc::SEEDS.collect(),
+            };
+            let flips = optional(&args, "--flips")
+                .unwrap_or("25,50,100")
+                .split(',')
+                .map(str::parse::<u32>)
+                .collect::<Result<Vec<_>, _>>()?;
+            let ks: Vec<usize> = optional(&args, "--ks")
+                .unwrap_or("8,16,24")
+                .split(',')
+                .map(str::parse::<usize>)
+                .collect::<Result<Vec<_>, _>>()?;
+            let random: usize =
+                optional(&args, "--random-orders").map_or(Ok(cwc::RANDOM_ORDERS), str::parse)?;
+            let threads: usize =
+                optional(&args, "--threads").map_or(Ok(sgen::default_threads()), str::parse)?;
+            let owned = match optional(&args, "--graph") {
+                Some(path) => Some(Connectome::load(Path::new(path))?),
+                None => None,
+            };
+            let graph_label = if owned.is_some() {
+                "PROVIDED_GRAPH"
+            } else {
+                "GENERATED_SYNTHETIC"
+            };
+            let d = cwc::DESIGN;
+            println!("v888_cue_write_clock_schema=b888-4-cue-write-clock-v1");
+            if owned.is_some() {
+                println!("graph=PROVIDED_GRAPH (task labels artificial)");
+            } else {
+                println!(
+                    "graph=GENERATED_SYNTHETIC sources={} targets={} fan_in={} (not BANC; real BANC V888 graph DOI 10.7910/DVN/7WTH1N not available here)",
+                    d.shape.sources, d.shape.targets, d.shape.fan_in
+                );
+            }
+            if census {
+                println!(
+                    "census(identity order only; partner agreement, writes, guard counters, per-write-half skips and partner-line moves, write-clock split, cue reach; no accuracy computed)"
+                );
+                println!(
+                    "writes: k,flip,seed,arm,partner_agree_mean,cue_reach_mean,charged_writes,effective_writes,cue_writes,refused,overwrites,deferred,skipped_h1,skipped_h2,frozen_moved,partner_moved_h1,partner_moved_h2,write_split_mean,episodes"
+                );
+                for &k in &ks {
+                    for &flip in &flips {
+                        for (k, flip, a, seed, agree, reach, v) in
+                            cwc::census(owned.as_ref(), &d, k, flip, &seeds)?
+                        {
+                            let v: Vec<String> = v
+                                .iter()
+                                .map(|x| x.map_or_else(|| "-".to_string(), |x| x.to_string()))
+                                .collect();
+                            println!(
+                                "{k},{flip},{seed},{},{agree:.3},{reach:.2},{}",
+                                a.short(),
+                                v.join(",")
+                            );
+                        }
+                    }
+                }
+                return Ok(());
+            }
+            println!(
+                "seeds={} flips={flips:?} ks={ks:?} codes=own,matched(#136_best_of_cyclic_and_greedy),random(sattolo,partner_salt={:#x}) write_modes=share,owned,late(partner_block_frozen_first_write_half_writable_second),early(writable_first_write_half_frozen_second) split=budget_split(uncapped_E_cum,floor(cap/2)) orders=identity+reversed+{random}_random order_salt={:#x} arms=S1,R1,E,Zg1,Zg2m,Zgo2m,Zgl2m,Zge2m,Zgl2r budget=paced100 (per-episode cumulative curve of uncapped error-gated in the same order) active={} train_patterns_per_task={} test_patterns={} rounds_per_task={} init={} cue_init(Zg*)=0 threshold={} min_novel_pairs={} metric=balanced_accuracy boot_resamples={} boot_seed={:#x}",
+                seeds.len(),
+                cwc::PARTNER_SALT,
+                cwc::ORDER_SALT,
+                d.spec.active,
+                d.spec.train_patterns,
+                d.spec.test_patterns,
+                d.spec.rounds_a,
+                d.spec.init_weight,
+                eg::THRESHOLD,
+                ns::MIN_NOVEL_PAIRS,
+                eg::BOOT_RESAMPLES,
+                eg::BOOT_SEED,
+            );
+            let rows =
+                cwc::run_grid_threads(owned.as_ref(), &d, &ks, &flips, &seeds, random, threads)?;
+            if let Some(path) = optional(&args, "--csv") {
+                use std::io::Write;
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)?
+                    .write_all(cwc::to_csv(&rows, graph_label).as_bytes())?;
+            }
+            print!("{}", cwc::report(&rows));
             println!("evaluation_scope=synthetic_or_unverified_graph_artificial_labels_not_BANC_not_biological");
         }
         Some("bench-cue-similarity") => {
