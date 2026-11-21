@@ -109,6 +109,11 @@ where
     if initial_canonical != initial_cache {
         return Err(TransactionError::Rebuild);
     }
+    // Cache construction can itself cross the process peak budget. Reject
+    // before either engine runs, rather than waiting until the first step.
+    if !within_observed_peak_budget(max_observed_vm_hwm_kib, process_vm_hwm_kib()) {
+        return Err(TransactionError::BudgetExceeded);
+    }
     let mut state = initial_state;
     let mut cache = initial_cache;
     let mut rows = Vec::with_capacity(inputs.len());
@@ -149,14 +154,17 @@ where
         let verified_time = full_time
             .saturating_add(incremental_time)
             .saturating_add(rebuild_time);
-        if !within_observed_peak_budget(max_observed_vm_hwm_kib, process_vm_hwm_kib()) {
+        // Use the same kernel observation for enforcement and reporting.
+        // Two reads could otherwise report a peak larger than the admitted one.
+        let observed_peak = process_vm_hwm_kib();
+        if !within_observed_peak_budget(max_observed_vm_hwm_kib, observed_peak) {
             return Err(TransactionError::BudgetExceeded);
         }
         rows.push(StepMeasurement {
             verdict,
             full: full_time,
             incremental_with_refresh: verified_time,
-            peak_rss_kib: process_vm_hwm_kib(),
+            peak_rss_kib: observed_peak,
         });
     }
     Ok((state, cache, rows, initial_rebuild_time))
