@@ -59,7 +59,9 @@ pub fn choose_sequential_throughput(
         let mut incremental = 0_u128;
         for step in group.steps {
             if step.verdict != StepVerdict::Accepted
-                || step.peak_rss_kib.is_none_or(|peak| peak == 0 || peak > max_vmhwm_kib)
+                || step
+                    .peak_rss_kib
+                    .is_none_or(|peak| peak == 0 || peak > max_vmhwm_kib)
             {
                 return ThroughputChoice::Full;
             }
@@ -71,9 +73,7 @@ pub fn choose_sequential_throughput(
             let Some(scaled_incremental) = i.checked_mul(100) else {
                 return ThroughputChoice::Full;
             };
-            let Some(scaled_full) =
-                f.checked_mul(u128::from(100 - minimum_saving_percent))
-            else {
+            let Some(scaled_full) = f.checked_mul(u128::from(100 - minimum_saving_percent)) else {
                 return ThroughputChoice::Full;
             };
             // A zero-duration sample is below timer resolution, not proof of speedup.
@@ -108,7 +108,12 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    fn row(full: u64, incremental: u64, verdict: StepVerdict, peak: Option<u64>) -> StepMeasurement {
+    fn row(
+        full: u64,
+        incremental: u64,
+        verdict: StepVerdict,
+        peak: Option<u64>,
+    ) -> StepMeasurement {
         StepMeasurement {
             verdict,
             full: Duration::from_nanos(full),
@@ -122,10 +127,21 @@ mod tests {
         let a = [row(100, 20, StepVerdict::Accepted, Some(1024))];
         let b = [row(200, 40, StepVerdict::Accepted, Some(2048))];
         let groups = [
-            ValidSequence { split: DataSplit::Valid, group_id: 1, steps: &a },
-            ValidSequence { split: DataSplit::Valid, group_id: 2, steps: &b },
+            ValidSequence {
+                split: DataSplit::Valid,
+                group_id: 1,
+                steps: &a,
+            },
+            ValidSequence {
+                split: DataSplit::Valid,
+                group_id: 2,
+                steps: &b,
+            },
         ];
-        assert_eq!(choose_sequential_throughput(&groups, 2, 1, 20, 4096), ThroughputChoice::Incremental);
+        assert_eq!(
+            choose_sequential_throughput(&groups, 2, 1, 20, 4096),
+            ThroughputChoice::Incremental
+        );
     }
 
     #[test]
@@ -133,12 +149,23 @@ mod tests {
         let a = [row(1000, 1, StepVerdict::Accepted, Some(1024))];
         let b = [row(100, 90, StepVerdict::Accepted, Some(1024))];
         // Even though pooled savings exceed 20%, group b saves only 10%.
-        assert!(90_u128 * 100 >= 100_u128 * 80);
+        const { assert!(90_u128 * 100 >= 100_u128 * 80) };
         let groups = [
-            ValidSequence { split: DataSplit::Valid, group_id: 1, steps: &a },
-            ValidSequence { split: DataSplit::Valid, group_id: 2, steps: &b },
+            ValidSequence {
+                split: DataSplit::Valid,
+                group_id: 1,
+                steps: &a,
+            },
+            ValidSequence {
+                split: DataSplit::Valid,
+                group_id: 2,
+                steps: &b,
+            },
         ];
-        assert_eq!(choose_sequential_throughput(&groups, 2, 1, 20, 4096), ThroughputChoice::Full);
+        assert_eq!(
+            choose_sequential_throughput(&groups, 2, 1, 20, 4096),
+            ThroughputChoice::Full
+        );
     }
 
     #[test]
@@ -146,15 +173,37 @@ mod tests {
         let a = [row(100, 1, StepVerdict::Accepted, Some(1024))];
         let b = [row(100, 1, StepVerdict::Accepted, None)];
         let duplicate = [
-            ValidSequence { split: DataSplit::Valid, group_id: 7, steps: &a },
-            ValidSequence { split: DataSplit::Valid, group_id: 7, steps: &a },
+            ValidSequence {
+                split: DataSplit::Valid,
+                group_id: 7,
+                steps: &a,
+            },
+            ValidSequence {
+                split: DataSplit::Valid,
+                group_id: 7,
+                steps: &a,
+            },
         ];
-        assert_eq!(choose_sequential_throughput(&duplicate, 2, 1, 20, 4096), ThroughputChoice::Full);
+        assert_eq!(
+            choose_sequential_throughput(&duplicate, 2, 1, 20, 4096),
+            ThroughputChoice::Full
+        );
         let missing = [
-            ValidSequence { split: DataSplit::Valid, group_id: 7, steps: &a },
-            ValidSequence { split: DataSplit::Valid, group_id: 8, steps: &b },
+            ValidSequence {
+                split: DataSplit::Valid,
+                group_id: 7,
+                steps: &a,
+            },
+            ValidSequence {
+                split: DataSplit::Valid,
+                group_id: 8,
+                steps: &b,
+            },
         ];
-        assert_eq!(choose_sequential_throughput(&missing, 2, 1, 20, 4096), ThroughputChoice::Full);
+        assert_eq!(
+            choose_sequential_throughput(&missing, 2, 1, 20, 4096),
+            ThroughputChoice::Full
+        );
     }
 
     #[test]
@@ -162,16 +211,27 @@ mod tests {
         let a = [row(100, 1, StepVerdict::Mismatch, Some(1024))];
         let b = [row(100, 1, StepVerdict::Accepted, Some(4097))];
         let groups = [
-            ValidSequence { split: DataSplit::Valid, group_id: 1, steps: &a },
-            ValidSequence { split: DataSplit::Valid, group_id: 2, steps: &b },
+            ValidSequence {
+                split: DataSplit::Valid,
+                group_id: 1,
+                steps: &a,
+            },
+            ValidSequence {
+                split: DataSplit::Valid,
+                group_id: 2,
+                steps: &b,
+            },
         ];
-        assert_eq!(choose_sequential_throughput(&groups, 2, 1, 20, 4096), ThroughputChoice::Full);
+        assert_eq!(
+            choose_sequential_throughput(&groups, 2, 1, 20, 4096),
+            ThroughputChoice::Full
+        );
     }
     #[test]
     fn independent_step_oracle_rejects_masked_slow_intervention() {
         // Each group saves >20% overall, but its second step saves only 1%.
         // A scalar oracle rejects 99 * 100 >= 100 * (100 - 20).
-        assert!(99_u128 * 100 >= 100_u128 * 80);
+        const { assert!(99_u128 * 100 >= 100_u128 * 80) };
         let a = [
             row(1000, 1, StepVerdict::Accepted, Some(1024)),
             row(100, 99, StepVerdict::Accepted, Some(1024)),
@@ -181,8 +241,16 @@ mod tests {
             row(100, 99, StepVerdict::Accepted, Some(1024)),
         ];
         let groups = [
-            ValidSequence { split: DataSplit::Valid, group_id: 1, steps: &a },
-            ValidSequence { split: DataSplit::Valid, group_id: 2, steps: &b },
+            ValidSequence {
+                split: DataSplit::Valid,
+                group_id: 1,
+                steps: &a,
+            },
+            ValidSequence {
+                split: DataSplit::Valid,
+                group_id: 2,
+                steps: &b,
+            },
         ];
         assert_eq!(
             choose_sequential_throughput(&groups, 2, 2, 20, 4096),
@@ -201,8 +269,16 @@ mod tests {
             row(200, 120, StepVerdict::Accepted, Some(2048)),
         ];
         let groups = [
-            ValidSequence { split: DataSplit::Valid, group_id: 1, steps: &a },
-            ValidSequence { split: DataSplit::Valid, group_id: 2, steps: &b },
+            ValidSequence {
+                split: DataSplit::Valid,
+                group_id: 1,
+                steps: &a,
+            },
+            ValidSequence {
+                split: DataSplit::Valid,
+                group_id: 2,
+                steps: &b,
+            },
         ];
         assert_eq!(
             choose_sequential_throughput(&groups, 2, 2, 20, 4096),
@@ -217,8 +293,16 @@ mod tests {
         let b = [row(100, 50, StepVerdict::Accepted, Some(1024))];
         assert_eq!(a[0].incremental_with_refresh.as_nanos(), 0);
         let groups = [
-            ValidSequence { split: DataSplit::Valid, group_id: 1, steps: &a },
-            ValidSequence { split: DataSplit::Valid, group_id: 2, steps: &b },
+            ValidSequence {
+                split: DataSplit::Valid,
+                group_id: 1,
+                steps: &a,
+            },
+            ValidSequence {
+                split: DataSplit::Valid,
+                group_id: 2,
+                steps: &b,
+            },
         ];
         assert_eq!(
             choose_sequential_throughput(&groups, 2, 1, 20, 4096),
@@ -232,11 +316,21 @@ mod tests {
         let b = [row(100, 1, StepVerdict::Accepted, Some(1024))];
         for forbidden in [DataSplit::Train, DataSplit::Test, DataSplit::Ood] {
             let groups = [
-                ValidSequence { split: DataSplit::Valid, group_id: 1, steps: &a },
-                ValidSequence { split: forbidden, group_id: 2, steps: &b },
+                ValidSequence {
+                    split: DataSplit::Valid,
+                    group_id: 1,
+                    steps: &a,
+                },
+                ValidSequence {
+                    split: forbidden,
+                    group_id: 2,
+                    steps: &b,
+                },
             ];
-            assert_eq!(choose_sequential_throughput(&groups, 2, 1, 20, 4096), ThroughputChoice::Full);
+            assert_eq!(
+                choose_sequential_throughput(&groups, 2, 1, 20, 4096),
+                ThroughputChoice::Full
+            );
         }
     }
-
 }

@@ -1,7 +1,7 @@
 //! Transactional sequential execution with an independently rebuilt cache oracle.
 //! Synthetic states only. No biological interpretation or speedup claim.
-use std::time::Instant;
 use crate::fourier5_sequential_workload_audit::{process_vm_hwm_kib, StepMeasurement, StepVerdict};
+use std::time::Instant;
 
 /// A failed authoritative evaluation or cache reconstruction stops the sequence.
 /// No partially verified state/cache pair is returned as successful.
@@ -41,9 +41,15 @@ where
     D: FnMut(&S, &C, &I) -> Result<(S, C), E>,
     R: FnMut(&S) -> Result<C, E>,
 {
- 
-    execute_verified_sequence_profiled(initial_state, initial_cache, inputs, full, incremental, rebuild)
-        .map(|(state, cache, rows, _initial_rebuild)| (state, cache, rows))
+    execute_verified_sequence_profiled(
+        initial_state,
+        initial_cache,
+        inputs,
+        full,
+        incremental,
+        rebuild,
+    )
+    .map(|(state, cache, rows, _initial_rebuild)| (state, cache, rows))
 }
 
 /// Same transactional semantics as `execute_verified_sequence`, but returns
@@ -64,7 +70,16 @@ where
     D: FnMut(&S, &C, &I) -> Result<(S, C), E>,
     R: FnMut(&S) -> Result<C, E>,
 {
-    execute_verified_sequence_limited(initial_state, initial_cache, inputs, full, incremental, rebuild, usize::MAX, None)
+    execute_verified_sequence_limited(
+        initial_state,
+        initial_cache,
+        inputs,
+        full,
+        incremental,
+        rebuild,
+        usize::MAX,
+        None,
+    )
 }
 
 /// A requested memory ceiling must have a real, nonzero observation.
@@ -79,6 +94,7 @@ fn within_observed_peak_budget(limit: Option<u64>, observed: Option<u64>) -> boo
 /// callbacks or allocating rows. An optional VmHWM ceiling is checked at entry
 /// and after each verified step; VmHWM is process-wide and is NOT an allocator
 /// limit or a substitute for RemoteOps cgroup memory enforcement.
+#[allow(clippy::too_many_arguments)]
 pub fn execute_verified_sequence_limited<S, C, I, E, F, D, R>(
     initial_state: S,
     initial_cache: C,
@@ -130,9 +146,7 @@ where
         let canonical = rebuild(&expected).map_err(|_| TransactionError::Rebuild)?;
         let rebuild_time = rebuild_start.elapsed();
         let verdict = match candidate {
-            Ok((next_state, next_cache))
-                if next_state == expected && next_cache == canonical =>
-            {
+            Ok((next_state, next_cache)) if next_state == expected && next_cache == canonical => {
                 state = next_state;
                 cache = next_cache;
                 StepVerdict::Accepted
@@ -183,17 +197,22 @@ mod tests {
         assert!(within_observed_peak_budget(None, None));
     }
 
-
     #[test]
     fn bounded_sequence_rejects_excess_before_callbacks() {
         use std::cell::Cell;
         let calls = Cell::new(0_u32);
         let result = execute_verified_sequence_limited(
-            0_u8, 0_u8, &[1_u8, 2],
-            |s, d| { calls.set(calls.get() + 1); Ok::<_, ()>(s + d) },
+            0_u8,
+            0_u8,
+            &[1_u8, 2],
+            |s, d| {
+                calls.set(calls.get() + 1);
+                Ok::<_, ()>(s + d)
+            },
             |s, _, d| Ok::<_, ()>((s + d, s + d)),
             |s| Ok::<_, ()>(*s),
-            1, None,
+            1,
+            None,
         );
         assert!(matches!(result, Err(TransactionError::BudgetExceeded)));
         assert_eq!(calls.get(), 0);
@@ -202,12 +221,16 @@ mod tests {
     #[test]
     fn bounded_sequence_accepts_exact_step_limit() {
         let (state, cache, rows, _) = execute_verified_sequence_limited(
-            0_u8, 0_u8, &[1_u8, 2],
+            0_u8,
+            0_u8,
+            &[1_u8, 2],
             |s, d| Ok::<_, ()>(s + d),
             |s, _, d| Ok::<_, ()>((s + d, s + d)),
             |s| Ok::<_, ()>(*s),
-            2, None,
-        ).unwrap();
+            2,
+            None,
+        )
+        .unwrap();
         assert_eq!((state, cache), (3, 3));
         assert_eq!(rows.len(), 2);
     }
@@ -215,24 +238,42 @@ mod tests {
     #[test]
     fn stale_cache_with_correct_output_is_recovered_before_next_step() {
         let (state, cache, rows) = execute_verified_sequence(
-            0_u32, 0_u32, &[1_u32, 2, 3],
+            0_u32,
+            0_u32,
+            &[1_u32, 2, 3],
             |s, d| Ok::<_, ()>(s + d),
             |s, c, d| Ok::<_, ()>((s + d, c + d + u32::from(*d == 2))),
             |s| Ok::<_, ()>(*s),
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!((state, cache), (6, 6));
-        assert_eq!(rows.iter().map(|r| r.verdict).collect::<Vec<_>>(),
-            vec![StepVerdict::Accepted, StepVerdict::Mismatch, StepVerdict::Accepted]);
+        assert_eq!(
+            rows.iter().map(|r| r.verdict).collect::<Vec<_>>(),
+            vec![
+                StepVerdict::Accepted,
+                StepVerdict::Mismatch,
+                StepVerdict::Accepted
+            ]
+        );
     }
 
     #[test]
     fn incremental_error_recovers_full_and_keeps_sequence_live() {
         let (state, cache, rows) = execute_verified_sequence(
-            0_i32, 0_i32, &[1_i32, 2, 3],
+            0_i32,
+            0_i32,
+            &[1_i32, 2, 3],
             |s, d| Ok::<_, &'static str>(s + d),
-            |s, _, d| if *d == 2 { Err("candidate") } else { Ok((s + d, s + d)) },
+            |s, _, d| {
+                if *d == 2 {
+                    Err("candidate")
+                } else {
+                    Ok((s + d, s + d))
+                }
+            },
             |s| Ok::<_, &'static str>(*s),
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!((state, cache), (6, 6));
         assert_eq!(rows[1].verdict, StepVerdict::IncrementalError);
         assert_eq!(rows[2].verdict, StepVerdict::Accepted);
@@ -241,7 +282,9 @@ mod tests {
     #[test]
     fn invalid_initial_cache_fails_before_any_mutation() {
         let result = execute_verified_sequence(
-            0_u8, 1_u8, &[1_u8],
+            0_u8,
+            1_u8,
+            &[1_u8],
             |s, d| Ok::<_, ()>(s + d),
             |s, _, d| Ok::<_, ()>((s + d, s + d)),
             |s| Ok::<_, ()>(*s),
@@ -254,14 +297,17 @@ mod tests {
         use std::cell::Cell;
         let rebuild_calls = Cell::new(0_u32);
         let (state, cache, rows) = execute_verified_sequence(
-            0_u32, 0_u32, &[1_u32, 2],
+            0_u32,
+            0_u32,
+            &[1_u32, 2],
             |s, d| Ok::<_, ()>(s + d),
             |s, _, d| Ok::<_, ()>((s + d, s + d + 1)),
             |s| {
                 rebuild_calls.set(rebuild_calls.get() + 1);
                 Ok::<_, ()>(*s)
             },
-        ).unwrap();
+        )
+        .unwrap();
         // One initial validation plus one canonical reconstruction per step.
         assert_eq!(rebuild_calls.get(), 3);
         assert_eq!((state, cache), (3, 3));
@@ -272,7 +318,9 @@ mod tests {
     fn accepted_step_accounts_for_canonical_verification_cost() {
         use std::time::Duration;
         let (_, _, rows) = execute_verified_sequence(
-            0_u8, 0_u8, &[1_u8],
+            0_u8,
+            0_u8,
+            &[1_u8],
             |s, d| Ok::<_, ()>(s + d),
             |s, _, d| Ok::<_, ()>((s + d, s + d)),
             |s| {
@@ -281,7 +329,8 @@ mod tests {
                 }
                 Ok::<_, ()>(*s)
             },
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(rows[0].verdict, StepVerdict::Accepted);
         assert!(rows[0].incremental_with_refresh >= Duration::from_millis(5));
     }
@@ -290,14 +339,17 @@ mod tests {
     fn verified_step_charges_authoritative_full_oracle_too() {
         use std::time::Duration;
         let (_, _, rows) = execute_verified_sequence(
-            0_u8, 0_u8, &[1_u8],
+            0_u8,
+            0_u8,
+            &[1_u8],
             |s, d| {
                 std::thread::sleep(Duration::from_millis(4));
                 Ok::<_, ()>(s + d)
             },
             |s, _, d| Ok::<_, ()>((s + d, s + d)),
             |s| Ok::<_, ()>(*s),
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(rows[0].verdict, StepVerdict::Accepted);
         // Independent arithmetic oracle: verified >= Full + candidate + rebuild.
         assert!(rows[0].incremental_with_refresh >= rows[0].full);
@@ -308,14 +360,19 @@ mod tests {
     fn profiled_cold_start_reports_initial_rebuild_separately() {
         use std::time::Duration;
         let (state, cache, rows, initial) = execute_verified_sequence_profiled(
-            0_u8, 0_u8, &[1_u8],
+            0_u8,
+            0_u8,
+            &[1_u8],
             |s, d| Ok::<_, ()>(s + d),
             |s, _, d| Ok::<_, ()>((s + d, s + d)),
             |s| {
-                if *s == 0 { std::thread::sleep(Duration::from_millis(3)); }
+                if *s == 0 {
+                    std::thread::sleep(Duration::from_millis(3));
+                }
                 Ok::<_, ()>(*s)
             },
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!((state, cache), (1, 1));
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].verdict, StepVerdict::Accepted);
@@ -328,7 +385,9 @@ mod tests {
         let full_calls = Cell::new(0_u32);
         let incremental_calls = Cell::new(0_u32);
         let result = execute_verified_sequence(
-            0_u8, 0_u8, &[1_u8],
+            0_u8,
+            0_u8,
+            &[1_u8],
             |s, d| {
                 full_calls.set(full_calls.get() + 1);
                 Ok::<_, ()>(s + d)
@@ -347,7 +406,9 @@ mod tests {
     #[test]
     fn authoritative_failure_never_returns_unverified_commit() {
         let result = execute_verified_sequence(
-            0_i32, 0_i32, &[1_i32, 2],
+            0_i32,
+            0_i32,
+            &[1_i32, 2],
             |s, d| if *d == 2 { Err("full") } else { Ok(s + d) },
             |s, _, d| Ok::<_, &'static str>((s + d, s + d)),
             |s| Ok::<_, &'static str>(*s),
@@ -355,7 +416,6 @@ mod tests {
         assert!(matches!(result, Err(TransactionError::Full)));
     }
 }
-
 
 /// Exact accounting for a *verified* heterogeneous sequential run.
 /// This is not a production Incremental benchmark: every step also runs Full
@@ -400,19 +460,24 @@ pub fn profile_verified_sequence(
     for row in rows {
         match row.verdict {
             StepVerdict::Accepted => accepted = accepted.checked_add(1)?,
-            StepVerdict::Mismatch | StepVerdict::IncrementalError =>
-                recovered = recovered.checked_add(1)?,
+            StepVerdict::Mismatch | StepVerdict::IncrementalError => {
+                recovered = recovered.checked_add(1)?
+            }
             StepVerdict::FullError => return None,
         }
         let observed = row.peak_rss_kib.filter(|&value| value > 0)?;
         peak = peak.max(observed);
-        if row.incremental_with_refresh < row.full { return None; }
+        if row.incremental_with_refresh < row.full {
+            return None;
+        }
         match row.verdict {
             StepVerdict::Accepted => {
-                accepted_verified_nanos = accepted_verified_nanos.checked_add(row.incremental_with_refresh.as_nanos())?;
+                accepted_verified_nanos =
+                    accepted_verified_nanos.checked_add(row.incremental_with_refresh.as_nanos())?;
             }
             StepVerdict::Mismatch | StepVerdict::IncrementalError => {
-                recovered_verified_nanos = recovered_verified_nanos.checked_add(row.incremental_with_refresh.as_nanos())?;
+                recovered_verified_nanos = recovered_verified_nanos
+                    .checked_add(row.incremental_with_refresh.as_nanos())?;
                 recovered_peak_rss_kib = Some(recovered_peak_rss_kib.unwrap_or(0).max(observed));
             }
             StepVerdict::FullError => return None,
@@ -426,8 +491,7 @@ pub fn profile_verified_sequence(
     let throughput_steps_per_second = if total_verified_nanos == 0 {
         None
     } else {
-        Some((rows.len() as u128).checked_mul(1_000_000_000)?
-            / total_verified_nanos)
+        Some((rows.len() as u128).checked_mul(1_000_000_000)? / total_verified_nanos)
     };
     Some(VerifiedSequenceProfile {
         steps: rows.len(),
@@ -467,7 +531,10 @@ mod profile_tests {
             },
         ];
         let profile = profile_verified_sequence(&rows, Duration::from_nanos(26)).unwrap();
-        assert_eq!((profile.steps, profile.accepted, profile.recovered), (2, 1, 1));
+        assert_eq!(
+            (profile.steps, profile.accepted, profile.recovered),
+            (2, 1, 1)
+        );
         assert_eq!((profile.full_nanos, profile.verified_step_nanos), (28, 74));
         assert_eq!(profile.total_verified_nanos, 100);
         assert_eq!(profile.accepted_verified_nanos, 31);
