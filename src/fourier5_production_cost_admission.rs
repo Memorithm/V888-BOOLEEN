@@ -102,3 +102,124 @@ mod tests {
         assert_eq!(select(&groups_missing, 2, 1, 20, 4096), Decision::Full);
     }
 }
+
+
+/// A measured workload stratum. Buckets are declared before looking at VALID
+/// timings; an absent bucket is never silently represented by a faster one.
+pub struct WorkloadStratum<'a> {
+    pub cone_bucket: usize,
+    pub groups: &'a [ValidationGroup<'a>],
+}
+
+/// Admit Incremental only when every predeclared cone-size bucket has enough
+/// disjoint VALID groups and each observed intervention meets the same strict
+/// production-cost and exactness requirements as `select`.
+///
+/// `required_buckets` is a caller-frozen workload contract, not inferred from
+/// the validation results. Empty, duplicate, missing or out-of-range buckets
+/// fail closed. TEST and OOD must never be passed for calibration.
+#[must_use]
+pub fn select_stratified(
+    strata: &[WorkloadStratum<'_>],
+    required_buckets: usize,
+    min_groups_per_bucket: usize,
+    min_steps_per_group: usize,
+    saving_percent: u8,
+    peak_limit_kib: u64,
+) -> Decision {
+    if required_buckets == 0 || strata.len() != required_buckets {
+        return Decision::Full;
+    }
+    let mut covered = vec![false; required_buckets];
+    let mut all_group_ids = HashSet::new();
+    for stratum in strata {
+        let Some(seen) = covered.get_mut(stratum.cone_bucket) else {
+            return Decision::Full;
+        };
+        if *seen {
+            return Decision::Full;
+        }
+        *seen = true;
+        if select(
+            stratum.groups,
+            min_groups_per_bucket,
+            min_steps_per_group,
+            saving_percent,
+            peak_limit_kib,
+        ) != Decision::Incremental {
+            return Decision::Full;
+        }
+        // Disjointness is global, not merely within individual cone buckets.
+        for group in stratum.groups {
+            if !all_group_ids.insert(group.id) {
+                return Decision::Full;
+            }
+        }
+    }
+    if covered.iter().all(|seen| *seen) {
+        Decision::Incremental
+    } else {
+        Decision::Full
+    }
+}
+
+#[cfg(test)]
+mod stratified_tests {
+    use super::*;
+
+    fn sample(full: u64, incremental: u64) -> PairedProductionCost {
+        PairedProductionCost {
+            full: Duration::from_nanos(full),
+            incremental_with_cache_refresh: Duration::from_nanos(incremental),
+            exact_state_and_cache: true,
+            vmhwm_kib: Some(512),
+        }
+    }
+
+    #[test]
+    fn heterogeneous_buckets_require_all_cones() {
+        let fast = [sample(100, 40)];
+        let slow = [sample(100, 95)];
+        let a = [
+            ValidationGroup { split: Split::Valid, id: 1, samples: &fast },
+            ValidationGroup { split: Split::Valid, id: 2, samples: &fast },
+        ];
+        let b = [
+            ValidationGroup { split: Split::Valid, id: 3, samples: &slow },
+            ValidationGroup { split: Split::Valid, id: 4, samples: &slow },
+        ];
+        let strata = [
+            WorkloadStratum { cone_bucket: 0, groups: &a },
+            WorkloadStratum { cone_bucket: 1, groups: &b },
+        ];
+        assert_eq!(select_stratified(&strata, 2, 2, 1, 10, 1024), Decision::Full);
+        assert_eq!(select_stratified(&strata[..1], 2, 2, 1, 10, 1024), Decision::Full);
+    }
+
+    #[test]
+    fn disjoint_fast_buckets_admit_but_duplicate_ids_do_not() {
+        let fast = [sample(100, 40)];
+        let a = [
+            ValidationGroup { split: Split::Valid, id: 1, samples: &fast },
+            ValidationGroup { split: Split::Valid, id: 2, samples: &fast },
+        ];
+        let b = [
+            ValidationGroup { split: Split::Valid, id: 3, samples: &fast },
+            ValidationGroup { split: Split::Valid, id: 4, samples: &fast },
+        ];
+        let strata = [
+            WorkloadStratum { cone_bucket: 0, groups: &a },
+            WorkloadStratum { cone_bucket: 1, groups: &b },
+        ];
+        assert_eq!(select_stratified(&strata, 2, 2, 1, 10, 1024), Decision::Incremental);
+        let duplicated = [
+            ValidationGroup { split: Split::Valid, id: 1, samples: &fast },
+            ValidationGroup { split: Split::Valid, id: 4, samples: &fast },
+        ];
+        let invalid = [
+            WorkloadStratum { cone_bucket: 0, groups: &a },
+            WorkloadStratum { cone_bucket: 1, groups: &duplicated },
+        ];
+        assert_eq!(select_stratified(&invalid, 2, 2, 1, 10, 1024), Decision::Full);
+    }
+}
