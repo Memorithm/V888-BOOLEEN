@@ -108,6 +108,13 @@ pub enum Cond {
     Src256,
     /// 512 graph sources (targets 32, fan-in 8 unchanged).
     Src512,
+    /// B888-4 cycle 30 (`docs/CUE_DOSE_DENSITY.md`): 256 graph sources with
+    /// fan-in 16 (the edge density per source of `Base`). Not in [`CONDS`].
+    D256,
+    /// B888-4 cycle 30 (`docs/CUE_DOSE_DENSITY.md`): 512 graph sources with
+    /// fan-in 32, i.e. the edge density per source of `Base` (2 edges per
+    /// source). Not in [`CONDS`]: the cycle 29 grid is unchanged.
+    D512,
 }
 
 /// Conditions in CSV / report order.
@@ -120,6 +127,8 @@ impl Cond {
             Self::Base => "base",
             Self::Src256 => "src256",
             Self::Src512 => "src512",
+            Self::D256 => "d256",
+            Self::D512 => "d512",
         }
     }
     /// Parse a condition name.
@@ -134,17 +143,29 @@ impl Cond {
     pub fn sources(self) -> usize {
         match self {
             Self::Base => cwd::DESIGN.shape.sources,
-            Self::Src256 => 256,
-            Self::Src512 => 512,
+            Self::Src256 | Self::D256 => 256,
+            Self::Src512 | Self::D512 => 512,
         }
     }
-    /// Design of the condition (only `shape.sources` differs from cycle 27).
+    /// Fan-in of the condition (8 = cycle 27, except [`Cond::D256`] and
+    /// [`Cond::D512`]).
+    #[must_use]
+    pub fn fan_in(self) -> usize {
+        match self {
+            Self::D256 => 16,
+            Self::D512 => 32,
+            _ => cwd::DESIGN.shape.fan_in,
+        }
+    }
+    /// Design of the condition (only `shape.sources`, and for
+    /// [`Cond::D256`] / [`Cond::D512`] `shape.fan_in`, differ from cycle 27).
     #[must_use]
     pub fn design(self) -> Design {
         let d = cwd::DESIGN;
         Design {
             shape: GraphShape {
                 sources: self.sources(),
+                fan_in: self.fan_in(),
                 ..d.shape
             },
             ..d
@@ -385,7 +406,7 @@ fn sel() -> Sel {
     }
 }
 
-fn seeds_of(rows: &[Row]) -> Vec<u64> {
+pub fn seeds_of(rows: &[Row]) -> Vec<u64> {
     let mut s: Vec<u64> = rows.iter().map(|r| r.inner.seed).collect();
     s.sort_unstable();
     s.dedup();
@@ -393,7 +414,7 @@ fn seeds_of(rows: &[Row]) -> Vec<u64> {
 }
 
 /// Mean of `f` over the held-out rows of arm `x` and `seed`.
-fn seed_mean(rows: &[Row], seed: u64, x: Arm, f: &dyn Fn(&Row) -> f64) -> Option<f64> {
+pub fn seed_mean(rows: &[Row], seed: u64, x: Arm, f: &dyn Fn(&Row) -> f64) -> Option<f64> {
     let v: Vec<f64> = rows
         .iter()
         .filter(|r| {
@@ -435,7 +456,7 @@ fn delta_by_seed(rows: &[Row], x: Arm, base: Arm, f: &dyn Fn(&Row) -> f64) -> Ve
         .collect()
 }
 
-fn delta_seeded(rows: &[Row], x: Arm, base: Arm, f: &dyn Fn(&Row) -> f64) -> Vec<(u64, f64)> {
+pub fn delta_seeded(rows: &[Row], x: Arm, base: Arm, f: &dyn Fn(&Row) -> f64) -> Vec<(u64, f64)> {
     seeds_of(rows)
         .into_iter()
         .filter_map(|s| Some((s, seed_mean(rows, s, x, f)? - seed_mean(rows, s, base, f)?)))
@@ -497,7 +518,7 @@ fn dose_values(rows: &[Row], arms: &[Arm; 5], f: &dyn Fn(&Row) -> f64) -> Vec<[f
         .collect()
 }
 
-fn arm_mean(rows: &[Row], x: Arm, f: &dyn Fn(&Row) -> f64) -> f64 {
+pub fn arm_mean(rows: &[Row], x: Arm, f: &dyn Fn(&Row) -> f64) -> f64 {
     cwd::setting_mean(rows, sel(), x, f)
 }
 
