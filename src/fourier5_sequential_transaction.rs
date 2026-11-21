@@ -67,6 +67,14 @@ where
     execute_verified_sequence_limited(initial_state, initial_cache, inputs, full, incremental, rebuild, usize::MAX, None)
 }
 
+/// A requested memory ceiling must have a real, nonzero observation.
+fn within_observed_peak_budget(limit: Option<u64>, observed: Option<u64>) -> bool {
+    match limit {
+        None => true,
+        Some(maximum) => matches!(observed, Some(peak) if peak > 0 && peak <= maximum),
+    }
+}
+
 /// Bounded transactional execution. Rejects an oversized sequence before invoking
 /// callbacks or allocating rows. An optional VmHWM ceiling is checked at entry
 /// and after each verified step; VmHWM is process-wide and is NOT an allocator
@@ -91,10 +99,8 @@ where
     if inputs.len() > max_steps {
         return Err(TransactionError::BudgetExceeded);
     }
-    if let (Some(limit), Some(observed)) = (max_observed_vm_hwm_kib, process_vm_hwm_kib()) {
-        if observed > limit {
-            return Err(TransactionError::BudgetExceeded);
-        }
+    if !within_observed_peak_budget(max_observed_vm_hwm_kib, process_vm_hwm_kib()) {
+        return Err(TransactionError::BudgetExceeded);
     }
     // Verify the supplied initial cache before allowing any incremental call.
     let initial_rebuild_start = Instant::now();
@@ -143,10 +149,8 @@ where
         let verified_time = full_time
             .saturating_add(incremental_time)
             .saturating_add(rebuild_time);
-        if let (Some(limit), Some(observed)) = (max_observed_vm_hwm_kib, process_vm_hwm_kib()) {
-            if observed > limit {
-                return Err(TransactionError::BudgetExceeded);
-            }
+        if !within_observed_peak_budget(max_observed_vm_hwm_kib, process_vm_hwm_kib()) {
+            return Err(TransactionError::BudgetExceeded);
         }
         rows.push(StepMeasurement {
             verdict,
@@ -161,6 +165,16 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn memory_budget_fails_closed_without_observation() {
+        assert!(!within_observed_peak_budget(Some(6144), None));
+        assert!(!within_observed_peak_budget(Some(6144), Some(0)));
+        assert!(!within_observed_peak_budget(Some(6144), Some(6145)));
+        assert!(within_observed_peak_budget(Some(6144), Some(6144)));
+        assert!(within_observed_peak_budget(None, None));
+    }
+
 
     #[test]
     fn bounded_sequence_rejects_excess_before_callbacks() {
