@@ -217,7 +217,122 @@ accuracy computed, no held-out order drawn):
 
 ## 8. Results
 
-Not run yet.
+Main run: `bench-cue-fanin --threads 8` (binary built from the
+pre-registration commit `1e9f9d2`; seeds 841..880, 5 conditions, 15 arms,
+5 orders; 15 000 rows; wall time 3 313 s on 8 shared cores):
+[results/cue-fanin-v1.csv](../results/cue-fanin-v1.csv)
+(sha256 `342494fdb76a560307c9c71bc0132515d74cc6995a8bb1cf6fdb9047be0b0dce`),
+[results/cue-fanin-report-v1.txt](../results/cue-fanin-report-v1.txt).
+All synthetic.
+
+### Gates
+
+| cond | G1 | G2a | G2b | G2c | G3 (median CN) | G4 | G5 |
+|---|---|---|---|---|---|---|---|
+| base | pass | pass | pass | pass | pass (60) | 40/40 | pass |
+| f16 | pass | pass | pass | pass | pass (345) | 40/40 | pass |
+| f32 | pass | pass | pass | pass | pass (1 661) | 40/40 | **fail** |
+| src512 | pass | pass | pass | pass | pass (60) | 40/40 | pass |
+| d512 | pass | pass | pass | pass | pass (120) | 40/40 | **fail** |
+
+G5 fails in f32 (RF of S1 undefined on 38/40 seeds: S1 learns almost
+nothing, LEARN_head 0.540) and in d512 (S1 on 5 seeds, Zbd4 on 14). No
+hypothesis uses G5, so all 12 are evaluable; RF numbers there are over the
+defined seeds only.
+
+### Arms (held-out orders, mean over rows)
+
+| cond | arm | ACC_all | ACC_cn | LEARN_head | RET_head | FGT_all | charged writes |
+|---|---|---|---|---|---|---|---|
+| base | S1 | 0.507 | 0.510 | 0.631 | 0.501 | 0.130 | 627.1 |
+| base | E | 0.520 | 0.644 | 0.987 | 0.489 | 0.498 | 627.1 |
+| base | Zgd4 | 0.598 | 0.629 | 0.818 | 0.585 | 0.233 | 626.6 |
+| base | Zbd4 | 0.595 | 0.574 | 0.641 | 0.594 | 0.047 | 616.1 |
+| f16 | S1 | 0.512 | 0.513 | 0.594 | 0.509 | 0.085 | 1 666.8 |
+| f16 | E | 0.543 | 0.619 | 0.957 | 0.515 | 0.442 | 1 666.8 |
+| f16 | Zgd4 | 0.576 | 0.576 | 0.664 | 0.572 | 0.091 | 1 666.8 |
+| f16 | Zbd4 | 0.560 | 0.552 | 0.611 | 0.560 | 0.051 | 1 666.8 |
+| f32 | S1 | 0.512 | 0.509 | 0.540 | 0.511 | 0.029 | 4 233.0 |
+| f32 | E | **0.588** | 0.614 | 0.909 | 0.567 | 0.342 | 4 233.0 |
+| f32 | Zgd4 | 0.539 | 0.540 | 0.593 | 0.539 | 0.054 | 4 233.0 |
+| f32 | Zbd4 | 0.531 | 0.531 | 0.586 | 0.531 | 0.056 | 4 233.0 |
+| src512 | S1 | 0.506 | 0.515 | 0.615 | 0.501 | 0.114 | 999.6 |
+| src512 | E | 0.513 | 0.564 | 0.845 | 0.491 | 0.353 | 999.6 |
+| src512 | Zgd4 | 0.539 | 0.559 | 0.759 | 0.525 | 0.234 | 999.3 |
+| src512 | Zbd4 | 0.535 | 0.531 | 0.584 | 0.534 | 0.050 | 952.6 |
+| d512 | S1 | 0.512 | 0.522 | 0.556 | 0.509 | 0.047 | 2 400.6 |
+| d512 | E | 0.520 | 0.542 | 0.652 | 0.511 | 0.141 | 2 400.6 |
+| d512 | Zgd4 | 0.528 | 0.533 | 0.578 | 0.527 | 0.051 | 2 400.6 |
+| d512 | Zbd4 | 0.516 | 0.518 | 0.554 | 0.516 | 0.039 | 2 400.6 |
+
+### Hypotheses (mean [95 % CI] better/ties/worse over 40 seeds)
+
+| H | contrast | value | verdict |
+|---|---|---|---|
+| H1 (primary) | LEARN f32 − base | −0.078 [−0.081, −0.076] 0/0/40 | pass |
+| H2 | LEARN f16 − base; f32 − f16 | −0.030 [−0.032, −0.027]; −0.048 [−0.051, −0.046] (both 0/0/40) | pass |
+| H3 | LEARN d512 − src512 | −0.193 [−0.196, −0.189] 0/0/40 | pass (cycle 30 replicates) |
+| H4 | LEARN src512 − base | −0.142 [−0.146, −0.138] 0/0/40 | pass |
+| H5 | LEARN d512 − f32, non-inferior | −0.257 [−0.260, −0.254] 0/0/40 | **fail** |
+| H6 | interaction (d512 − src512) − (f32 − base) inside ±0.02 | −0.115 [−0.120, −0.110] 0/0/40 | **fail** |
+| H7 | gap(f32) − gap(base) | +0.078 [+0.070, +0.086] 40/0/0 | pass |
+| H8 | ΔLEARN_head(Zgd4 − S1) f32 − base | −0.134 [−0.143, −0.125] 0/0/40 | pass |
+| H9 | ΔRET_head(Zgd4 − S1) f32 − base | −0.056 [−0.062, −0.049] 0/0/40 | **fail** |
+| H10 | Zbd4 vs S1: FGT non-inf. and ACC_all > 0, each cond | FGT +0.083 / +0.034 / **−0.026 [−0.030, −0.023]** / +0.064 / +0.008; ACC +0.089 / +0.049 / +0.019 / +0.029 / +0.004 [+0.002, +0.006] | **fail** (f32 FGT) |
+| H11 | f32 ACC_all and ACC_cn, Zgd4 − S1 | +0.028 [+0.024, +0.031] 40/0/0; +0.030 [+0.027, +0.034] 40/0/0 | pass |
+| H12 | Zgd slope ACC_all, each cond | +0.023 / +0.009 / +0.004 / +0.007 / **+0.001 [−0.000, +0.003]** | **fail** (d512) |
+
+Conditions in H10/H12 are listed base / f16 / f32 / src512 / d512.
+
+Raw gap FGT(S1) − FGT(Zgd4) per condition: base −0.103, f16 −0.006,
+f32 −0.025, src512 −0.120, d512 −0.004. Exact decomposition (Zgd4 − S1)
+ΔLEARN_head / ΔRET_head: base +0.187 / +0.084; f16 +0.070 / +0.064; f32
++0.053 / +0.028; src512 +0.144 / +0.024; d512 +0.022 / +0.018.
+
+### Reading (pre-registered rules of §6, then descriptive)
+
+* **Fan-in lowers learning by itself at fixed sources (H1, H2 pass).** At
+  128 sources uncapped E LEARN_head falls 0.987 → 0.957 → 0.909 as fan-in
+  goes 8 → 16 → 32, monotonically, on 40/40 seeds, while the edge density
+  **rises** from 2 to 8 per source. Together with H3 (the cycle 30 loss
+  replicates, −0.193) the first rule applies: in this benchmark the learning
+  loss that cycle 30 saw at d512 is **not** a density effect; fan-in
+  (with the write budget it induces) lowers learning.
+* **But fan-in alone does not account for the size of the cycle 30 loss
+  (H5, H6 fail).** The two factors are strongly non-additive: fan-in 32
+  costs E −0.078 at 128 sources but −0.193 at 512 sources (interaction
+  −0.115), and more sources cost −0.142 at fan-in 8 but −0.257 at fan-in 32.
+  By the third rule the fan-in effect depends on the number of sources and
+  is larger (more negative) with more sources. d512 is the worst cell for
+  every arm. We do not have a mechanism for the interaction; the label-free
+  target-load census (§7) does not explain it (d512's same-task overlap
+  0.191 is close to base's 0.188 while f32's is 0.604, yet d512 learns far
+  less than f32).
+* **The raw gap closes again for the wrong reason (H7, H8 pass, H9 fails).**
+  At f32 the gap moves −0.103 → −0.025 because Zgd4's learning advantage
+  over S1 collapses (−0.134), and its retention advantage **also shrinks**
+  (−0.056). This is the cycle 30 mechanism again: raw FGT rewards not
+  learning. **It is not an improvement and is not claimed as one.** The
+  gap is not even monotone in fan-in (f16 −0.006, f32 −0.025).
+* **Supervised control at equal budget.** The block guard forgets less than
+  S1 and is more accurate in base, f16, src512 and (barely) d512, but at
+  f32 it forgets **more** than S1 (−0.026, 0/0/40) because S1 learns almost
+  nothing there (LEARN_head 0.540, FGT 0.029); H10 fails. Zgd4 still beats
+  S1 at f32 on generalisation (H11: ACC_all +0.028, ACC_cn +0.030), but by
+  less than at base (+0.092 / +0.119).
+* **Uncapped E is the most accurate arm at f32 (descriptive, not a
+  pre-registered contrast).** ACC_all E 0.588 vs Zgd4 0.539, S1 0.512, at
+  the same charged writes. At base the order is reversed (Zgd4 0.598 vs E
+  0.520). The cue-code advantage over plain error-gated writing therefore
+  does not survive high fan-in in this benchmark. No CI is computed for
+  this; it is a summary-table observation for a future pre-registration.
+* **The dose effect shrinks with fan-in and vanishes at d512 (H12 fails
+  there).** Zgd slope +0.023 base, +0.009 f16, +0.004 f32, +0.007 src512,
+  +0.001 [−0.000, +0.003] d512; concavity ≈ 0 everywhere (linear where it
+  exists).
+* Absolute effects are small, every number comes from a generated graph
+  with artificial labels, and no claim about synapses, biology, insect
+  memory or BANC physiology is made.
 
 ## Reproduce
 
