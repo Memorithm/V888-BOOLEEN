@@ -215,6 +215,35 @@ only lead to stopping the cycle before the main run (e.g. if the block
 guard never binds or a dose cannot bind); it cannot change a threshold, an
 arm, a condition, a seed or a hypothesis above.
 
+## 8. Pilot result (label-free, seeds 1..5, identity order; written before the main run)
+
+File: `results/cue-dose-guard-census-v1.txt` (training only: no accuracy
+computed, no held-out order drawn; sha256
+`19c2257f53e99b19455e00cbe31993194a5533061957ee1ea43931c03cfd2111`). Means over the 5 pilot seeds, k = 16, flip 100:
+
+| condition | charged writes E / Zgd4 / Zbd0 / Zbd4 | cue writes Zgd0 / Zgd4 / Zbd0 / Zbd4 | blocked Zbd0 / Zbd4 | partner-line moves Zgd0..4 | partner-line moves Zbd0..4 | frozen moves | leak-free fixtures |
+|---|---|---|---|---|---|---|---|
+| base | 914.8 / 914.8 / 880.2 / 908.0 | 309.8 / 491.8 / 811.2 / 842.2 | 12 046 / 10 337 | 0 / 17.2 / 32.8 / 47.2 / 61.2 | 0 / 17.6 / 34.0 / 48.8 / 61.8 | 0 | 5/5 |
+| src256 | 1217.2 / 1217.2 / 1160.4 / 1211.2 | 317.8 / 531.4 / 1035.6 / 1097.6 | 10 184 / 9 004 | 0 / 14.2 / 26.8 / 39.2 / 55.0 | 0 / 19.2 / 34.4 / 50.6 / 62.8 | 0 | 5/5 |
+| src512 | 1309.4 / 1309.4 / 1069.2 / 1219.2 | 252.4 / 457.0 / 908.0 / 1065.2 | 9 879 / 8 974 | 0 / 12.2 / 24.4 / 35.8 / 49.0 | 0 / 16.6 / 33.4 / 47.2 / 59.4 | 0 | 5/5 |
+
+* The base last-resort rows reproduce the cycle 27 and cycle 28 pilots
+  exactly (cue writes 309.8 / 491.8, partner-line moves 17.2 / 32.8 / 47.2
+  / 61.2): the engine is unchanged.
+* The block guard binds in every condition and at every dose (about
+  9 000–12 000 refused overwrites per run), and the block arms use 82–99 %
+  of the same caps. Their writes move onto cue lines: cue writes are
+  about 1.7–3.6 × those of the last-resort arm at the same dose.
+* Partner-line moves rise strictly with the dose in the block family
+  too (G2c is expected to pass), frozen moves are 0 and every fixture is
+  leakage-free.
+* **Expectation stated before the main run:** G1–G4 are expected to pass
+  in every condition and H1–H12 to be evaluable (H13 needs G5, which
+  depends on how much Zbd4 learns and cannot be seen in a label-free
+  pilot). The pilot measured no accuracy and changed no threshold, arm,
+  condition, seed or hypothesis. The main run is executed exactly as
+  pre-registered above.
+
 ## Reproduce
 
 ```bash
