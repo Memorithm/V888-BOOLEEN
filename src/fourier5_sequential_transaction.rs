@@ -17,10 +17,11 @@ pub enum TransactionError {
 /// the next state independently; rebuild computes the canonical cache from it.
 /// On mismatch or incremental error, Full wins and its cache is rebuilt.
 /// Timings are paired and include the incremental callback's cache maintenance.
-/// The canonical oracle rebuild is charged on every step: this reports the
-/// conservative cost of *verified execution*, not unverified production latency.
-/// Full timing remains the standalone reference, so these paired figures are
-/// unsuitable for claims of production speedup without a separate benchmark.
+/// Both the authoritative Full evaluation and canonical cache rebuild are
+/// charged on every step: this reports the complete cost of *verified execution*,
+/// not unverified production latency.
+/// Full timing remains the standalone reference; verified timings necessarily
+/// include Full and must not be used to calibrate unverified production dispatch.
 /// Backwards-compatible verified execution; use the profiled variant to obtain
 /// the initial cache reconstruction duration (excluded from per-step rows).
 pub fn execute_verified_sequence<S, C, I, E, F, D, R>(
@@ -102,10 +103,12 @@ where
                 StepVerdict::IncrementalError
             }
         };
-        // Charge verification on accepted paths too: a verified execution
-        // cannot omit the oracle's reconstruction from its measured cost.
-        // The same canonical cache is reused on recovery (no second rebuild).
-        let verified_time = incremental_time.saturating_add(rebuild_time);
+        // Verified execution runs all three operations, even when accepted.
+        // Charge Full oracle evaluation, candidate execution, and canonical
+        // rebuild. Reuse the canonical cache on recovery (no second rebuild).
+        let verified_time = full_time
+            .saturating_add(incremental_time)
+            .saturating_add(rebuild_time);
         rows.push(StepMeasurement {
             verdict,
             full: full_time,
@@ -192,6 +195,24 @@ mod tests {
         ).unwrap();
         assert_eq!(rows[0].verdict, StepVerdict::Accepted);
         assert!(rows[0].incremental_with_refresh >= Duration::from_millis(5));
+    }
+
+    #[test]
+    fn verified_step_charges_authoritative_full_oracle_too() {
+        use std::time::Duration;
+        let (_, _, rows) = execute_verified_sequence(
+            0_u8, 0_u8, &[1_u8],
+            |s, d| {
+                std::thread::sleep(Duration::from_millis(4));
+                Ok::<_, ()>(s + d)
+            },
+            |s, _, d| Ok::<_, ()>((s + d, s + d)),
+            |s| Ok::<_, ()>(*s),
+        ).unwrap();
+        assert_eq!(rows[0].verdict, StepVerdict::Accepted);
+        // Independent arithmetic oracle: verified >= Full + candidate + rebuild.
+        assert!(rows[0].incremental_with_refresh >= rows[0].full);
+        assert!(rows[0].full >= Duration::from_millis(4));
     }
 
     #[test]
