@@ -53,9 +53,9 @@ pub fn execute_verified_sequence_profiled<S, C, I, E, F, D, R>(
     initial_state: S,
     initial_cache: C,
     inputs: &[I],
-    mut full: F,
-    mut incremental: D,
-    mut rebuild: R,
+    full: F,
+    incremental: D,
+    rebuild: R,
 ) -> Result<(S, C, Vec<StepMeasurement>, std::time::Duration), TransactionError>
 where
     S: Clone + Eq,
