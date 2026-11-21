@@ -233,6 +233,77 @@ order drawn). Means over the 5 pilot seeds:
   pre-registered above (no threshold, arm or hypothesis changed) and its
   outcome, pass, fail or not evaluable, is reported.
 
+## Main run result (seeds 601..640, held-out orders; synthetic graph)
+
+Files: `results/cue-defer-report-v1.txt`, `results/cue-defer-v1.csv`
+(16 200 rows; sha256 `27ea5f3b111bccf133ec849527e037b9914366e4ea0fc9ca007cec2c957c1758`).
+The run was executed exactly as pre-registered above; no threshold, arm,
+seed or hypothesis was changed after the pilot. Reproducibility: the CSV is
+byte-identical with `--threads 8` and `--threads 6` (same sha256; report
+sha256 `9843069852cdc69d9ca5870a77e6c670882319dcdc44b27b1447a07330dae7c3`
+in both). An independent rerun from the committed harness (default thread
+count, 2026-11-21) reproduced both sha256 exactly.
+
+### Design gates
+
+| gate | result | detail |
+|---|---|---|
+| G1 integrity | **pass** | topology unchanged in every row, charged writes ≤ allowance, frozen moves = 0, guard/ledger counters, orders and codes valid |
+| G2 manipulation | **FAIL** | (a) fraction of held-out Zgl2m rows with a second-half partner-line move: **0.394** (k 16, flip 50) and **0.456** (k 16, flip 100) < 0.5; 0.694 / 0.656 at k 24 (pass). (b) first-half skips 1.000 everywhere (pass). (c) Zge2m first-half moves 1.000 everywhere (pass). (d) matched − random agreement 0.419 / 0.452 at flip 100, 0.087 / 0.080 at flip 50 (pass) |
+| G3 novel pairs | **pass** | median CN pairs at k 24, flip 50 = 107 ≥ 20 |
+
+**G2 fails, so H1–H13 are declared not evaluable**, as pre-registered.
+The pilot had warned that G2 (a) was close to its threshold: under the late
+window the partner block is almost never written in the second half (mean
+≈ 1 partner-line edge change per run at k = 16, flip 100, vs ≈ 36 in the
+first half under the shared write). The late-window manipulation does not
+reliably bind at k = 16; the cycle therefore does **not** answer its
+question.
+
+### Hypotheses (official verdict: not evaluable; descriptive values only)
+
+The numbers below are reported for transparency only. Because G2 failed they
+are **not** hypothesis tests and must not be read as pass/fail evidence. The
+"would be" column applies the pre-registered rule mechanically.
+Mean ± sd [95 % bootstrap CI] better/ties/worse over 40 seeds (k = 16 unless
+stated; FGT difference signed so that + = Zgl2m forgets less).
+
+| H | contrast | value | would be |
+|---|---|---|---|
+| H1 | flip 100, ACC Zgl2m − Zg2m | −0.020 [−0.023, −0.018] 0/0/40 | fail |
+| H2 | flip 100, ACC Zgl2m − Zgo2m | +0.001 [−0.000, +0.001] 23/2/15 | fail |
+| H3 | flip 100, LEARN Zgl2m − Zg2m | +0.051 [+0.048, +0.055] 40/0/0 | pass |
+| H4 | flip 100, FGT Zgo2m − Zgl2m | +0.001 [−0.000, +0.001] 25/2/13 | fail |
+| H5 | flip 100, ACC Zgl2m − Zge2m | −0.020 [−0.023, −0.018] 1/0/39 | fail |
+| H6 | flip 100, Zgl2m vs S1 sequence rule | ΔACC +0.070 [+0.065, +0.074] 40/0/0, ΔLAST +0.266, ΔLEARN +0.246 | pass |
+| H7 | flip 50, ACC Zgl2m − Zg2m | −0.014 [−0.017, −0.012] 1/0/39 | fail |
+| H8 | flip 50, Zgl2m vs S1 sequence rule | ΔACC +0.041 [+0.036, +0.045] (< 0.05) | fail |
+| H9 | k 24, flip 100, ACC Zgl2m − Zg2m | −0.009 [−0.010, −0.007] 3/0/37 | fail |
+| H10 | flip 100, ACC Zgl2m − Zgl2r | +0.026 [+0.021, +0.030] 39/0/1 | pass |
+| H11 | flip 100, ACC Zgl2m − Zg1 | +0.018 [+0.015, +0.021] 40/0/0 | pass |
+| H12 | flip 50, ACC Zgl2m − Zgo2m | −0.000 [−0.001, +0.000] 13/6/21 | fail |
+| H13 | flip 100, ACC_cn Zgl2m − Zg2m | +0.005 [−0.002, +0.012] 24/0/16 | fail |
+
+### Readings (descriptive, synthetic benchmark only)
+
+* As the pilot predicted, the late window behaves like the owned code and the
+  early window like the shared code: Zgl2m − Zgo2m and Zge2m − Zg2m are
+  within ±0.001 on ACC, LEARN and FGT at k = 16 and 24, flips 50 and 100.
+  Opening the partner block only in the second half of a stage almost never
+  produces a partner write, because the guarded error gate has stopped
+  writing by then; freezing it in the second half removes almost nothing,
+  because the partner writes already happened in the first half.
+* So on this benchmark "when" collapses onto "whether": the timing control
+  could not separate a timing effect from a count effect, because the late
+  arm makes ≈ 0 partner writes. The #139 trade-off (shared writes cost
+  learning, save more forgetting, win on accuracy) is unchanged.
+* The cued, guarded arms still beat the supervised control at equal write
+  budget (Zgl2m − S1 ACC +0.070 at flip 100, +0.041 at flip 50), with much
+  larger learning and much larger forgetting than S1 — the same pattern as
+  #131–#139.
+* No claim about synapses, biology, insect memory or BANC physiology is made;
+  every number comes from the generated graph and an artificial task.
+
 ## Reproduce
 
 ```bash
