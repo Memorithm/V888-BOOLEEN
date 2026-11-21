@@ -65,7 +65,18 @@ pub fn choose_sequential_throughput(
             }
             let f = step.full.as_nanos();
             let i = step.incremental_with_refresh.as_nanos();
-            if f == 0 || i >= f {
+            // A fast majority must not conceal a marginal or regressing step.
+            // Apply the predeclared saving threshold to every intervention,
+            // including its exact cache-refresh cost.
+            let Some(scaled_incremental) = i.checked_mul(100) else {
+                return ThroughputChoice::Full;
+            };
+            let Some(scaled_full) =
+                f.checked_mul(u128::from(100 - minimum_saving_percent))
+            else {
+                return ThroughputChoice::Full;
+            };
+            if f == 0 || scaled_incremental >= scaled_full {
                 return ThroughputChoice::Full;
             }
             let Some(next_full) = full.checked_add(f) else {
@@ -154,6 +165,49 @@ mod tests {
         ];
         assert_eq!(choose_sequential_throughput(&groups, 2, 1, 20, 4096), ThroughputChoice::Full);
     }
+    #[test]
+    fn independent_step_oracle_rejects_masked_slow_intervention() {
+        // Each group saves >20% overall, but its second step saves only 1%.
+        // A scalar oracle rejects 99 * 100 >= 100 * (100 - 20).
+        assert!(99_u128 * 100 >= 100_u128 * 80);
+        let a = [
+            row(1000, 1, StepVerdict::Accepted, Some(1024)),
+            row(100, 99, StepVerdict::Accepted, Some(1024)),
+        ];
+        let b = [
+            row(1000, 1, StepVerdict::Accepted, Some(1024)),
+            row(100, 99, StepVerdict::Accepted, Some(1024)),
+        ];
+        let groups = [
+            ValidSequence { split: DataSplit::Valid, group_id: 1, steps: &a },
+            ValidSequence { split: DataSplit::Valid, group_id: 2, steps: &b },
+        ];
+        assert_eq!(
+            choose_sequential_throughput(&groups, 2, 2, 20, 4096),
+            ThroughputChoice::Full
+        );
+    }
+
+    #[test]
+    fn independent_step_oracle_accepts_strict_margin_per_intervention() {
+        let a = [
+            row(100, 50, StepVerdict::Accepted, Some(1024)),
+            row(100, 60, StepVerdict::Accepted, Some(1024)),
+        ];
+        let b = [
+            row(200, 100, StepVerdict::Accepted, Some(2048)),
+            row(200, 120, StepVerdict::Accepted, Some(2048)),
+        ];
+        let groups = [
+            ValidSequence { split: DataSplit::Valid, group_id: 1, steps: &a },
+            ValidSequence { split: DataSplit::Valid, group_id: 2, steps: &b },
+        ];
+        assert_eq!(
+            choose_sequential_throughput(&groups, 2, 2, 20, 4096),
+            ThroughputChoice::Incremental
+        );
+    }
+
     #[test]
     fn disjoint_test_and_ood_groups_never_calibrate_dispatch() {
         let a = [row(100, 1, StepVerdict::Accepted, Some(1024))];
