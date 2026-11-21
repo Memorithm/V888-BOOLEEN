@@ -9,6 +9,8 @@ use crate::fourier5_sequential_workload_audit::{process_vm_hwm_kib, StepMeasurem
 pub enum TransactionError {
     Full,
     Rebuild,
+    /// A configured intervention count or observed peak RSS bound was exceeded.
+    BudgetExceeded,
 }
 
 /// The incremental callback receives an immutable snapshot of the last verified
@@ -62,6 +64,38 @@ where
     D: FnMut(&S, &C, &I) -> Result<(S, C), E>,
     R: FnMut(&S) -> Result<C, E>,
 {
+    execute_verified_sequence_limited(initial_state, initial_cache, inputs, full, incremental, rebuild, usize::MAX, None)
+}
+
+/// Bounded transactional execution. Rejects an oversized sequence before invoking
+/// callbacks or allocating rows. An optional VmHWM ceiling is checked at entry
+/// and after each verified step; VmHWM is process-wide and is NOT an allocator
+/// limit or a substitute for RemoteOps cgroup memory enforcement.
+pub fn execute_verified_sequence_limited<S, C, I, E, F, D, R>(
+    initial_state: S,
+    initial_cache: C,
+    inputs: &[I],
+    mut full: F,
+    mut incremental: D,
+    mut rebuild: R,
+    max_steps: usize,
+    max_observed_vm_hwm_kib: Option<u64>,
+) -> Result<(S, C, Vec<StepMeasurement>, std::time::Duration), TransactionError>
+where
+    S: Clone + Eq,
+    C: Clone + Eq,
+    F: FnMut(&S, &I) -> Result<S, E>,
+    D: FnMut(&S, &C, &I) -> Result<(S, C), E>,
+    R: FnMut(&S) -> Result<C, E>,
+{
+    if inputs.len() > max_steps {
+        return Err(TransactionError::BudgetExceeded);
+    }
+    if let (Some(limit), Some(observed)) = (max_observed_vm_hwm_kib, process_vm_hwm_kib()) {
+        if observed > limit {
+            return Err(TransactionError::BudgetExceeded);
+        }
+    }
     // Verify the supplied initial cache before allowing any incremental call.
     let initial_rebuild_start = Instant::now();
     let initial_canonical = rebuild(&initial_state).map_err(|_| TransactionError::Rebuild)?;
@@ -109,6 +143,11 @@ where
         let verified_time = full_time
             .saturating_add(incremental_time)
             .saturating_add(rebuild_time);
+        if let (Some(limit), Some(observed)) = (max_observed_vm_hwm_kib, process_vm_hwm_kib()) {
+            if observed > limit {
+                return Err(TransactionError::BudgetExceeded);
+            }
+        }
         rows.push(StepMeasurement {
             verdict,
             full: full_time,
@@ -122,6 +161,34 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_sequence_rejects_excess_before_callbacks() {
+        use std::cell::Cell;
+        let calls = Cell::new(0_u32);
+        let result = execute_verified_sequence_limited(
+            0_u8, 0_u8, &[1_u8, 2],
+            |s, d| { calls.set(calls.get() + 1); Ok::<_, ()>(s + d) },
+            |s, _, d| Ok::<_, ()>((s + d, s + d)),
+            |s| Ok::<_, ()>(*s),
+            1, None,
+        );
+        assert!(matches!(result, Err(TransactionError::BudgetExceeded)));
+        assert_eq!(calls.get(), 0);
+    }
+
+    #[test]
+    fn bounded_sequence_accepts_exact_step_limit() {
+        let (state, cache, rows, _) = execute_verified_sequence_limited(
+            0_u8, 0_u8, &[1_u8, 2],
+            |s, d| Ok::<_, ()>(s + d),
+            |s, _, d| Ok::<_, ()>((s + d, s + d)),
+            |s| Ok::<_, ()>(*s),
+            2, None,
+        ).unwrap();
+        assert_eq!((state, cache), (3, 3));
+        assert_eq!(rows.len(), 2);
+    }
 
     #[test]
     fn stale_cache_with_correct_output_is_recovered_before_next_step() {
