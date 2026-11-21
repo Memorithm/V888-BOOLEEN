@@ -24,6 +24,7 @@ use v888_booleen::cue_reach as cr;
 use v888_booleen::cue_robustness as crob;
 use v888_booleen::cue_similarity as csim;
 use v888_booleen::cue_write_clock as cwc;
+use v888_booleen::cue_write_dose as cwd;
 use v888_booleen::eligibility_trace as et;
 use v888_booleen::engine::BooleanEngine;
 use v888_booleen::error_gated as eg;
@@ -161,6 +162,7 @@ fn help() {
     println!("  bench-cue-ownership [--graph brain.v888b] [--seeds 561,..,600] [--flips 25,50,100] [--ks 8,16,24] [--random-orders 3] [--threads N] [--csv out.csv] [--census]  (B888-4 cycle 24: CUE OWNERSHIP — the #136 matched share-2 cue code where each task writes only its own block and the partner block is active but frozen (Zgo2m), vs the shared-write code (Zg2m), private cues, owned cyclic/random codes and supervised/reward/error-gated at equal paced100 writes, k = 8, 16, 24, flips 25/50/100, identity + reversed + seeded held-out orders; --census = identity order, partner agreement, writes, guard counters, frozen skips and cue reach only, no accuracy; GENERATED synthetic graph by default)");
     println!("  bench-cue-defer [--graph brain.v888b] [--seeds 601,..,640] [--flips 25,50,100] [--ks 8,16,24] [--random-orders 3] [--threads N] [--csv out.csv] [--census]  (B888-4 cycle 25: DEFERRED PARTNER WRITES — the #136 matched share-2 cue code with the partner block frozen in the first half of each task's training and writable in the second (Zgl2m), vs share (Zg2m), owned (Zgo2m), early-window (Zge2m), late random code (Zgl2r), private cues and supervised/reward/error-gated at equal paced100 writes, k = 8, 16, 24, flips 25/50/100, identity + reversed + seeded held-out orders; --census = identity order, partner agreement, writes, guard counters, per-half skips and partner-line moves, cue reach only, no accuracy; GENERATED synthetic graph by default)");
     println!("  bench-cue-write-clock [--graph brain.v888b] [--seeds 641,..,680] [--flips 25,50,100] [--ks 8,16,24] [--random-orders 3] [--threads N] [--csv out.csv] [--census]  (B888-4 cycle 26: WRITE-CLOCK DEFERRED PARTNER WRITES — same late/early/share/owned modes as cycle 25, but the partner-block window is cut on the write clock: first episode at which the uncapped error-gated cumulative write curve of the stage reaches floor(cap/2) (Zgl2m late, Zge2m early), vs share (Zg2m), owned (Zgo2m), late random code (Zgl2r), private cues and supervised/reward/error-gated at equal paced100 writes, k = 8, 16, 24, flips 25/50/100, identity + reversed + seeded held-out orders; --census = identity order, partner agreement, writes, guard counters, per-write-half skips and partner-line moves, write-clock split, cue reach only, no accuracy; GENERATED synthetic graph by default)");
+    println!("  bench-cue-write-dose [--graph brain.v888b] [--seeds 681,..,720] [--flips 25,50,100] [--ks 8,16] [--random-orders 3] [--threads N] [--csv out.csv] [--census] [--diagnose-cycle26]  (B888-4 cycle 27: PARTNER-WRITE DOSE — nested seeded subsets of the matched share-2 partner lines writable for the whole stage, dose 0/4 (owned) .. 4/4 (shared) + complement of 2/4, vs private cues and supervised/reward/error-gated at equal paced100 writes, k = 8, 16, flips 25/50/100, identity + reversed + seeded held-out orders; --census = identity order, writes, skips, partner-line moves, idle stages, no accuracy; --diagnose-cycle26 = idle-stage diagnosis of the cycle 26 write clock on its seeds and orders (uncapped error-gated only, no accuracy); GENERATED synthetic graph by default)");
     println!("  bench-cue-similarity [--graph brain.v888b] [--seeds 481,..,520] [--flips 25,50,100] [--ks 8,16,24] [--random-orders 3] [--threads N] [--csv out.csv] [--census]  (B888-4 cycle 22: CUE SHARING BY TASK AGREEMENT — share-2 cue codes over the same reserved lines whose partner task is chosen by task-rule agreement (matched), against it (anti) or by task id (cyclic, = cycle 21 share 2), silent cue + last-resort guard vs private cues and supervised/reward/error-gated at equal paced100 writes, k = 8, 16, 24, flips 25/50/100, identity + reversed + seeded held-out orders; --census = identity order, partner agreement, writes, guard counters and cue reach only, no accuracy; GENERATED synthetic graph by default)");
     println!("  bench-cue-capacity [--graph brain.v888b] [--seeds 441,..,480] [--flips 25,50,100] [--ks 8,16,24] [--random-orders 3] [--threads N] [--csv out.csv] [--census]  (B888-4 cycle 21: CUE CAPACITY BY LINE SHARING — the silent cue (E/E-cue0) and silent cue + last-resort guard with share-r codes (each task's cue = union of r cyclic cycle 20 blocks over the same reserved lines, r = 1, 2, 4) vs supervised/reward/error-gated at equal paced100 writes, k = 8, 16 and 24 tasks, identity + reversed + seeded held-out orders; --census = identity order, writes, guard counters and cue reach only, no accuracy; GENERATED synthetic graph by default)");
     println!("  bench-cue-robustness [--graph brain.v888b] [--seeds 401,..,440] [--flips 25,50,100] [--ks 8,12,16] [--random-orders 3] [--threads N] [--csv out.csv] [--census]  (B888-4 cycle 20: CUE ROBUSTNESS — the cycle 19 silent cue + last-resort guard (E/E-cue0+last-resort) vs supervised/reward/error-gated/E/E-cue0 at equal paced100 writes on fresh seeds, k = 8, 12 and 16 tasks (64 cue lines split over k cues), identity + reversed + seeded held-out orders; per-order and worst-order statistics; cue-capacity use; --census = identity order, writes and guard counters only, no accuracy; GENERATED synthetic graph by default)");
@@ -2216,6 +2218,270 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .write_all(cwc::to_csv(&rows, graph_label).as_bytes())?;
             }
             print!("{}", cwc::report(&rows));
+            println!("evaluation_scope=synthetic_or_unverified_graph_artificial_labels_not_BANC_not_biological");
+        }
+        Some("bench-cue-write-dose") => {
+            let allowed = [
+                "--graph",
+                "--seeds",
+                "--flips",
+                "--ks",
+                "--random-orders",
+                "--threads",
+                "--csv",
+                "--census",
+                "--diagnose-cycle26",
+            ];
+            for flag in args.iter().skip(1).filter(|arg| arg.starts_with("--")) {
+                if !allowed.contains(&flag.as_str()) {
+                    return Err(format!("unknown bench-cue-write-dose option: {flag}").into());
+                }
+            }
+            let census = args.iter().any(|a| a == "--census");
+            let diagnose = args.iter().any(|a| a == "--diagnose-cycle26");
+            let seeds: Vec<u64> = match optional(&args, "--seeds") {
+                Some(s) => s
+                    .split(',')
+                    .map(str::parse::<u64>)
+                    .collect::<Result<Vec<_>, _>>()?,
+                None if diagnose => cwc::SEEDS.collect(),
+                None if census => cwd::PILOT_SEEDS.collect(),
+                None => cwd::SEEDS.collect(),
+            };
+            let flips = optional(&args, "--flips")
+                .unwrap_or(if diagnose { "50,100" } else { "25,50,100" })
+                .split(',')
+                .map(str::parse::<u32>)
+                .collect::<Result<Vec<_>, _>>()?;
+            let ks: Vec<usize> = optional(&args, "--ks")
+                .unwrap_or(if diagnose { "16,24" } else { "8,16" })
+                .split(',')
+                .map(str::parse::<usize>)
+                .collect::<Result<Vec<_>, _>>()?;
+            let random: usize =
+                optional(&args, "--random-orders").map_or(Ok(cwd::RANDOM_ORDERS), str::parse)?;
+            let threads: usize =
+                optional(&args, "--threads").map_or(Ok(sgen::default_threads()), str::parse)?;
+            let owned = match optional(&args, "--graph") {
+                Some(path) => Some(Connectome::load(Path::new(path))?),
+                None => None,
+            };
+            let graph_label = if owned.is_some() {
+                "PROVIDED_GRAPH"
+            } else {
+                "GENERATED_SYNTHETIC"
+            };
+            let d = cwd::DESIGN;
+            println!("v888_cue_write_dose_schema=b888-4-cue-write-dose-v1");
+            if owned.is_some() {
+                println!("graph=PROVIDED_GRAPH (task labels artificial)");
+            } else {
+                println!(
+                    "graph=GENERATED_SYNTHETIC sources={} targets={} fan_in={} (not BANC; real BANC V888 graph DOI 10.7910/DVN/7WTH1N not available here)",
+                    d.shape.sources, d.shape.targets, d.shape.fan_in
+                );
+            }
+            if diagnose {
+                println!(
+                    "idle_diagnosis(cycle 26 seeds and orders, order_salt={:#x}; uncapped error-gated only, the paced100 stage totals; no accuracy computed)",
+                    cwc::ORDER_SALT
+                );
+                println!(
+                    "line: k,flip,seed,order_ix,order_kind,idle_stages,prev_same_valence,seen_same_valence,idle_with_prev_same,idle_with_seen_same,idle_without_seen_same,split_mean_all,split_mean_active,episodes,stage_writes"
+                );
+                let mut jobs: Vec<(usize, u32, u64)> = Vec::new();
+                for &k in &ks {
+                    for &flip in &flips {
+                        for &s in &seeds {
+                            jobs.push((k, flip, s));
+                        }
+                    }
+                }
+                let chunk = jobs.len().div_ceil(threads.max(1)).max(1);
+                let parts: Vec<std::io::Result<Vec<cwd::IdleLine>>> = std::thread::scope(|scope| {
+                    let hs: Vec<_> = jobs
+                        .chunks(chunk)
+                        .map(|c| {
+                            let g = owned.as_ref();
+                            scope.spawn(move || {
+                                let mut v = Vec::new();
+                                for &(k, flip, s) in c {
+                                    v.extend(cwd::idle_diagnosis(
+                                        g,
+                                        &d,
+                                        k,
+                                        flip,
+                                        s,
+                                        random,
+                                        cwc::ORDER_SALT,
+                                    )?);
+                                }
+                                Ok(v)
+                            })
+                        })
+                        .collect();
+                    hs.into_iter()
+                        .map(|h| {
+                            h.join()
+                                .unwrap_or_else(|_| Err(std::io::Error::other("thread")))
+                        })
+                        .collect()
+                });
+                let mut lines = Vec::new();
+                for p in parts {
+                    lines.extend(p?);
+                }
+                let count = |v: &[bool]| v.iter().filter(|&&b| b).count();
+                for l in &lines {
+                    let both = |m: &[bool], want: bool| {
+                        l.stage_writes
+                            .iter()
+                            .zip(m)
+                            .filter(|(&w, &b)| w == 0 && b == want)
+                            .count()
+                    };
+                    let sw: Vec<String> = l.stage_writes.iter().map(u64::to_string).collect();
+                    println!(
+                        "{},{},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{},{}",
+                        l.k,
+                        l.flip,
+                        l.seed,
+                        l.order_ix,
+                        crob::order_kind(l.order_ix),
+                        l.idle(),
+                        count(&l.prev_same),
+                        count(&l.seen_same),
+                        both(&l.prev_same, true),
+                        both(&l.seen_same, true),
+                        both(&l.seen_same, false),
+                        l.split_mean_all(),
+                        l.split_mean_active(),
+                        l.episodes,
+                        sw.join("-")
+                    );
+                }
+                println!(
+                    "summary: k,flip,orders,rows,rows_with_idle,idle_stages,stages,idle_given_seen_same,seen_same_stages,idle_given_not_seen_same,not_seen_same_stages,idle_given_prev_same,prev_same_stages,rows_split_mean_all_ge_half,rows_split_mean_active_ge_half,max_split_mean_all,max_split_mean_active"
+                );
+                for &k in &ks {
+                    for &flip in &flips {
+                        for (name, pick) in [
+                            ("identity", 0_usize..1),
+                            ("reversed", 1..2),
+                            ("random", 2..usize::MAX),
+                            ("heldout", 1..usize::MAX),
+                        ] {
+                            let sel: Vec<&cwd::IdleLine> = lines
+                                .iter()
+                                .filter(|l| {
+                                    l.k == k && l.flip == flip && pick.contains(&l.order_ix)
+                                })
+                                .collect();
+                            if sel.is_empty() {
+                                continue;
+                            }
+                            let mut t = [0_usize; 8];
+                            let (mut ge_all, mut ge_act) = (0, 0);
+                            let (mut mx_all, mut mx_act) = (0.0_f64, 0.0_f64);
+                            for l in &sel {
+                                for i in 0..l.k {
+                                    let idle = l.stage_writes[i] == 0;
+                                    t[0] += usize::from(idle);
+                                    t[1] += 1;
+                                    if l.seen_same[i] {
+                                        t[2] += usize::from(idle);
+                                        t[3] += 1;
+                                    } else {
+                                        t[4] += usize::from(idle);
+                                        t[5] += 1;
+                                    }
+                                    if l.prev_same[i] {
+                                        t[6] += usize::from(idle);
+                                        t[7] += 1;
+                                    }
+                                }
+                                let half = (l.episodes / 2) as f64;
+                                ge_all += usize::from(l.split_mean_all() >= half);
+                                ge_act += usize::from(l.split_mean_active() >= half);
+                                mx_all = mx_all.max(l.split_mean_all());
+                                mx_act = mx_act.max(l.split_mean_active());
+                            }
+                            println!(
+                                "{k},{flip},{name},{},{},{},{},{},{},{},{},{},{},{},{},{:.3},{:.3}",
+                                sel.len(),
+                                sel.iter().filter(|l| l.idle() > 0).count(),
+                                t[0],
+                                t[1],
+                                t[2],
+                                t[3],
+                                t[4],
+                                t[5],
+                                t[6],
+                                t[7],
+                                ge_all,
+                                ge_act,
+                                mx_all,
+                                mx_act
+                            );
+                        }
+                    }
+                }
+                println!("evaluation_scope=synthetic_or_unverified_graph_artificial_labels_not_BANC_not_biological");
+                return Ok(());
+            }
+            if census {
+                println!(
+                    "census(identity order only; partner agreement, writes, guard counters, skips, partner-line moves, idle stages, cue reach; no accuracy computed)"
+                );
+                println!(
+                    "writes: k,flip,seed,arm,partner_agree_mean,cue_reach_mean,writable_partner_lines,charged_writes,effective_writes,cue_writes,refused,overwrites,deferred,skipped,frozen_moved,partner_moved,idle_stages"
+                );
+                for &k in &ks {
+                    for &flip in &flips {
+                        for (k, flip, a, seed, agree, reach, w, v) in
+                            cwd::census(owned.as_ref(), &d, k, flip, &seeds)?
+                        {
+                            let v: Vec<String> = v
+                                .iter()
+                                .map(|x| x.map_or_else(|| "-".to_string(), |x| x.to_string()))
+                                .collect();
+                            println!(
+                                "{k},{flip},{seed},{},{agree:.3},{reach:.2},{w:.2},{}",
+                                a.short(),
+                                v.join(",")
+                            );
+                        }
+                    }
+                }
+                return Ok(());
+            }
+            println!(
+                "seeds={} flips={flips:?} ks={ks:?} code=matched(#136_best_of_cyclic_and_greedy) private=own doses=nested floor(d*|F_j|/4) d=0..4 of F_j=B_sigma(j)\\B_j writable for the whole stage (d=0 owned #139, d=4 shared #136) + complement of d=2 (dose_salt={:#x}) orders=identity+reversed+{random}_random order_salt={:#x} arms=S1,R1,E,Zg1,Zgd0,Zgd1,Zgd2,Zgd3,Zgd4,Zgd2c budget=paced100 (per-episode cumulative curve of uncapped error-gated in the same order) active={} train_patterns_per_task={} test_patterns={} rounds_per_task={} init={} cue_init(Zg*)=0 threshold={} min_novel_pairs={} metric=balanced_accuracy boot_resamples={} boot_seed={:#x} equiv_margin={}",
+                seeds.len(),
+                cwd::DOSE_SALT,
+                cwd::ORDER_SALT,
+                d.spec.active,
+                d.spec.train_patterns,
+                d.spec.test_patterns,
+                d.spec.rounds_a,
+                d.spec.init_weight,
+                eg::THRESHOLD,
+                ns::MIN_NOVEL_PAIRS,
+                eg::BOOT_RESAMPLES,
+                eg::BOOT_SEED,
+                cwd::EQUIV_MARGIN,
+            );
+            let rows =
+                cwd::run_grid_threads(owned.as_ref(), &d, &ks, &flips, &seeds, random, threads)?;
+            if let Some(path) = optional(&args, "--csv") {
+                use std::io::Write;
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)?
+                    .write_all(cwd::to_csv(&rows, graph_label).as_bytes())?;
+            }
+            print!("{}", cwd::report(&rows));
             println!("evaluation_scope=synthetic_or_unverified_graph_artificial_labels_not_BANC_not_biological");
         }
         Some("bench-cue-similarity") => {
