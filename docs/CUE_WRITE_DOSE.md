@@ -242,3 +242,29 @@ partner-line moves, writable lines, idle stages and cue reach. No accuracy is
 computed and no held-out order is drawn. The pilot can only lead to stopping
 the cycle before the main run (e.g. if a manipulation cannot bind); it cannot
 change a threshold, an arm or a hypothesis above.
+
+## 8. Pilot result (label-free, seeds 1..5, identity order; written before the main run)
+
+File: `results/cue-write-dose-census-v1.txt` (no accuracy computed, no
+held-out order drawn; sha256
+`f646063f65d1bb7f4e349969db8f6ed90607de44c0800047f532d08fe13ebff0`). Means over the 5 pilot seeds:
+
+| k, flip | writable lines Zgd0..Zgd4 / Zgd2c | partner-line moves Zgd0 / 1 / 2 / 3 / 4 / 2c | frozen skips Zgd0 / 1 / 2 / 3 / 4 / 2c | cue writes Zg1 / Zgd0 / Zgd2 / Zgd4 |
+|---|---|---|---|---|
+| 16, 100 | 0, 1, 2, 3, 4 / 2 | 0 / 17.2 / 32.8 / 47.2 / 61.2 / 32.4 | 809 / 600 / 419 / 207 / 0 / 410 | 305.8 / 309.8 / 410.0 / 491.8 |
+| 16, 50 | 0, 1, 2, 3, 4 / 2 | 0 / 12.4 / 25.0 / 38.0 / 50.2 / 25.6 | 1121 / 746 / 551 / 285 / 0 / 611 | 118.6 / 122.6 / 170.0 / 207.8 |
+| 8, 100 | 0, 2, 4, 6, 8 / 4 | 0 / 17.8 / 32.0 / 46.2 / 56.4 / 30.8 | 1063 / 871 / 615 / 271 / 0 / 545 | 241.6 / 247.4 / 299.2 / 340.6 |
+| 8, 50 | 0, 2, 4, 6, 8 / 4 | 0 / 11.2 / 23.2 / 33.2 / 41.2 / 22.4 | 1041 / 825 / 587 / 336 / 0 / 526 | 102.6 / 101.2 / 126.4 / 150.2 |
+
+* Partner-line moves rise roughly linearly with the number of writable
+  lines at every (k, flip); Zgd1 moves a partner line and Zgd1..Zgd3 / Zgd2c
+  skip frozen edge steps in 5/5 runs; Zgd2c receives the same dose as Zgd2
+  (ratio ≈ 0.96–1.02). Frozen moves are 0 in every row; the identity order
+  has no idle stage (as expected from the diagnosis).
+* Zgd0 and Zgd4 reproduce the cycle 26 owned / shared cue-write counts at
+  k = 16, flip 100 (309.8 / 491.8, identical pilot seeds), as the
+  bit-identity tests require.
+* **Expectation stated before the main run:** every G2 clause binds on the
+  pilot, so G2 is expected to pass and H1–H12 should be evaluable. The pilot
+  does not measure accuracy and does not change a threshold, arm or
+  hypothesis. The main run is executed exactly as pre-registered above.
