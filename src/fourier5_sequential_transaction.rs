@@ -167,6 +167,28 @@ mod tests {
     }
 
     #[test]
+    fn initial_rebuild_failure_does_not_call_either_engine() {
+        use std::cell::Cell;
+        let full_calls = Cell::new(0_u32);
+        let incremental_calls = Cell::new(0_u32);
+        let result = execute_verified_sequence(
+            0_u8, 0_u8, &[1_u8],
+            |s, d| {
+                full_calls.set(full_calls.get() + 1);
+                Ok::<_, ()>(s + d)
+            },
+            |s, _, d| {
+                incremental_calls.set(incremental_calls.get() + 1);
+                Ok::<_, ()>((s + d, s + d))
+            },
+            |_| Err::<u8, ()>(()),
+        );
+        assert!(matches!(result, Err(TransactionError::Rebuild)));
+        assert_eq!(full_calls.get(), 0);
+        assert_eq!(incremental_calls.get(), 0);
+    }
+
+    #[test]
     fn authoritative_failure_never_returns_unverified_commit() {
         let result = execute_verified_sequence(
             0_i32, 0_i32, &[1_i32, 2],
