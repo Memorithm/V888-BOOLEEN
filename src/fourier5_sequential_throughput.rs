@@ -12,7 +12,17 @@ pub enum ThroughputChoice {
 /// Each independent VALID workload group supplies one complete paired sequence.
 /// Durations must include cache maintenance and attempted (including rejected)
 /// interventions. VmHWM is a process lifetime peak, not per-step allocation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DataSplit {
+    Train,
+    Valid,
+    Test,
+    Ood,
+}
+
 pub struct ValidSequence<'a> {
+    /// Explicit provenance: only VALID may influence dispatch calibration.
+    pub split: DataSplit,
     pub group_id: u64,
     pub steps: &'a [StepMeasurement],
 }
@@ -39,7 +49,10 @@ pub fn choose_sequential_throughput(
     }
     let mut seen = std::collections::HashSet::new();
     for group in groups {
-        if !seen.insert(group.group_id) || group.steps.len() < minimum_steps_per_group {
+        if group.split != DataSplit::Valid
+            || !seen.insert(group.group_id)
+            || group.steps.len() < minimum_steps_per_group
+        {
             return ThroughputChoice::Full;
         }
         let mut full = 0_u128;
@@ -96,8 +109,8 @@ mod tests {
         let a = [row(100, 20, StepVerdict::Accepted, Some(1024))];
         let b = [row(200, 40, StepVerdict::Accepted, Some(2048))];
         let groups = [
-            ValidSequence { group_id: 1, steps: &a },
-            ValidSequence { group_id: 2, steps: &b },
+            ValidSequence { split: DataSplit::Valid, group_id: 1, steps: &a },
+            ValidSequence { split: DataSplit::Valid, group_id: 2, steps: &b },
         ];
         assert_eq!(choose_sequential_throughput(&groups, 2, 1, 20, 4096), ThroughputChoice::Incremental);
     }
@@ -109,8 +122,8 @@ mod tests {
         // Even though pooled savings exceed 20%, group b saves only 10%.
         assert!(90_u128 * 100 >= 100_u128 * 80);
         let groups = [
-            ValidSequence { group_id: 1, steps: &a },
-            ValidSequence { group_id: 2, steps: &b },
+            ValidSequence { split: DataSplit::Valid, group_id: 1, steps: &a },
+            ValidSequence { split: DataSplit::Valid, group_id: 2, steps: &b },
         ];
         assert_eq!(choose_sequential_throughput(&groups, 2, 1, 20, 4096), ThroughputChoice::Full);
     }
@@ -120,13 +133,13 @@ mod tests {
         let a = [row(100, 1, StepVerdict::Accepted, Some(1024))];
         let b = [row(100, 1, StepVerdict::Accepted, None)];
         let duplicate = [
-            ValidSequence { group_id: 7, steps: &a },
-            ValidSequence { group_id: 7, steps: &a },
+            ValidSequence { split: DataSplit::Valid, group_id: 7, steps: &a },
+            ValidSequence { split: DataSplit::Valid, group_id: 7, steps: &a },
         ];
         assert_eq!(choose_sequential_throughput(&duplicate, 2, 1, 20, 4096), ThroughputChoice::Full);
         let missing = [
-            ValidSequence { group_id: 7, steps: &a },
-            ValidSequence { group_id: 8, steps: &b },
+            ValidSequence { split: DataSplit::Valid, group_id: 7, steps: &a },
+            ValidSequence { split: DataSplit::Valid, group_id: 8, steps: &b },
         ];
         assert_eq!(choose_sequential_throughput(&missing, 2, 1, 20, 4096), ThroughputChoice::Full);
     }
@@ -136,9 +149,22 @@ mod tests {
         let a = [row(100, 1, StepVerdict::Mismatch, Some(1024))];
         let b = [row(100, 1, StepVerdict::Accepted, Some(4097))];
         let groups = [
-            ValidSequence { group_id: 1, steps: &a },
-            ValidSequence { group_id: 2, steps: &b },
+            ValidSequence { split: DataSplit::Valid, group_id: 1, steps: &a },
+            ValidSequence { split: DataSplit::Valid, group_id: 2, steps: &b },
         ];
         assert_eq!(choose_sequential_throughput(&groups, 2, 1, 20, 4096), ThroughputChoice::Full);
     }
+    #[test]
+    fn disjoint_test_and_ood_groups_never_calibrate_dispatch() {
+        let a = [row(100, 1, StepVerdict::Accepted, Some(1024))];
+        let b = [row(100, 1, StepVerdict::Accepted, Some(1024))];
+        for forbidden in [DataSplit::Train, DataSplit::Test, DataSplit::Ood] {
+            let groups = [
+                ValidSequence { split: DataSplit::Valid, group_id: 1, steps: &a },
+                ValidSequence { split: forbidden, group_id: 2, steps: &b },
+            ];
+            assert_eq!(choose_sequential_throughput(&groups, 2, 1, 20, 4096), ThroughputChoice::Full);
+        }
+    }
+
 }
