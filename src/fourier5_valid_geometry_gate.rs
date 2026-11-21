@@ -773,7 +773,6 @@ mod sequential_cost_tests {
     }
 }
 
-
 /// A measured VALID sequential workload, including the peak resident memory
 /// observed for each engine. VmHWM values are in KiB, not bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
