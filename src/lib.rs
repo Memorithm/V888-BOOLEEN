@@ -339,3 +339,9 @@ pub mod fourier5_sequential_workload_audit;
 
 /// Full-authoritative recovery of sequential synthetic cache state after mismatch.
 pub mod fourier5_sequential_full_recovery;
+
+/// Independent VALID-group sequential throughput admission.
+pub mod fourier5_sequential_throughput;
+
+/// Transactional sequential cache recovery checked by independent Full/rebuild oracles.
+pub mod fourier5_sequential_transaction;
