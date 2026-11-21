@@ -1,0 +1,41 @@
+v888_cue_dose_transfer_schema=b888-4-cue-dose-transfer-v1
+graph=GENERATED_SYNTHETIC (not BANC; real BANC V888 graph DOI 10.7910/DVN/7WTH1N, Bates, Phelps, Kim et al. 2026, not available here)
+cond=base sources=128 targets=32 fan_in=8 active=6 train_patterns_per_task=32 test_patterns=128 rounds_per_task=8
+cond=train64 sources=128 targets=32 fan_in=8 active=6 train_patterns_per_task=64 test_patterns=128 rounds_per_task=8
+cond=src256 sources=256 targets=32 fan_in=8 active=6 train_patterns_per_task=32 test_patterns=128 rounds_per_task=8
+engine=cycle27_cue_write_dose(unchanged) k=16 flip=100 seeds=5 orders=identity+reversed+3_random order_salt=0xde5b8884c270a1d dose_salt=0xde5b8884c27d05e arms=S1,R1,E,Zg1,Zgd0,Zgd1,Zgd2,Zgd3,Zgd4,Zgd2c budget=paced100 metric=balanced_accuracy chance=0.5 boot_resamples=2000 boot_seed=0xb0075eed equiv_margin=0.01 noninf_margin=0.02 min_rf_den=0.05
+census(identity order; no accuracy computed, no held-out order drawn): cond,arm,seeds,writable_partner_lines,charged_writes,cue_writes,skipped,frozen_moved,partner_moved,idle_stages,partner_agree_mean,cue_reach_mean
+base,S1,5,0.00,914.8,0.0,0.0,0.0,0.0,0.00,0.000,0.0
+base,R1,5,0.00,914.8,0.0,0.0,0.0,0.0,0.00,0.000,0.0
+base,E,5,0.00,914.8,0.0,0.0,0.0,0.0,0.00,0.000,0.0
+base,Zg1,5,0.00,914.8,305.8,0.0,0.0,0.0,0.00,1.000,12.2
+base,Zgd0,5,0.00,914.8,309.8,809.0,0.0,0.0,0.00,0.875,19.6
+base,Zgd1,5,1.00,914.8,360.8,600.2,0.0,17.2,0.00,0.875,19.6
+base,Zgd2,5,2.00,914.8,410.0,418.6,0.0,32.8,0.00,0.875,19.6
+base,Zgd3,5,3.00,914.8,450.8,207.2,0.0,47.2,0.00,0.875,19.6
+base,Zgd4,5,4.00,914.8,491.8,0.0,0.0,61.2,0.00,0.875,19.6
+base,Zgd2c,5,2.00,914.8,392.6,409.8,0.0,32.4,0.00,0.875,19.6
+leakage(base): leak_free_fixtures=5/5
+train64,S1,5,0.00,932.2,0.0,0.0,0.0,0.0,0.00,0.000,0.0
+train64,R1,5,0.00,932.2,0.0,0.0,0.0,0.0,0.00,0.000,0.0
+train64,E,5,0.00,932.2,0.0,0.0,0.0,0.0,0.00,0.000,0.0
+train64,Zg1,5,0.00,925.6,294.4,0.0,0.0,0.0,0.00,1.000,12.2
+train64,Zgd0,5,0.00,925.4,297.4,1336.4,0.0,0.0,0.00,0.875,19.6
+train64,Zgd1,5,1.00,928.4,344.4,1022.8,0.0,19.0,0.00,0.875,19.6
+train64,Zgd2,5,2.00,929.6,397.8,633.0,0.0,36.2,0.00,0.875,19.6
+train64,Zgd3,5,3.00,929.0,431.4,362.6,0.0,51.2,0.00,0.875,19.6
+train64,Zgd4,5,4.00,932.2,481.4,0.0,0.0,65.4,0.00,0.875,19.6
+train64,Zgd2c,5,2.00,932.2,387.6,661.4,0.0,34.6,0.00,0.875,19.6
+leakage(train64): leak_free_fixtures=5/5
+src256,S1,5,0.00,1217.2,0.0,0.0,0.0,0.0,0.00,0.000,0.0
+src256,R1,5,0.00,1217.2,0.0,0.0,0.0,0.0,0.00,0.000,0.0
+src256,E,5,0.00,1217.2,0.0,0.0,0.0,0.0,0.00,0.000,0.0
+src256,Zg1,5,0.00,1217.2,312.6,0.0,0.0,0.0,0.00,1.000,9.6
+src256,Zgd0,5,0.00,1217.2,317.8,489.4,0.0,0.0,0.00,0.875,16.1
+src256,Zgd1,5,1.00,1217.2,370.6,357.2,0.0,14.2,0.00,0.875,16.1
+src256,Zgd2,5,2.00,1217.2,420.8,272.6,0.0,26.8,0.00,0.875,16.1
+src256,Zgd3,5,3.00,1217.2,477.0,106.2,0.0,39.2,0.00,0.875,16.1
+src256,Zgd4,5,4.00,1217.2,531.4,0.0,0.0,55.0,0.00,0.875,16.1
+src256,Zgd2c,5,2.00,1217.2,438.0,239.8,0.0,31.8,0.00,0.875,16.1
+leakage(src256): leak_free_fixtures=5/5
+evaluation_scope=synthetic_graph_artificial_labels_not_BANC_not_biological

@@ -193,6 +193,30 @@ pilot can only lead to stopping the cycle before the main run (e.g. if a
 dose cannot bind in a condition); it cannot change a threshold, an arm, a
 condition, a seed or a hypothesis above.
 
+## 7. Pilot result (label-free, seeds 1..5, identity order; written before the main run)
+
+File: `results/cue-dose-transfer-census-v1.txt` (no accuracy computed, no
+held-out order drawn; sha256
+`b409b862b16cfd365429cbd01a2fb4947ef82360e6086a167510f25b5fe2b922`). Means over the 5 pilot seeds, k = 16, flip 100:
+
+| condition | writable lines Zgd0..4 / 2c | partner-line moves Zgd0 / 1 / 2 / 3 / 4 / 2c | frozen skips Zgd0 / 1 / 2 / 3 / 4 / 2c | cue writes Zg1 / Zgd0 / Zgd2 / Zgd4 | frozen moves | leak-free fixtures |
+|---|---|---|---|---|---|---|
+| base | 0, 1, 2, 3, 4 / 2 | 0 / 17.2 / 32.8 / 47.2 / 61.2 / 32.4 | 809 / 600 / 419 / 207 / 0 / 410 | 305.8 / 309.8 / 410.0 / 491.8 | 0 | 5/5 |
+| train64 | 0, 1, 2, 3, 4 / 2 | 0 / 19.0 / 36.2 / 51.2 / 65.4 / 34.6 | 1336 / 1023 / 633 / 363 / 0 / 661 | 294.4 / 297.4 / 397.8 / 481.4 | 0 | 5/5 |
+| src256 | 0, 1, 2, 3, 4 / 2 | 0 / 14.2 / 26.8 / 39.2 / 55.0 / 31.8 | 489 / 357 / 273 / 106 / 0 / 240 | 312.6 / 317.8 / 420.8 / 531.4 | 0 | 5/5 |
+
+* In every condition the partner-line moves rise with the dose, Zgd1 moves
+  partner lines, Zgd1..3 / Zgd2c skip frozen steps, Zgd2c receives a dose
+  comparable to Zgd2 (ratio 0.96 / 0.96 / 1.19), frozen moves are 0 and
+  every fixture is leakage-free. The identity order has no idle stage.
+* The base pilot reproduces the cycle 27 pilot numbers exactly (same pilot
+  seeds; e.g. cue writes 309.8 / 491.8, moves 17.2 / 32.8 / 47.2 / 61.2),
+  which confirms the engine is unchanged.
+* **Expectation stated before the main run:** the G2 clauses bind in every
+  condition, so G1–G4 are expected to pass and H1–H12 to be evaluable. The
+  pilot measured no accuracy and changed no threshold, arm, condition, seed
+  or hypothesis. The main run is executed exactly as pre-registered above.
+
 ## Reproduce
 
 ```bash
