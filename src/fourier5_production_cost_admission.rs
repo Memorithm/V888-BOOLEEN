@@ -87,14 +87,18 @@ mod tests {
     #[test]
     fn provenance_mismatch_and_missing_memory_fail_closed() {
         let a = [cost(100, 10)];
-        let mut b = [cost(100, 10)];
+        let b = [cost(100, 10)];
         let mut groups = [
             ValidationGroup { split: Split::Valid, id: 1, samples: &a },
             ValidationGroup { split: Split::Test, id: 2, samples: &b },
         ];
         assert_eq!(select(&groups, 2, 1, 20, 4096), Decision::Full);
         groups[1].split = Split::Valid;
-        b[0].vmhwm_kib = None;
-        assert_eq!(select(&groups, 2, 1, 20, 4096), Decision::Full);
+        let missing = [PairedProductionCost { vmhwm_kib: None, ..cost(100, 10) }];
+        let groups_missing = [
+            ValidationGroup { split: Split::Valid, id: 1, samples: &a },
+            ValidationGroup { split: Split::Valid, id: 2, samples: &missing },
+        ];
+        assert_eq!(select(&groups_missing, 2, 1, 20, 4096), Decision::Full);
     }
 }
