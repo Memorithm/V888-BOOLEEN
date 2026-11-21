@@ -50,7 +50,9 @@ where
         let mut incremental_time = start.elapsed();
         // Independent cache reconstruction is outside the timed fast path.
         // It is a correctness oracle, not a claimed incremental cost.
+        let rebuild_start = Instant::now();
         let canonical = rebuild(&expected).map_err(|_| TransactionError::Rebuild)?;
+        let rebuild_time = rebuild_start.elapsed();
         let verdict = match candidate {
             Ok((next_state, next_cache))
                 if next_state == expected && next_cache == canonical =>
@@ -70,15 +72,11 @@ where
                 StepVerdict::IncrementalError
             }
         };
-        // Recovery rebuild must be included in the measured incremental
-        // cost when the fast path fails; it is never reported as accepted.
+        // The canonical rebuild already performed above IS the recovery cache.
+        // Charge its actual measured cost on failed incremental paths; do not
+        // rebuild twice and accidentally undercount the first reconstruction.
         if verdict != StepVerdict::Accepted {
-            let recovery_start = Instant::now();
-            let recovered = rebuild(&state).map_err(|_| TransactionError::Rebuild)?;
-            incremental_time = incremental_time.saturating_add(recovery_start.elapsed());
-            if recovered != cache {
-                return Err(TransactionError::Rebuild);
-            }
+            incremental_time = incremental_time.saturating_add(rebuild_time);
         }
         rows.push(StepMeasurement {
             verdict,
@@ -129,6 +127,25 @@ mod tests {
             |s| Ok::<_, ()>(*s),
         );
         assert!(matches!(result, Err(TransactionError::Rebuild)));
+    }
+
+    #[test]
+    fn mismatch_rebuilds_once_per_step_and_recovers_exactly() {
+        use std::cell::Cell;
+        let rebuild_calls = Cell::new(0_u32);
+        let (state, cache, rows) = execute_verified_sequence(
+            0_u32, 0_u32, &[1_u32, 2],
+            |s, d| Ok::<_, ()>(s + d),
+            |s, _, d| Ok::<_, ()>((s + d, s + d + 1)),
+            |s| {
+                rebuild_calls.set(rebuild_calls.get() + 1);
+                Ok::<_, ()>(*s)
+            },
+        ).unwrap();
+        // One initial validation plus one canonical reconstruction per step.
+        assert_eq!(rebuild_calls.get(), 3);
+        assert_eq!((state, cache), (3, 3));
+        assert!(rows.iter().all(|r| r.verdict == StepVerdict::Mismatch));
     }
 
     #[test]
