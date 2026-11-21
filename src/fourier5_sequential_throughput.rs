@@ -149,7 +149,7 @@ mod tests {
         let a = [row(1000, 1, StepVerdict::Accepted, Some(1024))];
         let b = [row(100, 90, StepVerdict::Accepted, Some(1024))];
         // Even though pooled savings exceed 20%, group b saves only 10%.
-        assert!(90_u128 * 100 >= 100_u128 * 80);
+        const { assert!(90_u128 * 100 >= 100_u128 * 80) };
         let groups = [
             ValidSequence {
                 split: DataSplit::Valid,
@@ -231,7 +231,7 @@ mod tests {
     fn independent_step_oracle_rejects_masked_slow_intervention() {
         // Each group saves >20% overall, but its second step saves only 1%.
         // A scalar oracle rejects 99 * 100 >= 100 * (100 - 20).
-        assert!(99_u128 * 100 >= 100_u128 * 80);
+        const { assert!(99_u128 * 100 >= 100_u128 * 80) };
         let a = [
             row(1000, 1, StepVerdict::Accepted, Some(1024)),
             row(100, 99, StepVerdict::Accepted, Some(1024)),

@@ -94,6 +94,7 @@ fn within_observed_peak_budget(limit: Option<u64>, observed: Option<u64>) -> boo
 /// callbacks or allocating rows. An optional VmHWM ceiling is checked at entry
 /// and after each verified step; VmHWM is process-wide and is NOT an allocator
 /// limit or a substitute for RemoteOps cgroup memory enforcement.
+#[allow(clippy::too_many_arguments)]
 pub fn execute_verified_sequence_limited<S, C, I, E, F, D, R>(
     initial_state: S,
     initial_cache: C,
