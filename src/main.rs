@@ -19,6 +19,7 @@ use v888_booleen::cue_displacement as cdp;
 use v888_booleen::cue_dose_density as cdd;
 use v888_booleen::cue_dose_guard as cdg;
 use v888_booleen::cue_dose_transfer as cdt;
+use v888_booleen::cue_fanin as cfi;
 use v888_booleen::cue_gating as cgate;
 use v888_booleen::cue_init as ci;
 use v888_booleen::cue_ownership as cown;
@@ -165,6 +166,7 @@ fn help() {
     println!("  bench-cue-ownership [--graph brain.v888b] [--seeds 561,..,600] [--flips 25,50,100] [--ks 8,16,24] [--random-orders 3] [--threads N] [--csv out.csv] [--census]  (B888-4 cycle 24: CUE OWNERSHIP — the #136 matched share-2 cue code where each task writes only its own block and the partner block is active but frozen (Zgo2m), vs the shared-write code (Zg2m), private cues, owned cyclic/random codes and supervised/reward/error-gated at equal paced100 writes, k = 8, 16, 24, flips 25/50/100, identity + reversed + seeded held-out orders; --census = identity order, partner agreement, writes, guard counters, frozen skips and cue reach only, no accuracy; GENERATED synthetic graph by default)");
     println!("  bench-cue-defer [--graph brain.v888b] [--seeds 601,..,640] [--flips 25,50,100] [--ks 8,16,24] [--random-orders 3] [--threads N] [--csv out.csv] [--census]  (B888-4 cycle 25: DEFERRED PARTNER WRITES — the #136 matched share-2 cue code with the partner block frozen in the first half of each task's training and writable in the second (Zgl2m), vs share (Zg2m), owned (Zgo2m), early-window (Zge2m), late random code (Zgl2r), private cues and supervised/reward/error-gated at equal paced100 writes, k = 8, 16, 24, flips 25/50/100, identity + reversed + seeded held-out orders; --census = identity order, partner agreement, writes, guard counters, per-half skips and partner-line moves, cue reach only, no accuracy; GENERATED synthetic graph by default)");
     println!("  bench-cue-write-clock [--graph brain.v888b] [--seeds 641,..,680] [--flips 25,50,100] [--ks 8,16,24] [--random-orders 3] [--threads N] [--csv out.csv] [--census]  (B888-4 cycle 26: WRITE-CLOCK DEFERRED PARTNER WRITES — same late/early/share/owned modes as cycle 25, but the partner-block window is cut on the write clock: first episode at which the uncapped error-gated cumulative write curve of the stage reaches floor(cap/2) (Zgl2m late, Zge2m early), vs share (Zg2m), owned (Zgo2m), late random code (Zgl2r), private cues and supervised/reward/error-gated at equal paced100 writes, k = 8, 16, 24, flips 25/50/100, identity + reversed + seeded held-out orders; --census = identity order, partner agreement, writes, guard counters, per-write-half skips and partner-line moves, write-clock split, cue reach only, no accuracy; GENERATED synthetic graph by default)");
+    println!("  bench-cue-fanin [--seeds 841,..,880] [--conds base,f16,f32,src512,d512] [--threads N] [--csv out.csv] [--census]  (B888-4 cycle 31: FAN-IN SWEEP — does fan-in lower learning by itself at fixed graph sources? separates the cycle 30 fan-in/sources confound with base 128/8, f16 128/16, f32 128/32, src512 512/8, d512 512/32 on the unchanged cycle 29 engine (cycle 27 arms + Zbd0..4); --census = label-free coverage, target load, writes, blocked overwrites, partner-line moves, no accuracy; GENERATED synthetic graph only)");
     println!("  bench-cue-dose-density [--seeds 801,..,840] [--conds base,src512,d256,d512] [--threads N] [--csv out.csv] [--census]  (B888-4 cycle 30: DOSE DENSITY — is the cycle 29 widening of the raw forgetting gap FGT(S1)-FGT(Zgd4) with more graph sources caused by edge dilution (fan-in fixed at 8)? unchanged cycle 29 engine (cycle 27 arms + Zbd0..4) on base 128/8, src512 512/8, and density-matched d256 256/16 and d512 512/32 (2 edges per source); --census = label-free coverage, writes, blocked overwrites, skips, partner-line moves, no accuracy; GENERATED synthetic graph only)");
     println!("  bench-cue-dose-guard [--seeds 761,..,800] [--conds base,src256,src512] [--threads N] [--csv out.csv] [--census]  (B888-4 cycle 29: DOSE GUARD — why the dosed share-2 cue code loses to the supervised control on raw forgetting but wins on relative forgetting (exact split FGT = LEARN_head - RET_head), and whether the raw gap closes with more graph sources (128/256/512) or with the block consolidation guard instead of last-resort (Zbd0..4, same code, dose masks and paced100 caps), without changing the linear dose effect; unchanged cycle 27 engine rows plus five block arms at k = 16, flip 100; --census = identity order, writes, blocked overwrites, skips, partner-line moves, no accuracy; GENERATED synthetic graph only)");
     println!("  bench-cue-dose-transfer [--seeds 721,..,760] [--conds base,train64,src256] [--threads N] [--csv out.csv] [--census]  (B888-4 cycle 28: DOSE TRANSFER — the unchanged cycle 27 partner-write dose engine on fresh seeds at k = 16, flip 100 in three fixture conditions (cycle 27 design, 64 training patterns per task, 256 graph sources): generalisation of the dose slope, raw and relative forgetting vs the supervised control at equal paced100 writes, additivity of disjoint partner-line halves; --census = identity order, writes, skips, partner-line moves, idle stages, no accuracy; GENERATED synthetic graph only)");
@@ -2301,6 +2303,83 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .write_all(cdd::to_csv(&all).as_bytes())?;
             }
             print!("{}", cdd::report(&all));
+            println!("evaluation_scope=synthetic_graph_artificial_labels_not_BANC_not_biological");
+        }
+        Some("bench-cue-fanin") => {
+            let allowed = ["--seeds", "--conds", "--threads", "--csv", "--census"];
+            for flag in args.iter().skip(1).filter(|arg| arg.starts_with("--")) {
+                if !allowed.contains(&flag.as_str()) {
+                    return Err(format!("unknown bench-cue-fanin option: {flag}").into());
+                }
+            }
+            let census = args.iter().any(|a| a == "--census");
+            let seeds: Vec<u64> = match optional(&args, "--seeds") {
+                Some(s) => s
+                    .split(',')
+                    .map(str::parse::<u64>)
+                    .collect::<Result<Vec<_>, _>>()?,
+                None if census => cfi::PILOT_SEEDS.collect(),
+                None => cfi::SEEDS.collect(),
+            };
+            let conds: Vec<cdg::Cond> = match optional(&args, "--conds") {
+                Some(s) => s
+                    .split(',')
+                    .map(cfi::parse_cond)
+                    .collect::<Result<Vec<_>, _>>()?,
+                None => cfi::CONDS.to_vec(),
+            };
+            let threads: usize =
+                optional(&args, "--threads").map_or(Ok(sgen::default_threads()), str::parse)?;
+            println!("v888_cue_fanin_schema={}", cfi::SCHEMA);
+            println!("graph=GENERATED_SYNTHETIC (not BANC; real BANC V888 graph DOI 10.7910/DVN/7WTH1N, Bates, Phelps, Kim et al. 2026, not available here)");
+            for c in &conds {
+                let d = c.design();
+                println!(
+                    "cond={} sources={} targets={} fan_in={} edges_per_source={:.2} active={} train_patterns_per_task={} test_patterns={} rounds_per_task={}",
+                    c.name(),
+                    d.shape.sources,
+                    d.shape.targets,
+                    d.shape.fan_in,
+                    cdd::edges_per_source(*c),
+                    d.spec.active,
+                    d.spec.train_patterns,
+                    d.spec.test_patterns,
+                    d.spec.rounds_a
+                );
+            }
+            println!(
+                "engine=cycle29_cue_dose_guard(unchanged: cycle27 arms + block arms) k={} flip={} seeds={} orders=identity+reversed+{}_random order_salt={:#x} dose_salt={:#x} arms=S1,R1,E,Zg1,Zgd0..4,Zgd2c,Zbd0..4 budget=paced100 metric=balanced_accuracy chance={} boot_resamples={} boot_seed={:#x} equiv_margin={} noninf_margin={} block_act_frac={} min_rf_den={}",
+                cdg::K,
+                cdg::FLIP,
+                seeds.len(),
+                cdg::RANDOM_ORDERS,
+                cwd::ORDER_SALT,
+                cwd::DOSE_SALT,
+                cdt::CHANCE,
+                eg::BOOT_RESAMPLES,
+                eg::BOOT_SEED,
+                cfi::EQUIV_MARGIN,
+                cfi::NONINF_MARGIN,
+                cdg::BLOCK_ACT_FRAC,
+                cdt::MIN_RF_DEN,
+            );
+            if census {
+                print!("{}", cfi::census_report(&conds, &seeds)?);
+                println!(
+                    "evaluation_scope=synthetic_graph_artificial_labels_not_BANC_not_biological"
+                );
+                return Ok(());
+            }
+            let all = cfi::run(&conds, &seeds, threads)?;
+            if let Some(path) = optional(&args, "--csv") {
+                use std::io::Write;
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)?
+                    .write_all(cfi::to_csv(&all).as_bytes())?;
+            }
+            print!("{}", cfi::report(&all));
             println!("evaluation_scope=synthetic_graph_artificial_labels_not_BANC_not_biological");
         }
         Some("bench-cue-dose-guard") => {
