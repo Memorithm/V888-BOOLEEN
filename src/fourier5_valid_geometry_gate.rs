@@ -684,8 +684,12 @@ pub fn choose_for_sequential_costs(
             return EngineChoice::Full;
         };
         incremental = next_incremental;
-        // Fail closed on a prefix regression: a late fast step cannot hide
-        // earlier sequential stalls.
+        // A fast later intervention must not mask an individually slow
+        // cache update, even if cumulative prefixes remain profitable.
+        if step_cost >= u128::from(step.full_ns) {
+            return EngineChoice::Full;
+        }
+        // Also reject a cumulative prefix regression.
         if incremental >= full {
             return EngineChoice::Full;
         }
@@ -730,6 +734,17 @@ mod sequential_cost_tests {
     #[test]
     fn prefix_regression_is_not_hidden_by_later_fast_steps() {
         let valid = [step(100, 101, 0, true), step(1000, 1, 0, false)];
+        assert_eq!(
+            choose_for_sequential_costs(&valid, 2, 20),
+            EngineChoice::Full
+        );
+    }
+
+    #[test]
+    fn individual_regression_cannot_hide_inside_profitable_prefix() {
+        let valid = [step(1000, 1, 0, true), step(100, 101, 0, false)];
+        // Independent scalar oracle: second intervention costs 101 > 100.
+        assert!(valid[1].incremental_ns > valid[1].full_ns);
         assert_eq!(
             choose_for_sequential_costs(&valid, 2, 20),
             EngineChoice::Full
