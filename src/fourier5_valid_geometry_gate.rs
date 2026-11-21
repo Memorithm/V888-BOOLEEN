@@ -866,7 +866,6 @@ mod sequential_memory_tests {
     }
 }
 
-
 /// A sequential measurement is bound to the stable VALID sample identity.
 /// Positional joins are unsafe because shuffled or cross-split timings can
 /// otherwise silently calibrate the dispatch policy.
@@ -896,7 +895,8 @@ pub fn choose_with_bound_sequential_valid(
         minimum_distinct,
         minimum_samples,
         minimum_saving_percent,
-    ) != EngineChoice::Incremental {
+    ) != EngineChoice::Incremental
+    {
         return EngineChoice::Full;
     }
     let valid_count = observations
@@ -975,8 +975,14 @@ mod bound_sequential_tests {
             choose_with_bound_sequential_valid(
                 &rows,
                 &[measurement(1), measurement(2)],
-                Geometry { gates: 100, cone: 10 },
-                2, 2, 20, 150,
+                Geometry {
+                    gates: 100,
+                    cone: 10
+                },
+                2,
+                2,
+                20,
+                150,
             ),
             EngineChoice::Incremental
         );
@@ -984,10 +990,19 @@ mod bound_sequential_tests {
 
     #[test]
     fn test_timing_and_duplicate_identity_are_rejected() {
-        let rows = [group(1, 10, Split::Valid, 12), group(2, 20, Split::Valid, 20),
-                    group(3, 30, Split::Test, 12)];
-        let target = Geometry { gates: 100, cone: 10 };
-        for timings in [[measurement(1), measurement(3)], [measurement(1), measurement(1)]] {
+        let rows = [
+            group(1, 10, Split::Valid, 12),
+            group(2, 20, Split::Valid, 20),
+            group(3, 30, Split::Test, 12),
+        ];
+        let target = Geometry {
+            gates: 100,
+            cone: 10,
+        };
+        for timings in [
+            [measurement(1), measurement(3)],
+            [measurement(1), measurement(1)],
+        ] {
             assert_eq!(
                 choose_with_bound_sequential_valid(&rows, &timings, target, 2, 2, 20, 150),
                 EngineChoice::Full
@@ -997,8 +1012,14 @@ mod bound_sequential_tests {
 
     #[test]
     fn incomplete_sequence_and_oracle_divergence_are_rejected() {
-        let rows = [group(1, 10, Split::Valid, 12), group(2, 20, Split::Valid, 20)];
-        let target = Geometry { gates: 100, cone: 10 };
+        let rows = [
+            group(1, 10, Split::Valid, 12),
+            group(2, 20, Split::Valid, 20),
+        ];
+        let target = Geometry {
+            gates: 100,
+            cone: 10,
+        };
         assert_eq!(
             choose_with_bound_sequential_valid(&rows, &[measurement(1)], target, 2, 2, 20, 150),
             EngineChoice::Full
