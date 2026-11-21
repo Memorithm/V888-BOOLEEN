@@ -157,6 +157,10 @@ pub enum Setting {
     Gl,
     /// `E/E-cue0+last-resort@paced100`.
     Zg,
+    /// `E/E-cue0+block@paced100` (B888-4 cycle 29, `cue_dose_guard`): the
+    /// silent cue under the `block` guard. **Not** in [`SETTINGS`], so every
+    /// earlier grid is unchanged (its rows are bit-identical).
+    Zb,
 }
 
 /// The pre-registered settings, in CSV order.
@@ -185,6 +189,7 @@ impl Setting {
             Self::Gc => "error-gated+charge4@paced100",
             Self::Gl => "error-gated+last-resort@paced100",
             Self::Zg => "E/E-cue0+last-resort@paced100",
+            Self::Zb => "E/E-cue0+block@paced100",
         }
     }
     pub fn parse(s: &str) -> io::Result<Self> {
@@ -201,7 +206,7 @@ impl Setting {
             Self::Sup => cd::Setting::Sup,
             Self::Rew => cd::Setting::Rew,
             Self::Err | Self::Gb | Self::Gr | Self::Gc | Self::Gl => cd::Setting::Err,
-            Self::Z | Self::Zg => cd::Setting::Z,
+            Self::Z | Self::Zg | Self::Zb => cd::Setting::Z,
         }
     }
     /// Guard of the guarded step (`None` = the cycle 18 step, uninstrumented).
@@ -210,7 +215,7 @@ impl Setting {
         match self {
             Self::Sup | Self::Rew => None,
             Self::Err | Self::Z => Some(Guard::Off),
-            Self::Gb => Some(Guard::Block),
+            Self::Gb | Self::Zb => Some(Guard::Block),
             Self::Gr => Some(Guard::Recent),
             Self::Gc => Some(Guard::Charge),
             Self::Gl | Self::Zg => Some(Guard::LastResort),
