@@ -109,3 +109,94 @@ mod tests {
             Err(PolicyError::DuplicateGroup));
     }
 }
+
+/// Connect a frozen VALID policy to the real epoch-aware dispatcher.
+/// No TEST/OOD observations are consulted here. Unknown or duplicated buckets,
+/// stale cache epochs, absent VmHWM samples and zero gate budgets fail to Full.
+#[must_use]
+pub fn choose_frozen_valid(
+    intervention: crate::fourier5_cone_epoch_dispatch::Intervention,
+    frozen: &[Admission],
+    committed_revision: u64,
+    peak_limit_kib: u64,
+    max_changed_gates: usize,
+) -> crate::fourier5_cone_epoch_dispatch::EngineChoice {
+    use crate::fourier5_cone_epoch_dispatch::{choose, ConeAdmission, EngineChoice};
+    if max_changed_gates == 0 {
+        return EngineChoice::Full;
+    }
+    let Ok(bucket) = u32::try_from(intervention.cone_bucket) else {
+        return EngineChoice::Full;
+    };
+    let mut matches = frozen.iter().filter(|a| a.cone_bucket == bucket);
+    let Some(admission) = matches.next() else {
+        return EngineChoice::Full;
+    };
+    if matches.next().is_some() || !admission.allowed || admission.max_peak_kib == 0
+        || admission.max_peak_kib > peak_limit_kib
+    {
+        return EngineChoice::Full;
+    }
+    let table = [ConeAdmission {
+        valid_admitted: true,
+        cone_bucket: intervention.cone_bucket,
+        max_changed_gates,
+    }];
+    choose(intervention, &table, committed_revision, peak_limit_kib)
+}
+
+#[cfg(test)]
+mod dispatch_integration_tests {
+    use super::*;
+    use crate::fourier5_cone_epoch_dispatch::{CacheEpoch, EngineChoice, Intervention};
+
+    #[test]
+    fn frozen_valid_dispatch_matches_independent_truth_table() {
+        let valid = [PairedSample {
+            partition: Partition::Valid, group: 17, cone_bucket: 2,
+            full_ns: 100, incremental_ns: 20, refresh_ns: 10,
+            peak_kib: 128, oracle_equal: true,
+        }];
+        let frozen = freeze_valid_policy(&valid, 1, 256).unwrap();
+        for state in 0..3 {
+            for cache in 0..3 {
+                for cone in 0..4 {
+                    for changed in 0..5 {
+                        let intervention = Intervention {
+                            cone_bucket: cone, changed_gates: changed,
+                            cache_epoch: CacheEpoch { state_revision: state, cache_revision: cache },
+                            observed_peak_kib: Some(128),
+                        };
+                        let expected = state == 1 && cache == 1 && cone == 2 && changed <= 2;
+                        assert_eq!(
+                            choose_frozen_valid(intervention, &frozen, 1, 256, 2)
+                                == EngineChoice::Incremental,
+                            expected,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn corrupted_policy_and_memory_fail_closed() {
+        let sample = PairedSample {
+            partition: Partition::Valid, group: 1, cone_bucket: 2,
+            full_ns: 100, incremental_ns: 20, refresh_ns: 10,
+            peak_kib: 128, oracle_equal: true,
+        };
+        let policy = freeze_valid_policy(&[sample], 1, 256).unwrap();
+        let intervention = Intervention {
+            cone_bucket: 2, changed_gates: 1,
+            cache_epoch: CacheEpoch { state_revision: 4, cache_revision: 4 },
+            observed_peak_kib: Some(128),
+        };
+        assert_eq!(choose_frozen_valid(intervention, &[policy[0], policy[0]], 4, 256, 2), EngineChoice::Full);
+        assert_eq!(choose_frozen_valid(intervention, &policy, 4, 100, 2), EngineChoice::Full);
+        assert_eq!(choose_frozen_valid(intervention, &policy, 4, 256, 0), EngineChoice::Full);
+        assert_eq!(choose_frozen_valid(Intervention { observed_peak_kib: None, ..intervention }, &policy, 4, 256, 2), EngineChoice::Full);
+        let rejected = freeze_valid_policy(&[PairedSample { oracle_equal: false, ..sample }], 1, 256).unwrap();
+        assert_eq!(choose_frozen_valid(intervention, &rejected, 4, 256, 2), EngineChoice::Full);
+    }
+}
