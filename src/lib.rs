@@ -357,3 +357,6 @@ pub mod fourier5_cone_epoch_dispatch;
 
 /// Conservative split-isolated worst-case sequential admission.
 pub mod fourier5_valid_worst_case;
+
+/// Conservative measured admission for sequential cache interventions.
+pub mod fourier5_sequential_admission_guard;
