@@ -217,3 +217,158 @@ mod tests {
         assert_eq!(next_committed_epoch(u64::MAX), None);
     }
 }
+
+
+/// A verified sequential transition owns its snapshots: no speculative mutation
+/// escapes when the incremental candidate differs from the independent Full
+/// oracle. The returned cache is canonical even on a fallback.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CanonicalSnapshot<S, C> {
+    pub state: S,
+    pub cache: C,
+    pub epoch: CacheEpoch,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VerifiedPath {
+    Incremental,
+    FullFallback,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifiedTransition<S, C> {
+    pub snapshot: CanonicalSnapshot<S, C>,
+    pub path: VerifiedPath,
+}
+
+/// Execute both paths on separate clones, compare the *entire* resulting
+/// state and cache, then publish exactly one canonical epoch. Full is the
+/// independent reference; this verification function is NOT a production
+/// latency benchmark and must not train the VALID admission policy.
+#[must_use]
+pub fn execute_verified_transition<S, C, F, I>(
+    committed: &CanonicalSnapshot<S, C>,
+    full: F,
+    incremental: I,
+) -> Option<VerifiedTransition<S, C>>
+where
+    S: Clone + Eq,
+    C: Clone + Eq,
+    F: FnOnce(&S, &C) -> (S, C),
+    I: FnOnce(&S, &C) -> (S, C),
+{
+    if committed.epoch.state_revision != committed.epoch.cache_revision {
+        return None;
+    }
+    let next = next_committed_epoch(committed.epoch.state_revision)?;
+    let (full_state, full_cache) = full(&committed.state, &committed.cache);
+    let (candidate_state, candidate_cache) =
+        incremental(&committed.state, &committed.cache);
+    let equal = candidate_state == full_state && candidate_cache == full_cache;
+    let (state, cache, path) = if equal {
+        (candidate_state, candidate_cache, VerifiedPath::Incremental)
+    } else {
+        (full_state, full_cache, VerifiedPath::FullFallback)
+    };
+    Some(VerifiedTransition {
+        snapshot: CanonicalSnapshot { state, cache, epoch: next },
+        path,
+    })
+}
+
+#[cfg(test)]
+mod canonical_transaction_tests {
+    use super::*;
+
+    #[test]
+    fn independent_reference_checks_entire_cache_and_rollback() {
+        let start = CanonicalSnapshot {
+            state: vec![false, true],
+            cache: vec![0_u8, 1],
+            epoch: CacheEpoch { state_revision: 4, cache_revision: 4 },
+        };
+        for corrupt_state in [false, true] {
+            for corrupt_cache in [false, true] {
+                let outcome = execute_verified_transition(
+                    &start,
+                    |state, cache| {
+                        let mut s = state.to_vec();
+                        let mut c = cache.to_vec();
+                        s[0] = true;
+                        c[0] = 7;
+                        (s, c)
+                    },
+                    |state, cache| {
+                        let mut s = state.to_vec();
+                        let mut c = cache.to_vec();
+                        s[0] = !corrupt_state;
+                        c[0] = if corrupt_cache { 8 } else { 7 };
+                        (s, c)
+                    },
+                )
+                .expect("valid epoch");
+                assert_eq!(outcome.snapshot.state, vec![true, true]);
+                assert_eq!(outcome.snapshot.cache, vec![7, 1]);
+                assert_eq!(outcome.snapshot.epoch.state_revision, 5);
+                assert_eq!(outcome.snapshot.epoch.cache_revision, 5);
+                assert_eq!(
+                    outcome.path,
+                    if corrupt_state || corrupt_cache {
+                        VerifiedPath::FullFallback
+                    } else {
+                        VerifiedPath::Incremental
+                    }
+                );
+            }
+        }
+        assert_eq!(start.state, vec![false, true]);
+        assert_eq!(start.cache, vec![0, 1]);
+    }
+
+    #[test]
+    fn stale_or_overflowed_epoch_never_invokes_either_engine() {
+        use std::cell::Cell;
+        for epoch in [
+            CacheEpoch { state_revision: 3, cache_revision: 2 },
+            CacheEpoch { state_revision: u64::MAX, cache_revision: u64::MAX },
+        ] {
+            let called = Cell::new(false);
+            let start = CanonicalSnapshot { state: 0_u8, cache: 0_u8, epoch };
+            let result = execute_verified_transition(
+                &start,
+                |_, _| { called.set(true); (1, 1) },
+                |_, _| { called.set(true); (1, 1) },
+            );
+            assert!(result.is_none());
+            assert!(!called.get());
+        }
+    }
+
+    #[test]
+    fn sequential_commits_rebuild_from_last_canonical_snapshot() {
+        let mut snapshot = CanonicalSnapshot {
+            state: 0_u64,
+            cache: 0_u64,
+            epoch: CacheEpoch { state_revision: 0, cache_revision: 0 },
+        };
+        for step in 1..=8_u64 {
+            let result = execute_verified_transition(
+                &snapshot,
+                |state, _| (*state + 1, (*state + 1) * 3),
+                |state, cache| {
+                    let next = *state + 1;
+                    (next, if step == 3 { *cache } else { next * 3 })
+                },
+            )
+            .expect("epoch");
+            assert_eq!(result.snapshot.state, step);
+            assert_eq!(result.snapshot.cache, step * 3);
+            assert_eq!(result.snapshot.epoch.state_revision, step);
+            assert_eq!(
+                result.path,
+                if step == 3 { VerifiedPath::FullFallback } else { VerifiedPath::Incremental }
+            );
+            snapshot = result.snapshot;
+        }
+    }
+}
