@@ -360,3 +360,6 @@ pub mod fourier5_sequential_breaker;
 
 /// Split-disjoint measured sequential cohort accounting (synthetic workloads).
 pub mod fourier5_sequential_cohort_audit;
+
+/// Stateful heterogeneous sequential physical probe against canonical Full outputs.
+pub mod fourier5_sequential_stateful_probe;
