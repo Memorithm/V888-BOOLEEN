@@ -88,7 +88,7 @@ impl FrozenConePolicy {
             if safe && max_incremental_total_ns < u128::from(min_full_ns) {
                 observed_geometry.insert(
                     cone_class,
-                    samples.iter().map(|s| (s.gates, s.cone_gates)).collect(),
+                    {                        let mut counts = BTreeMap::new();                        for sample in &samples {                            *counts.entry((sample.gates, sample.cone_gates)).or_insert(0usize) += 1;                        }                        counts.into_iter().filter_map(|(geometry, count)| {                            (count >= min_samples_per_class).then_some(geometry)                        }).collect()                    },
                 );
                 envelopes.insert(
                     cone_class,
@@ -194,6 +194,21 @@ mod tests {
             assert_eq!(policy.admits(12, 100, cone), expected, "cone={cone}");
         }
         assert!(!policy.admits(12, 101, 4));
+    }
+
+    #[test]
+    fn independent_geometry_support_oracle() {
+        let mut rows = Vec::new();
+        for (id, cone) in [(1, 4), (2, 4), (3, 8), (4, 10), (5, 10)] {
+            let mut observation = sample(id, 15);
+            observation.cone_gates = cone;
+            rows.push(observation);
+        }
+        let policy = FrozenConePolicy::calibrate(&rows, 2, 2048).unwrap();
+        for cone in 0..=12 {
+            let expected = cone == 4 || cone == 10;
+            assert_eq!(policy.admits(15, 100, cone), expected, "cone={cone}");
+        }
     }
 
     #[test]
