@@ -35,7 +35,10 @@ impl StepEvidence {
 
     #[must_use]
     pub fn admissible(self, memory_cap_kib: u64) -> bool {
-        self.output_equal
+        self.gates > 0
+            && self.cone_gates <= self.gates
+            && self.full_ns > 0
+            && self.output_equal
             && self.decision_equal
             && self.vm_hwm_kib.is_some_and(|v| v <= memory_cap_kib)
             && self.incremental_total_ns() < u128::from(self.full_ns)
@@ -170,6 +173,23 @@ mod tests {
         assert_eq!(invalid, Err(SequenceError::InvalidCone));
         let failure = run_sequential_probe(0_u8, &[(2, 1)], |_, _| {}, Ok, |_| Err(SequenceError::CacheFailed), Ok, |a, b| a == b);
         assert_eq!(failure, Err(SequenceError::CacheFailed));
+    }
+
+    #[test]
+    fn malformed_or_unmeasured_cones_never_admit_incremental() {
+        let base = StepEvidence {
+            revision: 1, gates: 100, cone_gates: 10,
+            full_ns: 100, cache_refresh_ns: 1, incremental_ns: 1,
+            output_equal: true, decision_equal: true,
+            incremental_first: false, vm_hwm_kib: Some(100),
+        };
+        assert!(base.admissible(100));
+        for (gates, cone_gates, full_ns) in [(0, 0, 100), (100, 101, 100), (100, 10, 0)] {
+            let invalid = StepEvidence { gates, cone_gates, full_ns, ..base };
+            assert!(!invalid.admissible(100));
+        }
+        assert!(!StepEvidence { vm_hwm_kib: None, ..base }.admissible(100));
+        assert!(!StepEvidence { output_equal: false, ..base }.admissible(100));
     }
 
     #[test]
