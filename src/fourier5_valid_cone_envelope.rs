@@ -33,6 +33,7 @@ pub enum CalibrationError {
     Empty,
     DuplicateSample,
     InvalidObservation,
+    InvalidMargin,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -129,6 +130,22 @@ impl FrozenConePolicy {
         min_samples_per_geometry: usize,
         memory_limit_kib: u64,
     ) -> Result<Self, CalibrationError> {
+        Self::calibrate_stratified_with_margin(valid, min_samples_per_geometry, memory_limit_kib, 0)
+    }
+
+    /// Freeze a worst-case VALID admission margin per exact geometry.
+    /// margin_percent is a minimum fractional saving relative to the fastest
+    /// Full observation, including the entire Incremental cache refresh cost.
+    /// This policy is frozen before TEST/OOD and never learns from runtime outcomes.
+    pub fn calibrate_stratified_with_margin(
+        valid: &[ValidObservation],
+        min_samples_per_geometry: usize,
+        memory_limit_kib: u64,
+        margin_percent: u8,
+    ) -> Result<Self, CalibrationError> {
+        if margin_percent > 99 {
+            return Err(CalibrationError::InvalidMargin);
+        }
         if valid.is_empty() || min_samples_per_geometry == 0 {
             return Err(CalibrationError::Empty);
         }
@@ -164,7 +181,11 @@ impl FrozenConePolicy {
                 .map(|r| u128::from(r.refresh_ns) + u128::from(r.incremental_ns))
                 .max()
                 .unwrap_or(u128::MAX);
-            if max_incremental >= u128::from(min_full)
+            // Checked arithmetic: overflow must reject, never admit.
+            let conservative_cost = max_incremental.checked_mul(100);
+            let permitted_cost = u128::from(min_full)
+                .checked_mul(u128::from(100 - margin_percent));
+            if !matches!((conservative_cost, permitted_cost), (Some(cost), Some(limit)) if cost < limit)
                 || rows.iter().any(|r| {
                     !r.oracle_equal
                         || !r.decision_equal
@@ -233,6 +254,39 @@ mod tests {
             decision_equal: true,
             vm_hwm_kib: Some(1024),
         }
+    }
+
+    #[test]
+    fn frozen_margin_oracle_checks_worst_case_per_geometry() {
+        let mut rows = vec![sample(1, 31), sample(2, 31)];
+        rows[0].refresh_ns = 10;
+        rows[0].incremental_ns = 40;
+        rows[1].refresh_ns = 20;
+        rows[1].incremental_ns = 40;
+        // Independent integer oracle: worst 60ns, fastest Full 100ns.
+        for margin in [0u8, 20, 39, 40, 41, 99] {
+            let policy = FrozenConePolicy::calibrate_stratified_with_margin(&rows, 2, 2048, margin).unwrap();
+            assert_eq!(policy.admits(31, 100, 10), margin < 40, "margin={margin}");
+        }
+        assert_eq!(
+            FrozenConePolicy::calibrate_stratified_with_margin(&rows, 2, 2048, 100),
+            Err(CalibrationError::InvalidMargin)
+        );
+    }
+
+    #[test]
+    fn margin_oracle_rejects_full_timing_tail_and_overflow() {
+        let mut rows = vec![sample(1, 32), sample(2, 32)];
+        rows[1].full_ns = 70;
+        rows[1].refresh_ns = 20;
+        rows[1].incremental_ns = 40;
+        assert!(!FrozenConePolicy::calibrate_stratified_with_margin(&rows, 2, 2048, 20)
+            .unwrap().admits(32, 100, 10));
+        assert!(FrozenConePolicy::calibrate_stratified_with_margin(&rows, 2, 2048, 10)
+            .unwrap().admits(32, 100, 10));
+        rows[1].incremental_ns = u64::MAX;
+        assert!(!FrozenConePolicy::calibrate_stratified_with_margin(&rows, 2, 2048, 0)
+            .unwrap().admits(32, 100, 10));
     }
 
     #[test]
