@@ -38,6 +38,7 @@ pub enum CalibrationError {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FrozenConePolicy {
     envelopes: BTreeMap<u32, ConeEnvelope>,
+    observed_geometry: BTreeMap<u32, BTreeSet<(u64, u64)>>,
 }
 
 impl FrozenConePolicy {
@@ -68,6 +69,7 @@ impl FrozenConePolicy {
             groups.entry(sample.cone_class).or_default().push(sample);
         }
         let mut envelopes = BTreeMap::new();
+        let mut observed_geometry = BTreeMap::new();
         for (cone_class, samples) in groups {
             if samples.len() < min_samples_per_class {
                 continue;
@@ -84,6 +86,10 @@ impl FrozenConePolicy {
                     && s.vm_hwm_kib.is_some_and(|m| m <= memory_limit_kib)
             });
             if safe && max_incremental_total_ns < u128::from(min_full_ns) {
+                observed_geometry.insert(
+                    cone_class,
+                    samples.iter().map(|s| (s.gates, s.cone_gates)).collect(),
+                );
                 envelopes.insert(
                     cone_class,
                     ConeEnvelope {
@@ -102,9 +108,14 @@ impl FrozenConePolicy {
                 );
             }
         }
-        Ok(Self { envelopes })
+        Ok(Self {
+            envelopes,
+            observed_geometry,
+        })
     }
 
+    /// Only exact geometry pairs observed during VALID are admitted; an interval
+    /// between measured sizes is not evidence of safe incremental execution.
     /// Runtime routing uses only frozen VALID evidence and current geometry.
     /// No TEST/OOD outcomes or measured timings are fed back into calibration.
     pub fn admits(&self, cone_class: u32, gates: u64, cone_gates: u64) -> bool {
@@ -114,6 +125,9 @@ impl FrozenConePolicy {
                 && cone_gates > 0
                 && cone_gates <= gates
                 && cone_gates <= e.max_cone_gates
+                && self.observed_geometry.get(&cone_class).is_some_and(|geometry| {
+                    geometry.contains(&(gates, cone_gates))
+                })
         })
     }
 
@@ -161,10 +175,25 @@ mod tests {
         let policy = FrozenConePolicy::calibrate(&[low, high], 2, 2048).unwrap();
         // Independent range oracle: only observed circuit-size interval is admissible.
         for gates in [0, 1, 99, 100, 150, 200, 201, 1_000_000] {
-            let expected = (100..=200).contains(&gates);
+            let expected = gates == 100 || gates == 200;
             assert_eq!(policy.admits(7, gates, 10), expected, "gates={gates}");
         }
         assert!(!policy.admits(7, 200, 11));
+        assert!(!policy.admits(7, 150, 10));
+    }
+
+    #[test]
+    fn independent_exact_geometry_oracle_rejects_unmeasured_cones() {
+        let mut first = sample(1, 12);
+        first.cone_gates = 4;
+        let mut second = sample(2, 12);
+        second.cone_gates = 8;
+        let policy = FrozenConePolicy::calibrate(&[first, second], 2, 2048).unwrap();
+        for cone in 0..=12 {
+            let expected = cone == 4 || cone == 8;
+            assert_eq!(policy.admits(12, 100, cone), expected, "cone={cone}");
+        }
+        assert!(!policy.admits(12, 101, 4));
     }
 
     #[test]
