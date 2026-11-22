@@ -86,10 +86,17 @@ impl FrozenConePolicy {
                     && s.vm_hwm_kib.is_some_and(|m| m <= memory_limit_kib)
             });
             if safe && max_incremental_total_ns < u128::from(min_full_ns) {
-                observed_geometry.insert(
-                    cone_class,
-                    {                        let mut counts = BTreeMap::new();                        for sample in &samples {                            *counts.entry((sample.gates, sample.cone_gates)).or_insert(0usize) += 1;                        }                        counts.into_iter().filter_map(|(geometry, count)| {                            (count >= min_samples_per_class).then_some(geometry)                        }).collect()                    },
-                );
+                let mut counts = BTreeMap::new();
+                for sample in &samples {
+                    *counts.entry((sample.gates, sample.cone_gates)).or_insert(0usize) += 1;
+                }
+                let supported = counts
+                    .into_iter()
+                    .filter_map(|(geometry, count)| {
+                        (count >= min_samples_per_class).then_some(geometry)
+                    })
+                    .collect();
+                observed_geometry.insert(cone_class, supported);
                 envelopes.insert(
                     cone_class,
                     ConeEnvelope {
