@@ -1039,3 +1039,134 @@ mod epoch_quarantine_tests {
         assert!(!epoch.incremental_allowed());
     }
 }
+
+
+/// Strict measured routing accounting for heterogeneous sequential workloads.
+/// A missing process-wide peak, invalid timing, mismatched oracle, or memory
+/// excess forces Full. TEST/OOD may be evaluated here but MUST NOT calibrate
+/// the frozen selector supplied by the caller.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BoundedRoutingCost {
+    pub full_steps: u64,
+    pub incremental_steps: u64,
+    pub reference_ns: u128,
+    pub selected_ns: u128,
+    pub rejected_for_memory: u64,
+    pub rejected_for_oracle: u64,
+    pub rejected_for_cost: u64,
+}
+
+impl<T> SequentialBatch<T> {
+    /// Account for cache refresh and the actual measured Full fallback cost.
+    /// This is a post-hoc paired-probe estimate, NOT production wall time.
+    #[must_use]
+    pub fn bounded_routing_cost(
+        &self,
+        max_vmhwm_kib: u64,
+        frozen_select: impl Fn(u64, u64, usize) -> bool,
+    ) -> BoundedRoutingCost {
+        let mut report = BoundedRoutingCost::default();
+        for (index, step) in self.steps.iter().enumerate() {
+            let c = &step.cost;
+            report.reference_ns += u128::from(c.full_ns);
+            let memory_ok = max_vmhwm_kib != 0
+                && step
+                    .vm_hwm_kib
+                    .is_some_and(|peak| peak > 0 && peak <= max_vmhwm_kib);
+            let oracle_ok = c.same_output && c.same_decision;
+            let incremental_total = u128::from(c.incremental_ns)
+                + u128::from(c.cache_update_ns);
+            let cost_ok = c.full_ns > 0
+                && c.incremental_ns > 0
+                && c.cache_update_ns > 0
+                && incremental_total < u128::from(c.full_ns);
+            if frozen_select(c.gates, c.cone_gates, index)
+                && memory_ok
+                && oracle_ok
+                && cost_ok
+            {
+                report.incremental_steps += 1;
+                report.selected_ns += incremental_total;
+            } else {
+                report.full_steps += 1;
+                report.selected_ns += u128::from(c.full_ns);
+                if !memory_ok {
+                    report.rejected_for_memory += 1;
+                }
+                if !oracle_ok {
+                    report.rejected_for_oracle += 1;
+                }
+                if !cost_ok {
+                    report.rejected_for_cost += 1;
+                }
+            }
+        }
+        report
+    }
+}
+
+#[cfg(test)]
+mod bounded_routing_tests {
+    use super::*;
+
+    fn step(full: u64, incremental: u64, cache: u64, peak: Option<u64>, equal: bool) -> PairedStep<u8> {
+        PairedStep {
+            verified_output: 1,
+            cost: SequentialCost {
+                gates: 256,
+                cone_gates: 8,
+                full_ns: full,
+                incremental_ns: incremental,
+                cache_update_ns: cache,
+                same_output: equal,
+                same_decision: equal,
+            },
+            vm_hwm_kib: peak,
+        }
+    }
+
+    #[test]
+    fn independent_scalar_oracle_rejects_all_unsafe_steps() {
+        let rows = vec![
+            step(100, 20, 10, Some(1024), true),
+            step(100, 90, 20, Some(1024), true),
+            step(100, 20, 10, None, true),
+            step(100, 20, 10, Some(2048), true),
+            step(100, 20, 10, Some(1024), false),
+        ];
+        let batch = SequentialBatch {
+            steps: rows,
+            elapsed_ns: 1000,
+            full_ns: 500,
+            incremental_ns: 170,
+            cache_update_ns: 50,
+            disagreements: 1,
+            vm_hwm_kib: Some(2048),
+        };
+        let report = batch.bounded_routing_cost(1024, |_, _, _| true);
+        assert_eq!(report.incremental_steps, 1);
+        assert_eq!(report.full_steps, 4);
+        assert_eq!(report.reference_ns, 500);
+        assert_eq!(report.selected_ns, 430);
+        assert_eq!(report.rejected_for_memory, 2);
+        assert_eq!(report.rejected_for_oracle, 1);
+        assert_eq!(report.rejected_for_cost, 1);
+    }
+
+    #[test]
+    fn disabled_selector_never_credits_incremental() {
+        let batch = SequentialBatch {
+            steps: vec![step(100, 10, 10, Some(512), true)],
+            elapsed_ns: 200,
+            full_ns: 100,
+            incremental_ns: 10,
+            cache_update_ns: 10,
+            disagreements: 0,
+            vm_hwm_kib: Some(512),
+        };
+        let report = batch.bounded_routing_cost(1024, |_, _, _| false);
+        assert_eq!(report.full_steps, 1);
+        assert_eq!(report.incremental_steps, 0);
+        assert_eq!(report.selected_ns, 100);
+    }
+}
