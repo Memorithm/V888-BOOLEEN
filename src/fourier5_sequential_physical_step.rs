@@ -1139,7 +1139,7 @@ mod bounded_routing_tests {
             elapsed_ns: 1000,
             full_ns: 500,
             incremental_ns: 170,
-            cache_update_ns: 50,
+            cache_update_ns: 60,
             disagreements: 1,
             vm_hwm_kib: Some(2048),
         };
