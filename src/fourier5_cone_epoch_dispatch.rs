@@ -217,3 +217,568 @@ mod tests {
         assert_eq!(next_committed_epoch(u64::MAX), None);
     }
 }
+
+
+/// A verified sequential transition owns its snapshots: no speculative mutation
+/// escapes when the incremental candidate differs from the independent Full
+/// oracle. The returned cache is canonical even on a fallback.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CanonicalSnapshot<S, C> {
+    pub state: S,
+    pub cache: C,
+    pub epoch: CacheEpoch,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VerifiedPath {
+    Incremental,
+    FullFallback,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifiedTransition<S, C> {
+    pub snapshot: CanonicalSnapshot<S, C>,
+    pub path: VerifiedPath,
+}
+
+/// Execute both paths on separate clones, compare the *entire* resulting
+/// state and cache, then publish exactly one canonical epoch. Full is the
+/// independent reference; this verification function is NOT a production
+/// latency benchmark and must not train the VALID admission policy.
+#[must_use]
+pub fn execute_verified_transition<S, C, F, I>(
+    committed: &CanonicalSnapshot<S, C>,
+    full: F,
+    incremental: I,
+) -> Option<VerifiedTransition<S, C>>
+where
+    S: Clone + Eq,
+    C: Clone + Eq,
+    F: FnOnce(&S, &C) -> (S, C),
+    I: FnOnce(&S, &C) -> (S, C),
+{
+    if committed.epoch.state_revision != committed.epoch.cache_revision {
+        return None;
+    }
+    let next = next_committed_epoch(committed.epoch.state_revision)?;
+    let (full_state, full_cache) = full(&committed.state, &committed.cache);
+    let (candidate_state, candidate_cache) =
+        incremental(&committed.state, &committed.cache);
+    let equal = candidate_state == full_state && candidate_cache == full_cache;
+    let (state, cache, path) = if equal {
+        (candidate_state, candidate_cache, VerifiedPath::Incremental)
+    } else {
+        (full_state, full_cache, VerifiedPath::FullFallback)
+    };
+    Some(VerifiedTransition {
+        snapshot: CanonicalSnapshot { state, cache, epoch: next },
+        path,
+    })
+}
+
+#[cfg(test)]
+mod canonical_transaction_tests {
+    use super::*;
+
+    #[test]
+    fn independent_reference_checks_entire_cache_and_rollback() {
+        let start = CanonicalSnapshot {
+            state: vec![false, true],
+            cache: vec![0_u8, 1],
+            epoch: CacheEpoch { state_revision: 4, cache_revision: 4 },
+        };
+        for corrupt_state in [false, true] {
+            for corrupt_cache in [false, true] {
+                let outcome = execute_verified_transition(
+                    &start,
+                    |state, cache| {
+                        let mut s = state.to_vec();
+                        let mut c = cache.to_vec();
+                        s[0] = true;
+                        c[0] = 7;
+                        (s, c)
+                    },
+                    |state, cache| {
+                        let mut s = state.to_vec();
+                        let mut c = cache.to_vec();
+                        s[0] = !corrupt_state;
+                        c[0] = if corrupt_cache { 8 } else { 7 };
+                        (s, c)
+                    },
+                )
+                .expect("valid epoch");
+                assert_eq!(outcome.snapshot.state, vec![true, true]);
+                assert_eq!(outcome.snapshot.cache, vec![7, 1]);
+                assert_eq!(outcome.snapshot.epoch.state_revision, 5);
+                assert_eq!(outcome.snapshot.epoch.cache_revision, 5);
+                assert_eq!(
+                    outcome.path,
+                    if corrupt_state || corrupt_cache {
+                        VerifiedPath::FullFallback
+                    } else {
+                        VerifiedPath::Incremental
+                    }
+                );
+            }
+        }
+        assert_eq!(start.state, vec![false, true]);
+        assert_eq!(start.cache, vec![0, 1]);
+    }
+
+    #[test]
+    fn stale_or_overflowed_epoch_never_invokes_either_engine() {
+        use std::cell::Cell;
+        for epoch in [
+            CacheEpoch { state_revision: 3, cache_revision: 2 },
+            CacheEpoch { state_revision: u64::MAX, cache_revision: u64::MAX },
+        ] {
+            let called = Cell::new(false);
+            let start = CanonicalSnapshot { state: 0_u8, cache: 0_u8, epoch };
+            let result = execute_verified_transition(
+                &start,
+                |_, _| { called.set(true); (1, 1) },
+                |_, _| { called.set(true); (1, 1) },
+            );
+            assert!(result.is_none());
+            assert!(!called.get());
+        }
+    }
+
+    #[test]
+    fn sequential_commits_rebuild_from_last_canonical_snapshot() {
+        let mut snapshot = CanonicalSnapshot {
+            state: 0_u64,
+            cache: 0_u64,
+            epoch: CacheEpoch { state_revision: 0, cache_revision: 0 },
+        };
+        for step in 1..=8_u64 {
+            let result = execute_verified_transition(
+                &snapshot,
+                |state, _| (*state + 1, (*state + 1) * 3),
+                |state, cache| {
+                    let next = *state + 1;
+                    (next, if step == 3 { *cache } else { next * 3 })
+                },
+            )
+            .expect("epoch");
+            assert_eq!(result.snapshot.state, step);
+            assert_eq!(result.snapshot.cache, step * 3);
+            assert_eq!(result.snapshot.epoch.state_revision, step);
+            assert_eq!(
+                result.path,
+                if step == 3 { VerifiedPath::FullFallback } else { VerifiedPath::Incremental }
+            );
+            snapshot = result.snapshot;
+        }
+    }
+}
+
+
+/// Production dispatch: Full is invoked only when the frozen VALID policy
+/// rejects Incremental. Both engines return a *complete canonical* state/cache
+/// snapshot. Unlike the verified oracle path, this does not prove equality at
+/// runtime; correctness requires independently qualified engine equivalence.
+/// The old snapshot is never modified and epoch overflow rejects before work.
+#[must_use]
+pub fn execute_dispatched_transition<S, C, F, I>(
+    committed: &CanonicalSnapshot<S, C>,
+    intervention: Intervention,
+    admissions: &[ConeAdmission],
+    peak_limit_kib: u64,
+    full: F,
+    incremental: I,
+) -> Option<VerifiedTransition<S, C>>
+where
+    F: FnOnce(&S, &C) -> (S, C),
+    I: FnOnce(&S, &C) -> (S, C),
+{
+    let revision = committed.epoch.state_revision;
+    if committed.epoch.cache_revision != revision {
+        return None;
+    }
+    let next = next_committed_epoch(revision)?;
+    let path = choose(intervention, admissions, revision, peak_limit_kib);
+    let (state, cache) = match path {
+        EngineChoice::Full => full(&committed.state, &committed.cache),
+        EngineChoice::Incremental => incremental(&committed.state, &committed.cache),
+    };
+    Some(VerifiedTransition {
+        snapshot: CanonicalSnapshot { state, cache, epoch: next },
+        path: match path {
+            EngineChoice::Full => VerifiedPath::FullFallback,
+            EngineChoice::Incremental => VerifiedPath::Incremental,
+        },
+    })
+}
+
+#[cfg(test)]
+mod dispatched_transition_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn independent_oracle_for_sequential_mixed_cones() {
+        let admissions = [
+            ConeAdmission { valid_admitted: true, cone_bucket: 0, max_changed_gates: 2 },
+            ConeAdmission { valid_admitted: false, cone_bucket: 1, max_changed_gates: 9 },
+        ];
+        let mut snapshot = CanonicalSnapshot {
+            state: 0_u64,
+            cache: 0_u64,
+            epoch: CacheEpoch { state_revision: 0, cache_revision: 0 },
+        };
+        for step in 0..16_u64 {
+            let full_called = Cell::new(false);
+            let incremental_called = Cell::new(false);
+            let bucket = (step % 3) as usize;
+            let gates = (step % 4) as usize;
+            let admissible = bucket == 0 && gates <= 2;
+            let intervention = Intervention {
+                cone_bucket: bucket,
+                changed_gates: gates,
+                cache_epoch: snapshot.epoch,
+                observed_peak_kib: Some(1024),
+            };
+            let result = execute_dispatched_transition(
+                &snapshot, intervention, &admissions, 2048,
+                |state, _| {
+                    full_called.set(true);
+                    (*state + 1, (*state + 1) * 7)
+                },
+                |state, _| {
+                    incremental_called.set(true);
+                    (*state + 1, (*state + 1) * 7)
+                },
+            ).expect("valid sequential epoch");
+            assert_eq!(incremental_called.get(), admissible);
+            assert_eq!(full_called.get(), !admissible);
+            assert_eq!(result.snapshot.state, step + 1);
+            assert_eq!(result.snapshot.cache, (step + 1) * 7);
+            assert_eq!(result.snapshot.epoch.state_revision, step + 1);
+            assert_eq!(result.snapshot.epoch.cache_revision, step + 1);
+            snapshot = result.snapshot;
+        }
+    }
+
+    #[test]
+    fn invalid_epochs_never_execute_and_missing_memory_falls_back() {
+        for epoch in [
+            CacheEpoch { state_revision: 5, cache_revision: 4 },
+            CacheEpoch { state_revision: u64::MAX, cache_revision: u64::MAX },
+        ] {
+            let called = Cell::new(false);
+            let snapshot = CanonicalSnapshot { state: 1_u8, cache: 1_u8, epoch };
+            let intervention = Intervention {
+                cone_bucket: 0, changed_gates: 0,
+                cache_epoch: epoch, observed_peak_kib: Some(100),
+            };
+            let outcome = execute_dispatched_transition(
+                &snapshot, intervention, &[], 200,
+                |_, _| { called.set(true); (2, 2) },
+                |_, _| { called.set(true); (2, 2) },
+            );
+            assert!(outcome.is_none());
+            assert!(!called.get());
+        }
+        let snapshot = CanonicalSnapshot {
+            state: 1_u8, cache: 1_u8,
+            epoch: CacheEpoch { state_revision: 2, cache_revision: 2 },
+        };
+        let intervention = Intervention {
+            cone_bucket: 0, changed_gates: 0,
+            cache_epoch: snapshot.epoch, observed_peak_kib: None,
+        };
+        let result = execute_dispatched_transition(
+            &snapshot, intervention,
+            &[ConeAdmission { valid_admitted: true, cone_bucket: 0, max_changed_gates: 2 }],
+            200,
+            |_, _| (3, 9),
+            |_, _| panic!("incremental must not execute without memory evidence"),
+        ).expect("Full fallback");
+        assert_eq!(result.path, VerifiedPath::FullFallback);
+        assert_eq!((result.snapshot.state, result.snapshot.cache), (3, 9));
+        assert_eq!((snapshot.state, snapshot.cache), (1, 1));
+    }
+}
+
+
+/// Periodic independent Full checkpoints for production-like sequential runs.
+/// An admitted Incremental step is verified at every `audit_interval`-th
+/// committed revision. A zero interval disables Incremental entirely.
+/// Checkpoint results are never used to recalibrate frozen VALID admissions.
+#[must_use]
+pub fn execute_checkpointed_transition<S, C, F, I>(
+    committed: &CanonicalSnapshot<S, C>,
+    intervention: Intervention,
+    admissions: &[ConeAdmission],
+    peak_limit_kib: u64,
+    audit_interval: u64,
+    full: F,
+    incremental: I,
+) -> Option<VerifiedTransition<S, C>>
+where
+    S: Clone + Eq,
+    C: Clone + Eq,
+    F: FnOnce(&S, &C) -> (S, C),
+    I: FnOnce(&S, &C) -> (S, C),
+{
+    let revision = committed.epoch.state_revision;
+    if committed.epoch.cache_revision != revision {
+        return None;
+    }
+    let next = next_committed_epoch(revision)?;
+    let choice = if audit_interval == 0 {
+        EngineChoice::Full
+    } else {
+        choose(intervention, admissions, revision, peak_limit_kib)
+    };
+    if choice == EngineChoice::Full {
+        let (state, cache) = full(&committed.state, &committed.cache);
+        return Some(VerifiedTransition {
+            snapshot: CanonicalSnapshot {
+                state,
+                cache,
+                epoch: next,
+            },
+            path: VerifiedPath::FullFallback,
+        });
+    }
+    if next.state_revision % audit_interval == 0 {
+        return execute_verified_transition(committed, full, incremental);
+    }
+    let (state, cache) = incremental(&committed.state, &committed.cache);
+    Some(VerifiedTransition {
+        snapshot: CanonicalSnapshot {
+            state,
+            cache,
+            epoch: next,
+        },
+        path: VerifiedPath::Incremental,
+    })
+}
+
+#[cfg(test)]
+mod checkpointed_transition_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn independent_sequential_checkpoint_oracle_with_corrupted_cache() {
+        let admissions = [ConeAdmission {
+            valid_admitted: true,
+            cone_bucket: 0,
+            max_changed_gates: 2,
+        }];
+        let mut snapshot = CanonicalSnapshot {
+            state: 0_u64,
+            cache: 0_u64,
+            epoch: CacheEpoch {
+                state_revision: 0,
+                cache_revision: 0,
+            },
+        };
+        for step in 1..=12_u64 {
+            let full_calls = Cell::new(0);
+            let incremental_calls = Cell::new(0);
+            let intervention = Intervention {
+                cone_bucket: 0,
+                changed_gates: 1,
+                cache_epoch: snapshot.epoch,
+                observed_peak_kib: Some(1024),
+            };
+            let result = execute_checkpointed_transition(
+                &snapshot,
+                intervention,
+                &admissions,
+                2048,
+                3,
+                |state, _| {
+                    full_calls.set(full_calls.get() + 1);
+                    (*state + 1, (*state + 1) * 5)
+                },
+                |state, _| {
+                    incremental_calls.set(incremental_calls.get() + 1);
+                    (*state + 1, if step == 6 { 0 } else { (*state + 1) * 5 })
+                },
+            )
+            .expect("valid epoch");
+            assert_eq!(full_calls.get(), u32::from(step % 3 == 0));
+            assert_eq!(incremental_calls.get(), 1);
+            assert_eq!(result.snapshot.state, step);
+            assert_eq!(result.snapshot.cache, step * 5);
+            assert_eq!(
+                result.path,
+                if step == 6 {
+                    VerifiedPath::FullFallback
+                } else {
+                    VerifiedPath::Incremental
+                }
+            );
+            snapshot = result.snapshot;
+        }
+    }
+
+    #[test]
+    fn disabled_audit_and_invalid_epoch_never_run_incremental() {
+        let admission = [ConeAdmission {
+            valid_admitted: true,
+            cone_bucket: 0,
+            max_changed_gates: 1,
+        }];
+        let snapshot = CanonicalSnapshot {
+            state: 2_u8,
+            cache: 4_u8,
+            epoch: CacheEpoch {
+                state_revision: 2,
+                cache_revision: 2,
+            },
+        };
+        let intervention = Intervention {
+            cone_bucket: 0,
+            changed_gates: 1,
+            cache_epoch: snapshot.epoch,
+            observed_peak_kib: Some(100),
+        };
+        let result = execute_checkpointed_transition(
+            &snapshot,
+            intervention,
+            &admission,
+            200,
+            0,
+            |_, _| (3, 6),
+            |_, _| panic!("incremental must not execute"),
+        )
+        .expect("Full only");
+        assert_eq!(result.path, VerifiedPath::FullFallback);
+        assert_eq!((result.snapshot.state, result.snapshot.cache), (3, 6));
+        let stale = CanonicalSnapshot {
+            epoch: CacheEpoch {
+                state_revision: 2,
+                cache_revision: 1,
+            },
+            ..snapshot
+        };
+        assert!(execute_checkpointed_transition(
+            &stale,
+            intervention,
+            &admission,
+            200,
+            3,
+            |_, _| panic!("Full must not execute"),
+            |_, _| panic!("Incremental must not execute"),
+        )
+        .is_none());
+    }
+}
+
+
+/// Atomically verify a sequence of accepted synthetic interventions. Each
+/// candidate is evaluated against Full from the last canonical snapshot.
+/// No intermediate snapshot is published if any step fails or an epoch
+/// overflows. The caller owns the circuit and must not mutate it in callbacks.
+/// This is a correctness oracle, not a throughput benchmark.
+#[must_use]
+pub fn execute_verified_sequence<S, C, F, I>(
+    committed: &CanonicalSnapshot<S, C>,
+    steps: usize,
+    mut full: F,
+    mut incremental: I,
+) -> Option<(CanonicalSnapshot<S, C>, usize)>
+where
+    S: Clone + Eq,
+    C: Clone + Eq,
+    F: FnMut(usize, &S, &C) -> Option<(S, C)>,
+    I: FnMut(usize, &S, &C) -> Option<(S, C)>,
+{
+    if committed.epoch.state_revision != committed.epoch.cache_revision {
+        return None;
+    }
+    let count = u64::try_from(steps).ok()?;
+    committed.epoch.state_revision.checked_add(count)?;
+    let mut current = committed.clone();
+    let mut fallbacks = 0_usize;
+    for index in 0..steps {
+        let next = next_committed_epoch(current.epoch.state_revision)?;
+        let (full_state, full_cache) = full(index, &current.state, &current.cache)?;
+        let (candidate_state, candidate_cache) =
+            incremental(index, &current.state, &current.cache)?;
+        let equal = full_state == candidate_state && full_cache == candidate_cache;
+        if !equal {
+            fallbacks += 1;
+        }
+        let (state, cache) = if equal {
+            (candidate_state, candidate_cache)
+        } else {
+            (full_state, full_cache)
+        };
+        current = CanonicalSnapshot { state, cache, epoch: next };
+    }
+    Some((current, fallbacks))
+}
+
+#[cfg(test)]
+mod verified_sequence_atomic_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn heterogeneous_sequence_uses_canonical_cache_after_each_rejection() {
+        let original = CanonicalSnapshot {
+            state: 0_u64,
+            cache: 0_u64,
+            epoch: CacheEpoch { state_revision: 10, cache_revision: 10 },
+        };
+        let (result, fallbacks) = execute_verified_sequence(
+            &original,
+            9,
+            |i, state, _| {
+                let next = state + (i as u64 % 3) + 1;
+                Some((next, next * 7))
+            },
+            |i, state, cache| {
+                // The incremental path must always see the previous accepted cache.
+                assert_eq!(*cache, state * 7);
+                let next = state + (i as u64 % 3) + 1;
+                Some((next, if i == 2 || i == 6 { 0 } else { next * 7 }))
+            },
+        ).unwrap();
+        let expected = (0..9_u64).fold(0_u64, |sum, i| sum + i % 3 + 1);
+        assert_eq!(result.state, expected);
+        assert_eq!(result.cache, expected * 7);
+        assert_eq!(result.epoch, CacheEpoch { state_revision: 19, cache_revision: 19 });
+        assert_eq!(fallbacks, 2);
+        assert_eq!((original.state, original.cache), (0, 0));
+    }
+
+    #[test]
+    fn failure_is_atomic_and_overflow_rejects_before_callbacks() {
+        let original = CanonicalSnapshot {
+            state: 4_u8,
+            cache: 8_u8,
+            epoch: CacheEpoch { state_revision: 1, cache_revision: 1 },
+        };
+        let result = execute_verified_sequence(
+            &original, 4,
+            |i, _, _| if i == 2 { None } else { Some((5, 10)) },
+            |_, _, _| Some((5, 10)),
+        );
+        assert!(result.is_none());
+        assert_eq!((original.state, original.cache), (4, 8));
+
+        let called = Cell::new(false);
+        let overflow = CanonicalSnapshot {
+            epoch: CacheEpoch {
+                state_revision: u64::MAX - 1,
+                cache_revision: u64::MAX - 1,
+            },
+            ..original
+        };
+        let rejected = execute_verified_sequence(
+            &overflow, 2,
+            |_, _, _| { called.set(true); Some((5, 10)) },
+            |_, _, _| { called.set(true); Some((5, 10)) },
+        );
+        assert!(rejected.is_none());
+        assert!(!called.get());
+    }
+}
