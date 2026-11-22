@@ -36,6 +36,8 @@ pub enum CalibrationError {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FrozenConePolicy {
     envelopes: BTreeMap<u32, ConeEnvelope>,
+    /// Only geometries actually sampled sufficiently on VALID may use Incremental.
+    admitted_geometries: BTreeSet<(u32, u64, u64)>,
 }
 
 impl FrozenConePolicy {
@@ -66,6 +68,7 @@ impl FrozenConePolicy {
             groups.entry(sample.cone_class).or_default().push(sample);
         }
         let mut envelopes = BTreeMap::new();
+        let mut admitted_geometries = BTreeSet::new();
         for (cone_class, samples) in groups {
             if samples.len() < min_samples_per_class {
                 continue;
@@ -82,6 +85,15 @@ impl FrozenConePolicy {
                     && s.vm_hwm_kib.is_some_and(|m| m <= memory_limit_kib)
             });
             if safe && max_incremental_total_ns < u128::from(min_full_ns) {
+                let mut geometry_counts = BTreeMap::<(u64, u64), usize>::new();
+                for sample in &samples {
+                    *geometry_counts.entry((sample.gates, sample.cone_gates)).or_default() += 1;
+                }
+                for ((gates, cone_gates), count) in geometry_counts {
+                    if count >= min_samples_per_class {
+                        admitted_geometries.insert((cone_class, gates, cone_gates));
+                    }
+                }
                 envelopes.insert(
                     cone_class,
                     ConeEnvelope {
@@ -98,15 +110,19 @@ impl FrozenConePolicy {
                 );
             }
         }
-        Ok(Self { envelopes })
+        Ok(Self {
+            envelopes,
+            admitted_geometries,
+        })
     }
 
     /// Runtime routing uses only frozen VALID evidence and current geometry.
     /// No TEST/OOD outcomes or measured timings are fed back into calibration.
     pub fn admits(&self, cone_class: u32, gates: u64, cone_gates: u64) -> bool {
-        self.envelopes.get(&cone_class).is_some_and(|e| {
-            gates > 0 && cone_gates > 0 && cone_gates <= gates && cone_gates <= e.max_cone_gates
-        })
+        self.envelopes.contains_key(&cone_class)
+            && self
+                .admitted_geometries
+                .contains(&(cone_class, gates, cone_gates))
     }
 
     pub fn envelopes(&self) -> &BTreeMap<u32, ConeEnvelope> {
@@ -131,6 +147,26 @@ mod tests {
             decision_equal: true,
             vm_hwm_kib: Some(1024),
         }
+    }
+
+    #[test]
+    fn oracle_requires_repeated_exact_valid_geometry_not_interpolation() {
+        let rows = [
+            sample(1, 7),
+            sample(2, 7),
+            ValidObservation { sample_id: 3, gates: 1000, cone_gates: 20, ..sample(3, 7) },
+            ValidObservation { sample_id: 4, gates: 1000, cone_gates: 20, ..sample(4, 7) },
+            ValidObservation { sample_id: 5, gates: 500, cone_gates: 15, ..sample(5, 7) },
+        ];
+        let policy = FrozenConePolicy::calibrate(&rows, 2, 2048).unwrap();
+        for gates in [99, 100, 101, 500, 999, 1000, 1001] {
+            for cone in [9, 10, 15, 20, 21] {
+                let expected = (gates == 100 && cone == 10)
+                    || (gates == 1000 && cone == 20);
+                assert_eq!(policy.admits(7, gates, cone), expected);
+            }
+        }
+        assert!(!policy.admits(8, 100, 10));
     }
 
     #[test]
