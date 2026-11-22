@@ -172,7 +172,7 @@ mod tests {
         low.gates = 100;
         let mut high = sample(2, 7);
         high.gates = 200;
-        let policy = FrozenConePolicy::calibrate(&[low, high], 2, 2048).unwrap();
+        let policy = FrozenConePolicy::calibrate(&[low, high], 1, 2048).unwrap();
         // Independent range oracle: only observed circuit-size interval is admissible.
         for gates in [0, 1, 99, 100, 150, 200, 201, 1_000_000] {
             let expected = gates == 100 || gates == 200;
@@ -188,7 +188,7 @@ mod tests {
         first.cone_gates = 4;
         let mut second = sample(2, 12);
         second.cone_gates = 8;
-        let policy = FrozenConePolicy::calibrate(&[first, second], 2, 2048).unwrap();
+        let policy = FrozenConePolicy::calibrate(&[first, second], 1, 2048).unwrap();
         for cone in 0..=12 {
             let expected = cone == 4 || cone == 8;
             assert_eq!(policy.admits(12, 100, cone), expected, "cone={cone}");
