@@ -121,6 +121,79 @@ impl FrozenConePolicy {
         })
     }
 
+    /// Calibrate each exact geometry independently. A slow geometry must not
+    /// suppress a distinct, repeatedly measured safe geometry in the same class.
+    /// All observations remain VALID-only; no TEST/OOD feedback is consumed.
+    pub fn calibrate_stratified(
+        valid: &[ValidObservation],
+        min_samples_per_geometry: usize,
+        memory_limit_kib: u64,
+    ) -> Result<Self, CalibrationError> {
+        if valid.is_empty() || min_samples_per_geometry == 0 {
+            return Err(CalibrationError::Empty);
+        }
+        let mut seen = BTreeSet::new();
+        let mut strata: BTreeMap<(u32, u64, u64), Vec<ValidObservation>> = BTreeMap::new();
+        for &sample in valid {
+            if !seen.insert(sample.sample_id) {
+                return Err(CalibrationError::DuplicateSample);
+            }
+            if sample.gates == 0
+                || sample.cone_gates == 0
+                || sample.cone_gates > sample.gates
+                || sample.full_ns == 0
+                || sample.vm_hwm_kib.is_none()
+            {
+                return Err(CalibrationError::InvalidObservation);
+            }
+            strata
+                .entry((sample.cone_class, sample.gates, sample.cone_gates))
+                .or_default()
+                .push(sample);
+        }
+
+        let mut envelopes: BTreeMap<u32, ConeEnvelope> = BTreeMap::new();
+        let mut observed_geometry: BTreeMap<u32, BTreeSet<(u64, u64)>> = BTreeMap::new();
+        for ((class, gates, cone), rows) in strata {
+            if rows.len() < min_samples_per_geometry {
+                continue;
+            }
+            let min_full = rows.iter().map(|r| r.full_ns).min().unwrap_or(0);
+            let max_incremental = rows
+                .iter()
+                .map(|r| u128::from(r.refresh_ns) + u128::from(r.incremental_ns))
+                .max()
+                .unwrap_or(u128::MAX);
+            if max_incremental >= u128::from(min_full)
+                || rows.iter().any(|r| {
+                    !r.oracle_equal
+                        || !r.decision_equal
+                        || !r.vm_hwm_kib.is_some_and(|m| m <= memory_limit_kib)
+                })
+            {
+                continue;
+            }
+            observed_geometry.entry(class).or_default().insert((gates, cone));
+            let envelope = envelopes.entry(class).or_insert(ConeEnvelope {
+                cone_class: class,
+                max_cone_gates: cone,
+                min_gates: gates,
+                max_gates: gates,
+                min_full_ns: min_full,
+                max_incremental_total_ns: max_incremental,
+                samples: 0,
+            });
+            envelope.max_cone_gates = envelope.max_cone_gates.max(cone);
+            envelope.min_gates = envelope.min_gates.min(gates);
+            envelope.max_gates = envelope.max_gates.max(gates);
+            envelope.min_full_ns = envelope.min_full_ns.min(min_full);
+            envelope.max_incremental_total_ns =
+                envelope.max_incremental_total_ns.max(max_incremental);
+            envelope.samples += rows.len();
+        }
+        Ok(Self { envelopes, observed_geometry })
+    }
+
     /// Only exact geometry pairs observed during VALID are admitted; an interval
     /// between measured sizes is not evidence of safe incremental execution.
     /// Runtime routing uses only frozen VALID evidence and current geometry.
@@ -160,6 +233,44 @@ mod tests {
             decision_equal: true,
             vm_hwm_kib: Some(1024),
         }
+    }
+
+    #[test]
+    fn stratified_oracle_preserves_safe_geometry_despite_slow_neighbor() {
+        let mut rows = Vec::new();
+        for (id, cone, refresh) in [(1, 4, 10), (2, 4, 20), (3, 8, 90), (4, 8, 90)] {
+            let mut r = sample(id, 7);
+            r.cone_gates = cone;
+            r.refresh_ns = refresh;
+            rows.push(r);
+        }
+        let policy = FrozenConePolicy::calibrate_stratified(&rows, 2, 2048).unwrap();
+        assert!(policy.admits(7, 100, 4));
+        assert!(!policy.admits(7, 100, 8));
+        assert!(!policy.admits(7, 100, 6));
+        assert!(!FrozenConePolicy::calibrate(&rows, 2, 2048)
+            .unwrap()
+            .admits(7, 100, 4));
+    }
+
+    #[test]
+    fn stratified_oracle_fails_closed_on_bad_provenance_and_decisions() {
+        let mut rows = vec![sample(1, 3), sample(2, 3)];
+        rows[1].decision_equal = false;
+        assert!(!FrozenConePolicy::calibrate_stratified(&rows, 2, 2048)
+            .unwrap()
+            .admits(3, 100, 10));
+        rows[1].decision_equal = true;
+        rows[1].vm_hwm_kib = Some(2049);
+        assert!(!FrozenConePolicy::calibrate_stratified(&rows, 2, 2048)
+            .unwrap()
+            .admits(3, 100, 10));
+        rows[1].vm_hwm_kib = Some(1024);
+        rows[1].sample_id = 1;
+        assert_eq!(
+            FrozenConePolicy::calibrate_stratified(&rows, 2, 2048),
+            Err(CalibrationError::DuplicateSample)
+        );
     }
 
     #[test]
