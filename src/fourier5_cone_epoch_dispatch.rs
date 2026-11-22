@@ -670,3 +670,115 @@ mod checkpointed_transition_tests {
         .is_none());
     }
 }
+
+
+/// Atomically verify a sequence of accepted synthetic interventions. Each
+/// candidate is evaluated against Full from the last canonical snapshot.
+/// No intermediate snapshot is published if any step fails or an epoch
+/// overflows. The caller owns the circuit and must not mutate it in callbacks.
+/// This is a correctness oracle, not a throughput benchmark.
+#[must_use]
+pub fn execute_verified_sequence<S, C, F, I>(
+    committed: &CanonicalSnapshot<S, C>,
+    steps: usize,
+    mut full: F,
+    mut incremental: I,
+) -> Option<(CanonicalSnapshot<S, C>, usize)>
+where
+    S: Clone + Eq,
+    C: Clone + Eq,
+    F: FnMut(usize, &S, &C) -> Option<(S, C)>,
+    I: FnMut(usize, &S, &C) -> Option<(S, C)>,
+{
+    if committed.epoch.state_revision != committed.epoch.cache_revision {
+        return None;
+    }
+    let count = u64::try_from(steps).ok()?;
+    committed.epoch.state_revision.checked_add(count)?;
+    let mut current = committed.clone();
+    let mut fallbacks = 0_usize;
+    for index in 0..steps {
+        let next = next_committed_epoch(current.epoch.state_revision)?;
+        let (full_state, full_cache) = full(index, &current.state, &current.cache)?;
+        let (candidate_state, candidate_cache) =
+            incremental(index, &current.state, &current.cache)?;
+        let equal = full_state == candidate_state && full_cache == candidate_cache;
+        if !equal {
+            fallbacks += 1;
+        }
+        let (state, cache) = if equal {
+            (candidate_state, candidate_cache)
+        } else {
+            (full_state, full_cache)
+        };
+        current = CanonicalSnapshot { state, cache, epoch: next };
+    }
+    Some((current, fallbacks))
+}
+
+#[cfg(test)]
+mod verified_sequence_atomic_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn heterogeneous_sequence_uses_canonical_cache_after_each_rejection() {
+        let original = CanonicalSnapshot {
+            state: 0_u64,
+            cache: 0_u64,
+            epoch: CacheEpoch { state_revision: 10, cache_revision: 10 },
+        };
+        let (result, fallbacks) = execute_verified_sequence(
+            &original,
+            9,
+            |i, state, _| {
+                let next = state + (i as u64 % 3) + 1;
+                Some((next, next * 7))
+            },
+            |i, state, cache| {
+                // The incremental path must always see the previous accepted cache.
+                assert_eq!(*cache, state * 7);
+                let next = state + (i as u64 % 3) + 1;
+                Some((next, if i == 2 || i == 6 { 0 } else { next * 7 }))
+            },
+        ).unwrap();
+        let expected = (0..9_u64).fold(0_u64, |sum, i| sum + i % 3 + 1);
+        assert_eq!(result.state, expected);
+        assert_eq!(result.cache, expected * 7);
+        assert_eq!(result.epoch, CacheEpoch { state_revision: 19, cache_revision: 19 });
+        assert_eq!(fallbacks, 2);
+        assert_eq!((original.state, original.cache), (0, 0));
+    }
+
+    #[test]
+    fn failure_is_atomic_and_overflow_rejects_before_callbacks() {
+        let original = CanonicalSnapshot {
+            state: 4_u8,
+            cache: 8_u8,
+            epoch: CacheEpoch { state_revision: 1, cache_revision: 1 },
+        };
+        let result = execute_verified_sequence(
+            &original, 4,
+            |i, _, _| if i == 2 { None } else { Some((5, 10)) },
+            |_, _, _| Some((5, 10)),
+        );
+        assert!(result.is_none());
+        assert_eq!((original.state, original.cache), (4, 8));
+
+        let called = Cell::new(false);
+        let overflow = CanonicalSnapshot {
+            epoch: CacheEpoch {
+                state_revision: u64::MAX - 1,
+                cache_revision: u64::MAX - 1,
+            },
+            ..original
+        };
+        let rejected = execute_verified_sequence(
+            &overflow, 2,
+            |_, _, _| { called.set(true); Some((5, 10)) },
+            |_, _, _| { called.set(true); Some((5, 10)) },
+        );
+        assert!(rejected.is_none());
+        assert!(!called.get());
+    }
+}
