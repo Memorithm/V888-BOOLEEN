@@ -372,3 +372,131 @@ mod canonical_transaction_tests {
         }
     }
 }
+
+
+/// Production dispatch: Full is invoked only when the frozen VALID policy
+/// rejects Incremental. Both engines return a *complete canonical* state/cache
+/// snapshot. Unlike the verified oracle path, this does not prove equality at
+/// runtime; correctness requires independently qualified engine equivalence.
+/// The old snapshot is never modified and epoch overflow rejects before work.
+#[must_use]
+pub fn execute_dispatched_transition<S, C, F, I>(
+    committed: &CanonicalSnapshot<S, C>,
+    intervention: Intervention,
+    admissions: &[ConeAdmission],
+    peak_limit_kib: u64,
+    full: F,
+    incremental: I,
+) -> Option<VerifiedTransition<S, C>>
+where
+    F: FnOnce(&S, &C) -> (S, C),
+    I: FnOnce(&S, &C) -> (S, C),
+{
+    let revision = committed.epoch.state_revision;
+    if committed.epoch.cache_revision != revision {
+        return None;
+    }
+    let next = next_committed_epoch(revision)?;
+    let path = choose(intervention, admissions, revision, peak_limit_kib);
+    let (state, cache) = match path {
+        EngineChoice::Full => full(&committed.state, &committed.cache),
+        EngineChoice::Incremental => incremental(&committed.state, &committed.cache),
+    };
+    Some(VerifiedTransition {
+        snapshot: CanonicalSnapshot { state, cache, epoch: next },
+        path: match path {
+            EngineChoice::Full => VerifiedPath::FullFallback,
+            EngineChoice::Incremental => VerifiedPath::Incremental,
+        },
+    })
+}
+
+#[cfg(test)]
+mod dispatched_transition_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn independent_oracle_for_sequential_mixed_cones() {
+        let admissions = [
+            ConeAdmission { valid_admitted: true, cone_bucket: 0, max_changed_gates: 2 },
+            ConeAdmission { valid_admitted: false, cone_bucket: 1, max_changed_gates: 9 },
+        ];
+        let mut snapshot = CanonicalSnapshot {
+            state: 0_u64,
+            cache: 0_u64,
+            epoch: CacheEpoch { state_revision: 0, cache_revision: 0 },
+        };
+        for step in 0..16_u64 {
+            let full_called = Cell::new(false);
+            let incremental_called = Cell::new(false);
+            let bucket = (step % 3) as usize;
+            let gates = (step % 4) as usize;
+            let admissible = bucket == 0 && gates <= 2;
+            let intervention = Intervention {
+                cone_bucket: bucket,
+                changed_gates: gates,
+                cache_epoch: snapshot.epoch,
+                observed_peak_kib: Some(1024),
+            };
+            let result = execute_dispatched_transition(
+                &snapshot, intervention, &admissions, 2048,
+                |state, _| {
+                    full_called.set(true);
+                    (*state + 1, (*state + 1) * 7)
+                },
+                |state, _| {
+                    incremental_called.set(true);
+                    (*state + 1, (*state + 1) * 7)
+                },
+            ).expect("valid sequential epoch");
+            assert_eq!(incremental_called.get(), admissible);
+            assert_eq!(full_called.get(), !admissible);
+            assert_eq!(result.snapshot.state, step + 1);
+            assert_eq!(result.snapshot.cache, (step + 1) * 7);
+            assert_eq!(result.snapshot.epoch.state_revision, step + 1);
+            assert_eq!(result.snapshot.epoch.cache_revision, step + 1);
+            snapshot = result.snapshot;
+        }
+    }
+
+    #[test]
+    fn invalid_epochs_never_execute_and_missing_memory_falls_back() {
+        for epoch in [
+            CacheEpoch { state_revision: 5, cache_revision: 4 },
+            CacheEpoch { state_revision: u64::MAX, cache_revision: u64::MAX },
+        ] {
+            let called = Cell::new(false);
+            let snapshot = CanonicalSnapshot { state: 1_u8, cache: 1_u8, epoch };
+            let intervention = Intervention {
+                cone_bucket: 0, changed_gates: 0,
+                cache_epoch: epoch, observed_peak_kib: Some(100),
+            };
+            let outcome = execute_dispatched_transition(
+                &snapshot, intervention, &[], 200,
+                |_, _| { called.set(true); (2, 2) },
+                |_, _| { called.set(true); (2, 2) },
+            );
+            assert!(outcome.is_none());
+            assert!(!called.get());
+        }
+        let snapshot = CanonicalSnapshot {
+            state: 1_u8, cache: 1_u8,
+            epoch: CacheEpoch { state_revision: 2, cache_revision: 2 },
+        };
+        let intervention = Intervention {
+            cone_bucket: 0, changed_gates: 0,
+            cache_epoch: snapshot.epoch, observed_peak_kib: None,
+        };
+        let result = execute_dispatched_transition(
+            &snapshot, intervention,
+            &[ConeAdmission { valid_admitted: true, cone_bucket: 0, max_changed_gates: 2 }],
+            200,
+            |_, _| (3, 9),
+            |_, _| panic!("incremental must not execute without memory evidence"),
+        ).expect("Full fallback");
+        assert_eq!(result.path, VerifiedPath::FullFallback);
+        assert_eq!((result.snapshot.state, result.snapshot.cache), (3, 9));
+        assert_eq!((snapshot.state, snapshot.cache), (1, 1));
+    }
+}
