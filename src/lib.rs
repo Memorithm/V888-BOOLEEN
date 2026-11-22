@@ -354,3 +354,6 @@ pub mod fourier5_production_cost_admission;
 
 /// Fail-closed runtime cone dispatch bound to exact state/cache epochs.
 pub mod fourier5_cone_epoch_dispatch;
+
+/// Conservative split-isolated worst-case sequential admission.
+pub mod fourier5_valid_worst_case;
