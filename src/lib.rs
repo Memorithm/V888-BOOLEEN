@@ -357,3 +357,6 @@ pub mod fourier5_cone_epoch_dispatch;
 
 /// One-way fail-closed breaker for paired sequential synthetic measurements.
 pub mod fourier5_sequential_breaker;
+
+/// Split-disjoint measured sequential cohort accounting (synthetic workloads).
+pub mod fourier5_sequential_cohort_audit;
