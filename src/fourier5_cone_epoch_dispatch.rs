@@ -217,3 +217,158 @@ mod tests {
         assert_eq!(next_committed_epoch(u64::MAX), None);
     }
 }
+
+ 
+/// A verified sequence step: the intervention is evaluated against the
+/// previously committed epoch, never against a speculative cache revision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VerifiedSequenceStep {
+    pub intervention: Intervention,
+    pub evidence: CommitEvidence,
+}
+
+/// Fail-closed sequential admission. Every step must be Incremental-admissible
+/// and have independent Full/canonical-cache evidence before the next epoch.
+/// This does not execute either engine and must not be used as a benchmark.
+#[must_use]
+pub fn admit_verified_sequence(
+    initial_revision: u64,
+    steps: &[VerifiedSequenceStep],
+    admissions: &[ConeAdmission],
+    peak_limit_kib: u64,
+) -> Option<CacheEpoch> {
+    let mut revision = initial_revision;
+    for step in steps {
+        if choose(step.intervention, admissions, revision, peak_limit_kib)
+            != EngineChoice::Incremental
+            || step.evidence.previous_epoch != step.intervention.cache_epoch
+        {
+            return None;
+        }
+        revision = commit_verified_epoch(revision, step.evidence)?.state_revision;
+    }
+    Some(CacheEpoch {
+        state_revision: revision,
+        cache_revision: revision,
+    })
+}
+
+#[cfg(test)]
+mod sequential_admission_oracle_tests {
+    use super::*;
+
+    #[test]
+    fn independent_sequence_oracle_checks_each_epoch_and_evidence() {
+        let admissions = [ConeAdmission {
+            valid_admitted: true,
+            cone_bucket: 3,
+            max_changed_gates: 4,
+        }];
+        for len in 0..=4 {
+            for failure_at in 0..len {
+                for failure_kind in 0..4 {
+                    let steps: Vec<_> = (0..len)
+                        .map(|i| {
+                            let revision = 10 + i as u64;
+                            let epoch = CacheEpoch {
+                                state_revision: revision,
+                                cache_revision: revision,
+                            };
+                            let mut step = VerifiedSequenceStep {
+                                intervention: Intervention {
+                                    cone_bucket: 3,
+                                    changed_gates: 2,
+                                    cache_epoch: epoch,
+                                    observed_peak_kib: Some(1024),
+                                },
+                                evidence: CommitEvidence {
+                                    previous_epoch: epoch,
+                                    full_state_equal: true,
+                                    canonical_cache_equal: true,
+                                    cache_refresh_complete: true,
+                                },
+                            };
+                            if i == failure_at {
+                                match failure_kind {
+                                    0 => step.intervention.changed_gates = 5,
+                                    1 => step.evidence.full_state_equal = false,
+                                    2 => step.evidence.canonical_cache_equal = false,
+                                    _ => step.evidence.previous_epoch.cache_revision = 0,
+                                }
+                            }
+                            step
+                        })
+                        .collect();
+                    let result = admit_verified_sequence(10, &steps, &admissions, 2048);
+                    assert_eq!(result, None);
+                }
+            }
+            let steps: Vec<_> = (0..len)
+                .map(|i| {
+                    let revision = 10 + i as u64;
+                    let epoch = CacheEpoch {
+                        state_revision: revision,
+                        cache_revision: revision,
+                    };
+                    VerifiedSequenceStep {
+                        intervention: Intervention {
+                            cone_bucket: 3,
+                            changed_gates: 2,
+                            cache_epoch: epoch,
+                            observed_peak_kib: Some(1024),
+                        },
+                        evidence: CommitEvidence {
+                            previous_epoch: epoch,
+                            full_state_equal: true,
+                            canonical_cache_equal: true,
+                            cache_refresh_complete: true,
+                        },
+                    }
+                })
+                .collect();
+            assert_eq!(
+                admit_verified_sequence(10, &steps, &admissions, 2048),
+                Some(CacheEpoch {
+                    state_revision: 10 + len as u64,
+                    cache_revision: 10 + len as u64,
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn overflow_and_missing_memory_fail_closed() {
+        let epoch = CacheEpoch {
+            state_revision: u64::MAX,
+            cache_revision: u64::MAX,
+        };
+        let step = VerifiedSequenceStep {
+            intervention: Intervention {
+                cone_bucket: 1,
+                changed_gates: 0,
+                cache_epoch: epoch,
+                observed_peak_kib: Some(1),
+            },
+            evidence: CommitEvidence {
+                previous_epoch: epoch,
+                full_state_equal: true,
+                canonical_cache_equal: true,
+                cache_refresh_complete: true,
+            },
+        };
+        let admissions = [ConeAdmission {
+            valid_admitted: true,
+            cone_bucket: 1,
+            max_changed_gates: 1,
+        }];
+        assert_eq!(admit_verified_sequence(u64::MAX, &[step], &admissions, 2), None);
+        let missing = VerifiedSequenceStep {
+            intervention: Intervention {
+                observed_peak_kib: None,
+                ..step.intervention
+            },
+            ..step
+        };
+        assert_eq!(admit_verified_sequence(u64::MAX, &[missing], &admissions, 2), None);
+    }
+}
