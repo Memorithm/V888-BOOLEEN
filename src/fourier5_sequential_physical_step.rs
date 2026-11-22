@@ -1080,24 +1080,25 @@ impl<T> SequentialBatch<T> {
                 && c.incremental_ns > 0
                 && c.cache_update_ns > 0
                 && incremental_total < u128::from(c.full_ns);
-            if frozen_select(c.gates, c.cone_gates, index)
-                && memory_ok
-                && oracle_ok
-                && cost_ok
-            {
+            let attempted = frozen_select(c.gates, c.cone_gates, index);
+            if attempted && memory_ok && oracle_ok && cost_ok {
                 report.incremental_steps += 1;
                 report.selected_ns += incremental_total;
             } else {
                 report.full_steps += 1;
                 report.selected_ns += u128::from(c.full_ns);
-                if !memory_ok {
-                    report.rejected_for_memory += 1;
-                }
-                if !oracle_ok {
-                    report.rejected_for_oracle += 1;
-                }
-                if !cost_ok {
-                    report.rejected_for_cost += 1;
+                // A class excluded by the frozen VALID policy is not a failed
+                // incremental attempt. Keep its negative evidence separate.
+                if attempted {
+                    if !memory_ok {
+                        report.rejected_for_memory += 1;
+                    }
+                    if !oracle_ok {
+                        report.rejected_for_oracle += 1;
+                    }
+                    if !cost_ok {
+                        report.rejected_for_cost += 1;
+                    }
                 }
             }
         }
@@ -1168,5 +1169,32 @@ mod bounded_routing_tests {
         assert_eq!(report.full_steps, 1);
         assert_eq!(report.incremental_steps, 0);
         assert_eq!(report.selected_ns, 100);
+        assert_eq!(report.rejected_for_memory, 0);
+        assert_eq!(report.rejected_for_oracle, 0);
+        assert_eq!(report.rejected_for_cost, 0);
+    }
+
+    #[test]
+    fn frozen_policy_exclusions_do_not_inflate_rejection_counters() {
+        let batch = SequentialBatch {
+            steps: vec![
+                step(100, 200, 10, None, false),
+                step(100, 200, 10, None, false),
+                step(100, 20, 10, Some(512), true),
+            ],
+            elapsed_ns: 1_000,
+            full_ns: 300,
+            incremental_ns: 420,
+            cache_update_ns: 30,
+            disagreements: 2,
+            vm_hwm_kib: None,
+        };
+        let report = batch.bounded_routing_cost(1_024, |_, _, index| index != 0);
+        assert_eq!(report.full_steps, 2);
+        assert_eq!(report.incremental_steps, 1);
+        assert_eq!(report.selected_ns, 230);
+        assert_eq!(report.rejected_for_memory, 1);
+        assert_eq!(report.rejected_for_oracle, 1);
+        assert_eq!(report.rejected_for_cost, 1);
     }
 }
