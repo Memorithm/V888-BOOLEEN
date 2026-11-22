@@ -21,6 +21,8 @@ pub struct ValidObservation {
 pub struct ConeEnvelope {
     pub cone_class: u32,
     pub max_cone_gates: u64,
+    pub min_gates: u64,
+    pub max_gates: u64,
     pub min_full_ns: u64,
     pub max_incremental_total_ns: u128,
     pub samples: usize,
@@ -91,6 +93,8 @@ impl FrozenConePolicy {
                             .map(|s| s.cone_gates)
                             .max()
                             .unwrap_or(0),
+                        min_gates: samples.iter().map(|s| s.gates).min().unwrap_or(0),
+                        max_gates: samples.iter().map(|s| s.gates).max().unwrap_or(0),
                         min_full_ns,
                         max_incremental_total_ns,
                         samples: samples.len(),
@@ -105,7 +109,11 @@ impl FrozenConePolicy {
     /// No TEST/OOD outcomes or measured timings are fed back into calibration.
     pub fn admits(&self, cone_class: u32, gates: u64, cone_gates: u64) -> bool {
         self.envelopes.get(&cone_class).is_some_and(|e| {
-            gates > 0 && cone_gates > 0 && cone_gates <= gates && cone_gates <= e.max_cone_gates
+            gates >= e.min_gates
+                && gates <= e.max_gates
+                && cone_gates > 0
+                && cone_gates <= gates
+                && cone_gates <= e.max_cone_gates
         })
     }
 
@@ -142,6 +150,21 @@ mod tests {
         assert!(policy.admits(9, 100, 10));
         assert!(!policy.admits(9, 100, 11));
         assert!(!policy.admits(10, 100, 10));
+    }
+
+    #[test]
+    fn oracle_rejects_unseen_circuit_sizes_even_for_known_cone_class() {
+        let mut low = sample(1, 7);
+        low.gates = 100;
+        let mut high = sample(2, 7);
+        high.gates = 200;
+        let policy = FrozenConePolicy::calibrate(&[low, high], 2, 2048).unwrap();
+        // Independent range oracle: only observed circuit-size interval is admissible.
+        for gates in [0, 1, 99, 100, 150, 200, 201, 1_000_000] {
+            let expected = (100..=200).contains(&gates);
+            assert_eq!(policy.admits(7, gates, 10), expected, "gates={gates}");
+        }
+        assert!(!policy.admits(7, 200, 11));
     }
 
     #[test]
