@@ -156,10 +156,10 @@ mod tests {
             |s, _| *s += 1,
             |s| Ok(*s * 3),
             |_| Ok(()),
-            |s| Ok(*s * 3 + u64::from(*s == 7)),
+            |s| Ok(*s * 3 + u64::from(*s == 8)),
             |a, b| a == b,
         ).unwrap();
-        assert_eq!(result.canonical_state, 48);
+        assert_eq!(result.canonical_state, 81);
         assert!(!result.evidence[1].output_equal);
         assert!(result.evidence[0].output_equal);
     }
