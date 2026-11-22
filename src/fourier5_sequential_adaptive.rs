@@ -600,3 +600,158 @@ mod tests {
         }
     }
 }
+
+
+/// Evaluate a frozen batch with an independent full-recomputation oracle.
+///
+/// Incremental outputs are never published without an exact equality check.
+/// A disagreement fails closed to Full and remains observable through
+/// `oracle_mismatches`. This function is deliberately an audit path:
+/// running the oracle costs additional work and is not a speed benchmark.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifiedBatchEvaluation {
+    pub batch: BatchEvaluation,
+    pub oracle_mismatches: usize,
+}
+
+pub fn evaluate_frozen_batch_verified(
+    baseline: &FiveCircleHierarchy,
+    planes: &[u64],
+    proposals: &[PackedIntervention],
+    calibration: EngineCalibration,
+    minimum_saving_ppm: u32,
+) -> Result<VerifiedBatchEvaluation, HierarchyError> {
+    let mut batch = evaluate_frozen_batch_with_margin(
+        baseline,
+        planes,
+        proposals,
+        calibration,
+        minimum_saving_ppm,
+    )?;
+    if batch.engine == Engine::Full {
+        return Ok(VerifiedBatchEvaluation {
+            batch,
+            oracle_mismatches: 0,
+        });
+    }
+
+    // This oracle reconstructs every candidate without the incremental cache.
+    // It is intentionally independent of the incremental evaluator.
+    let mut oracle = Vec::with_capacity(proposals.len());
+    for &proposal in proposals {
+        let candidate = match proposal {
+            PackedIntervention::LeafSwap { first, second } => {
+                if first >= baseline.input_bits()
+                    || second >= baseline.input_bits()
+                    || first == second
+                {
+                    return Err(HierarchyError::InvalidRouting);
+                }
+                let mut routing = baseline.routing().to_vec();
+                routing.swap(first, second);
+                baseline.rerouted(routing)?
+            }
+            PackedIntervention::Parameter {
+                layer,
+                neuron,
+                model,
+            } => baseline.with_neuron_parameters(layer, neuron, model)?,
+        };
+        oracle.push(candidate.infer_bitplanes(planes)?);
+    }
+    let mismatches = batch
+        .outputs
+        .iter()
+        .zip(&oracle)
+        .filter(|(actual, expected)| actual != expected)
+        .count();
+    if mismatches != 0 || batch.outputs.len() != oracle.len() {
+        batch.outputs = oracle;
+        batch.engine = Engine::Full;
+    }
+    Ok(VerifiedBatchEvaluation {
+        batch,
+        oracle_mismatches: mismatches,
+    })
+}
+
+#[cfg(test)]
+mod verified_batch_tests {
+    use super::*;
+    use crate::fourier5_hierarchy::{GateKind, LeafRouting};
+
+    #[test]
+    fn verified_batch_matches_full_for_heterogeneous_cones_and_margins() {
+        for seed in [7, 31, 79] {
+            let baseline = FiveCircleHierarchy::from_modes(
+                &[GateKind::Majority, GateKind::Parity, GateKind::Or],
+                LeafRouting::SeededShuffle(seed),
+            )
+            .unwrap();
+            let planes: Vec<u64> = (0..baseline.input_bits())
+                .map(|i| (i as u64).wrapping_mul(0x9e3779b97f4a7c15))
+                .collect();
+            let proposals: Vec<_> = (0..24)
+                .map(|i| PackedIntervention::LeafSwap {
+                    first: i,
+                    second: i + 1,
+                })
+                .collect();
+            let expected: Vec<_> = proposals
+                .iter()
+                .map(|proposal| {
+                    let PackedIntervention::LeafSwap { first, second } = *proposal else {
+                        unreachable!()
+                    };
+                    let mut routing = baseline.routing().to_vec();
+                    routing.swap(first, second);
+                    baseline.rerouted(routing).unwrap().infer_bitplanes(&planes).unwrap()
+                })
+                .collect();
+            for margin in [0, 250_000, 1_000_000] {
+                let verified = evaluate_frozen_batch_verified(
+                    &baseline,
+                    &planes,
+                    &proposals,
+                    EngineCalibration {
+                        full_ns_per_gate: 100,
+                        incremental_ns_per_gate: 1,
+                        cache_build_ns: 0,
+                    },
+                    margin,
+                )
+                .unwrap();
+                assert_eq!(verified.batch.outputs, expected);
+                assert_eq!(verified.oracle_mismatches, 0);
+                if margin == 1_000_000 {
+                    assert_eq!(verified.batch.engine, Engine::Full);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn verified_batch_rejects_invalid_input_before_publishing() {
+        let baseline = FiveCircleHierarchy::from_modes(
+            &[GateKind::Majority, GateKind::Parity],
+            LeafRouting::Contiguous,
+        )
+        .unwrap();
+        let invalid = [PackedIntervention::LeafSwap {
+            first: 0,
+            second: baseline.input_bits(),
+        }];
+        assert!(evaluate_frozen_batch_verified(
+            &baseline,
+            &vec![0; baseline.input_bits()],
+            &invalid,
+            EngineCalibration {
+                full_ns_per_gate: 100,
+                incremental_ns_per_gate: 1,
+                cache_build_ns: 0,
+            },
+            0,
+        )
+        .is_err());
+    }
+}
