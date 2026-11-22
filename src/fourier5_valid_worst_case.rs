@@ -42,12 +42,12 @@ pub fn freeze_valid_policy(
     let mut groups = BTreeSet::new();
     let mut buckets: BTreeMap<u32, (usize, u64, u64, u64, bool)> = BTreeMap::new();
     for s in samples {
-        if !groups.insert(s.group) { return Err(PolicyError::DuplicateGroup); }
         if s.partition != Partition::Valid { continue; }
+        if !groups.insert(s.group) { return Err(PolicyError::DuplicateGroup); }
         let total = s.incremental_ns.checked_add(s.refresh_ns)
             .ok_or(PolicyError::Overflow)?;
         let entry = buckets.entry(s.cone_bucket).or_insert((0, 0, 0, 0, true));
-        entry.0 += 1;
+        entry.0 = entry.0.checked_add(1).ok_or(PolicyError::Overflow)?;
         entry.1 = entry.1.max(s.full_ns);
         entry.2 = entry.2.max(total);
         entry.3 = entry.3.max(s.peak_kib);
@@ -87,6 +87,17 @@ mod tests {
         data.push(sample(2, 2, Partition::Test, 1, 500));
         data.push(sample(3, 2, Partition::Ood, 1, 500));
         assert_eq!(freeze_valid_policy(&data, 1, 256).unwrap(), original);
+    }
+    #[test]
+    fn non_valid_groups_do_not_poison_valid_policy() {
+        let valid = sample(7, 2, Partition::Valid, 100, 20);
+        let baseline = freeze_valid_policy(&[valid], 1, 256).unwrap();
+        let mixed = [valid, sample(7, 2, Partition::Train, 1, 999),
+            sample(7, 2, Partition::Test, 1, 999),
+            sample(7, 2, Partition::Ood, 1, 999)];
+        assert_eq!(freeze_valid_policy(&mixed, 1, 256).unwrap(), baseline);
+        assert_eq!(freeze_valid_policy(&[valid, valid], 1, 256),
+            Err(PolicyError::DuplicateGroup));
     }
     #[test]
     fn rejects_regression_missing_groups_and_duplicates() {
