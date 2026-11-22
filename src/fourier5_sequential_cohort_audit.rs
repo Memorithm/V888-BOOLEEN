@@ -117,3 +117,89 @@ mod tests {
         assert_eq!(totals.regressions, 1);
     }
 }
+
+
+/// A negative result is retained as evidence instead of being discarded by
+/// the strict admission audit. A failed oracle can never authorize Incremental.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NegativeEvidence {
+    pub observations: u64,
+    pub state_mismatches: u64,
+    pub cache_mismatches: u64,
+    pub cost_regressions: u64,
+    pub maximum_peak_kib: u64,
+}
+
+/// Record negative evidence on disjoint cohorts, including mismatched oracles.
+/// This is reporting only: it does not train or authorize an admission policy.
+/// Missing durations or VmHWM remain errors rather than fabricated zeros.
+pub fn audit_negative_evidence(
+    steps: &[Step],
+) -> Result<BTreeMap<(Split, u32), NegativeEvidence>, AuditError> {
+    let mut seen = BTreeSet::new();
+    let mut output: BTreeMap<(Split, u32), NegativeEvidence> = BTreeMap::new();
+    for step in steps {
+        if !seen.insert(step.cohort) {
+            return Err(AuditError::SplitLeak);
+        }
+        if step.full_ns == 0 || step.incremental_refresh_ns == 0 || step.peak_kib == 0 {
+            return Err(AuditError::InvalidMeasurement);
+        }
+        let evidence = output.entry((step.split, step.cone_bucket)).or_default();
+        evidence.observations = evidence.observations.checked_add(1).ok_or(AuditError::Overflow)?;
+        evidence.state_mismatches = evidence
+            .state_mismatches
+            .checked_add(u64::from(!step.state_equal))
+            .ok_or(AuditError::Overflow)?;
+        evidence.cache_mismatches = evidence
+            .cache_mismatches
+            .checked_add(u64::from(!step.cache_equal))
+            .ok_or(AuditError::Overflow)?;
+        evidence.cost_regressions = evidence
+            .cost_regressions
+            .checked_add(u64::from(step.incremental_refresh_ns >= step.full_ns))
+            .ok_or(AuditError::Overflow)?;
+        evidence.maximum_peak_kib = evidence.maximum_peak_kib.max(step.peak_kib);
+    }
+    Ok(output)
+}
+
+#[cfg(test)]
+mod negative_evidence_tests {
+    use super::*;
+
+    #[test]
+    fn independent_oracle_preserves_failures_in_each_held_out_split() {
+        let rows = [
+            Step { cohort: 10, split: Split::Valid, cone_bucket: 1,
+                full_ns: 100, incremental_refresh_ns: 110, peak_kib: 42,
+                state_equal: false, cache_equal: true },
+            Step { cohort: 11, split: Split::Test, cone_bucket: 1,
+                full_ns: 100, incremental_refresh_ns: 50, peak_kib: 55,
+                state_equal: true, cache_equal: false },
+            Step { cohort: 12, split: Split::Ood, cone_bucket: 2,
+                full_ns: 100, incremental_refresh_ns: 100, peak_kib: 60,
+                state_equal: false, cache_equal: false },
+        ];
+        assert_eq!(audit(&rows), Err(AuditError::InvalidMeasurement));
+        let report = audit_negative_evidence(&rows).expect("valid physical observations");
+        assert_eq!(report[&(Split::Valid, 1)].state_mismatches, 1);
+        assert_eq!(report[&(Split::Valid, 1)].cost_regressions, 1);
+        assert_eq!(report[&(Split::Test, 1)].cache_mismatches, 1);
+        assert_eq!(report[&(Split::Test, 1)].cost_regressions, 0);
+        assert_eq!(report[&(Split::Ood, 2)].state_mismatches, 1);
+        assert_eq!(report[&(Split::Ood, 2)].cache_mismatches, 1);
+        assert_eq!(report[&(Split::Ood, 2)].maximum_peak_kib, 60);
+    }
+
+    #[test]
+    fn disjointness_and_missing_measurements_fail_closed() {
+        let row = Step { cohort: 1, split: Split::Train, cone_bucket: 0,
+            full_ns: 5, incremental_refresh_ns: 6, peak_kib: 1,
+            state_equal: false, cache_equal: false };
+        assert_eq!(audit_negative_evidence(&[row, Step { split: Split::Test, ..row }]),
+            Err(AuditError::SplitLeak));
+        assert_eq!(audit_negative_evidence(&[Step { peak_kib: 0, ..row }]),
+            Err(AuditError::InvalidMeasurement));
+    }
+}
