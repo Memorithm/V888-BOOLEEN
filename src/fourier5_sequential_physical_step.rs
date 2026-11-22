@@ -1039,3 +1039,111 @@ mod epoch_quarantine_tests {
         assert!(!epoch.incremental_allowed());
     }
 }
+
+
+/// Conservative measured routing: accept an incremental intervention only if
+/// the independently verified output AND decision match Full and the complete
+/// incremental cost (including cache refresh) is strictly lower.
+/// This is post-hoc analysis, not a claim about production throughput.
+impl<T> SequentialBatch<T> {
+    #[must_use]
+    pub fn conservative_verified_routing_cost(
+        &self,
+        select_incremental: impl Fn(u64, u64, usize) -> bool,
+    ) -> VerifiedRoutingCost {
+        let mut report = VerifiedRoutingCost::default();
+        for (index, step) in self.steps.iter().enumerate() {
+            let cost = &step.cost;
+            let full = u128::from(cost.full_ns);
+            let cache = u128::from(cost.cache_update_ns);
+            let incremental = u128::from(cost.incremental_ns) + cache;
+            report.full_reference_ns += full;
+            if select_incremental(cost.gates, cost.cone_gates, index)
+                && cost.same_output
+                && cost.same_decision
+                && incremental < full
+            {
+                report.safe_incremental_steps += 1;
+                report.incremental_cache_ns += cache;
+                report.safe_selected_ns += incremental;
+            } else {
+                report.fallback_full_steps += 1;
+                report.safe_selected_ns += full;
+            }
+        }
+        report
+    }
+}
+
+#[cfg(test)]
+mod conservative_routing_tests {
+    use super::*;
+
+    fn synthetic_step(full: u64, incremental: u64, cache: u64, agrees: bool) -> PairedStep<u8> {
+        PairedStep {
+            verified_output: 1,
+            cost: SequentialCost {
+                gates: 128,
+                cone_gates: 4,
+                full_ns: full,
+                incremental_ns: incremental,
+                cache_update_ns: cache,
+                same_output: agrees,
+                same_decision: agrees,
+            },
+            vm_hwm_kib: Some(1024),
+        }
+    }
+
+    #[test]
+    fn independent_scalar_oracle_covers_costs_and_disagreements() {
+        for full in 1..=12_u64 {
+            for incremental in 1..=12_u64 {
+                for cache in 0..=12_u64 {
+                    for agrees in [false, true] {
+                        let batch = SequentialBatch {
+                            steps: vec![synthetic_step(full, incremental, cache, agrees)],
+                            elapsed_ns: 1,
+                            full_ns: full,
+                            incremental_ns: incremental,
+                            cache_update_ns: cache,
+                            disagreements: usize::from(!agrees),
+                            vm_hwm_kib: Some(1024),
+                        };
+                        let actual = batch.conservative_verified_routing_cost(|_, _, _| true);
+                        let accepted = agrees && incremental + cache < full;
+                        assert_eq!(actual.safe_incremental_steps == 1, accepted);
+                        assert_eq!(actual.fallback_full_steps == 1, !accepted);
+                        assert_eq!(
+                            actual.safe_selected_ns,
+                            u128::from(if accepted { incremental + cache } else { full })
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn overflow_safe_and_never_credits_equal_or_slower_paths() {
+        let batch = SequentialBatch {
+            steps: vec![
+                synthetic_step(u64::MAX, u64::MAX, u64::MAX, true),
+                synthetic_step(10, 9, 1, true),
+                synthetic_step(10, 8, 1, false),
+                synthetic_step(10, 8, 1, true),
+            ],
+            elapsed_ns: 1,
+            full_ns: 0,
+            incremental_ns: 0,
+            cache_update_ns: 0,
+            disagreements: 1,
+            vm_hwm_kib: None,
+        };
+        let actual = batch.conservative_verified_routing_cost(|_, _, _| true);
+        assert_eq!(actual.safe_incremental_steps, 1);
+        assert_eq!(actual.fallback_full_steps, 3);
+        assert_eq!(actual.incremental_cache_ns, 1);
+        assert_eq!(actual.safe_selected_ns, u128::from(u64::MAX) + 29);
+    }
+}
