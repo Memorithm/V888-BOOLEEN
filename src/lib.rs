@@ -363,3 +363,6 @@ pub mod fourier5_sequential_cohort_audit;
 
 /// Stateful heterogeneous sequential physical probe against canonical Full outputs.
 pub mod fourier5_sequential_stateful_probe;
+
+/// Frozen worst-case VALID cone envelopes; unknown classes route to Full.
+pub mod fourier5_valid_cone_envelope;
