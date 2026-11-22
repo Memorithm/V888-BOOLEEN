@@ -500,3 +500,173 @@ mod dispatched_transition_tests {
         assert_eq!((snapshot.state, snapshot.cache), (1, 1));
     }
 }
+
+
+/// Periodic independent Full checkpoints for production-like sequential runs.
+/// An admitted Incremental step is verified at every `audit_interval`-th
+/// committed revision. A zero interval disables Incremental entirely.
+/// Checkpoint results are never used to recalibrate frozen VALID admissions.
+#[must_use]
+pub fn execute_checkpointed_transition<S, C, F, I>(
+    committed: &CanonicalSnapshot<S, C>,
+    intervention: Intervention,
+    admissions: &[ConeAdmission],
+    peak_limit_kib: u64,
+    audit_interval: u64,
+    full: F,
+    incremental: I,
+) -> Option<VerifiedTransition<S, C>>
+where
+    S: Clone + Eq,
+    C: Clone + Eq,
+    F: FnOnce(&S, &C) -> (S, C),
+    I: FnOnce(&S, &C) -> (S, C),
+{
+    let revision = committed.epoch.state_revision;
+    if committed.epoch.cache_revision != revision {
+        return None;
+    }
+    let next = next_committed_epoch(revision)?;
+    let choice = if audit_interval == 0 {
+        EngineChoice::Full
+    } else {
+        choose(intervention, admissions, revision, peak_limit_kib)
+    };
+    if choice == EngineChoice::Full {
+        let (state, cache) = full(&committed.state, &committed.cache);
+        return Some(VerifiedTransition {
+            snapshot: CanonicalSnapshot {
+                state,
+                cache,
+                epoch: next,
+            },
+            path: VerifiedPath::FullFallback,
+        });
+    }
+    if next.state_revision % audit_interval == 0 {
+        return execute_verified_transition(committed, full, incremental);
+    }
+    let (state, cache) = incremental(&committed.state, &committed.cache);
+    Some(VerifiedTransition {
+        snapshot: CanonicalSnapshot {
+            state,
+            cache,
+            epoch: next,
+        },
+        path: VerifiedPath::Incremental,
+    })
+}
+
+#[cfg(test)]
+mod checkpointed_transition_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn independent_sequential_checkpoint_oracle_with_corrupted_cache() {
+        let admissions = [ConeAdmission {
+            valid_admitted: true,
+            cone_bucket: 0,
+            max_changed_gates: 2,
+        }];
+        let mut snapshot = CanonicalSnapshot {
+            state: 0_u64,
+            cache: 0_u64,
+            epoch: CacheEpoch {
+                state_revision: 0,
+                cache_revision: 0,
+            },
+        };
+        for step in 1..=12_u64 {
+            let full_calls = Cell::new(0);
+            let incremental_calls = Cell::new(0);
+            let intervention = Intervention {
+                cone_bucket: 0,
+                changed_gates: 1,
+                cache_epoch: snapshot.epoch,
+                observed_peak_kib: Some(1024),
+            };
+            let result = execute_checkpointed_transition(
+                &snapshot,
+                intervention,
+                &admissions,
+                2048,
+                3,
+                |state, _| {
+                    full_calls.set(full_calls.get() + 1);
+                    (*state + 1, (*state + 1) * 5)
+                },
+                |state, _| {
+                    incremental_calls.set(incremental_calls.get() + 1);
+                    (*state + 1, if step == 6 { 0 } else { (*state + 1) * 5 })
+                },
+            )
+            .expect("valid epoch");
+            assert_eq!(full_calls.get(), u32::from(step % 3 == 0));
+            assert_eq!(incremental_calls.get(), 1);
+            assert_eq!(result.snapshot.state, step);
+            assert_eq!(result.snapshot.cache, step * 5);
+            assert_eq!(
+                result.path,
+                if step == 6 {
+                    VerifiedPath::FullFallback
+                } else {
+                    VerifiedPath::Incremental
+                }
+            );
+            snapshot = result.snapshot;
+        }
+    }
+
+    #[test]
+    fn disabled_audit_and_invalid_epoch_never_run_incremental() {
+        let admission = [ConeAdmission {
+            valid_admitted: true,
+            cone_bucket: 0,
+            max_changed_gates: 1,
+        }];
+        let snapshot = CanonicalSnapshot {
+            state: 2_u8,
+            cache: 4_u8,
+            epoch: CacheEpoch {
+                state_revision: 2,
+                cache_revision: 2,
+            },
+        };
+        let intervention = Intervention {
+            cone_bucket: 0,
+            changed_gates: 1,
+            cache_epoch: snapshot.epoch,
+            observed_peak_kib: Some(100),
+        };
+        let result = execute_checkpointed_transition(
+            &snapshot,
+            intervention,
+            &admission,
+            200,
+            0,
+            |_, _| (3, 6),
+            |_, _| panic!("incremental must not execute"),
+        )
+        .expect("Full only");
+        assert_eq!(result.path, VerifiedPath::FullFallback);
+        assert_eq!((result.snapshot.state, result.snapshot.cache), (3, 6));
+        let stale = CanonicalSnapshot {
+            epoch: CacheEpoch {
+                state_revision: 2,
+                cache_revision: 1,
+            },
+            ..snapshot
+        };
+        assert!(execute_checkpointed_transition(
+            &stale,
+            intervention,
+            &admission,
+            200,
+            3,
+            |_, _| panic!("Full must not execute"),
+            |_, _| panic!("Incremental must not execute"),
+        )
+        .is_none());
+    }
+}
