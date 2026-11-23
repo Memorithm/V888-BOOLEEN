@@ -4,10 +4,10 @@
 use std::time::Instant;
 use v888_booleen::fourier5_exact_sequential_cache::{ExactSequentialCache, Gate};
 
-fn peak_kib() -> Option<u64> {
+fn proc_status_kib(field: &str) -> Option<u64> {
     let status = std::fs::read_to_string("/proc/self/status").ok()?;
     status.lines().find_map(|line| {
-        line.strip_prefix("VmHWM:")
+        line.strip_prefix(field)
             .and_then(|value| value.split_whitespace().next())
             .and_then(|value| value.parse().ok())
     })
@@ -43,6 +43,7 @@ fn main() {
     let mut full_ns = 0u128;
     let mut incremental_ns = 0u128;
     let mut total_evaluated = 0usize;
+    let mut total_noop_batches = 0usize;
     // Four disjoint seed domains; no tuning or adaptation on VALID/TEST/OOD.
     for (split, seed) in [("TRAIN", 11u64), ("VALID", 23), ("TEST", 37), ("OOD", 53)] {
         // Each split starts from the same baseline; no state crosses split boundaries.
@@ -51,6 +52,9 @@ fn main() {
         let mut rng = seed;
         let mut split_full = 0u128;
         let mut split_inc = 0u128;
+        let mut split_noop_batches = 0usize;
+        let rss_start_kib = proc_status_kib("VmRSS:");
+        let hwm_start_kib = proc_status_kib("VmHWM:");
         for step in 0..steps {
             rng ^= rng << 13;
             rng ^= rng >> 7;
@@ -64,6 +68,8 @@ fn main() {
             } else {
                 vec![(index, (rng & 1) != 0)]
             };
+            let unchanged = changes.iter().fold(full.inputs().to_vec(), |mut state, &(i, value)| { state[i] = value; state }) == full.inputs();
+            if unchanged { split_noop_batches += 1; }
             // Alternate execution order to avoid a systematic first-run advantage.
             let (elapsed_full, elapsed_inc, evaluated) = if step % 2 == 0 {
                 let start = Instant::now();
@@ -91,19 +97,21 @@ fn main() {
             split_inc += elapsed_inc;
             total_evaluated += evaluated;
         }
+        total_noop_batches += split_noop_batches;
         full_ns += split_full;
         incremental_ns += split_inc;
         println!(
-            "split={split} steps={steps} full_ns={split_full} incremental_ns={split_inc} full_updates_per_sec={:.2} incremental_updates_per_sec={:.2} vmhwm_kib={:?}",
+            "split={split} steps={steps} noop_batches={split_noop_batches} full_ns={split_full} incremental_ns={split_inc} full_updates_per_sec={:.2} incremental_updates_per_sec={:.2} rss_start_kib={rss_start_kib:?} rss_end_kib={:?} vmhwm_start_kib={hwm_start_kib:?} vmhwm_end_kib={:?}",
             throughput(steps, split_full), throughput(steps, split_inc),
-            peak_kib()
+            proc_status_kib("VmRSS:"),
+            proc_status_kib("VmHWM:")
         );
     }
     println!(
-        "width={width} gates={} interventions={} full_ns={full_ns} incremental_ns={incremental_ns} evaluated_gates={total_evaluated} vmhwm_kib={:?}",
+        "width={width} gates={} interventions={} noop_batches={total_noop_batches} full_ns={full_ns} incremental_ns={incremental_ns} evaluated_gates={total_evaluated} process_vmhwm_kib={:?}",
         gates.len(),
         steps * 4,
-        peak_kib()
+        proc_status_kib("VmHWM:")
     );
 }
 
@@ -114,6 +122,10 @@ mod tests {
     fn throughput_is_measured_in_updates_per_second() {
         assert_eq!(throughput(10, 2_000_000_000), 5.0);
         assert_eq!(throughput(10, 0), 0.0);
+    }
+    #[test]
+    fn proc_status_missing_field_is_none() {
+        assert_eq!(proc_status_kib("NonexistentV888Field:"), None);
     }
     #[test]
     fn synthetic_dag_rebuild_matches_atomic_updates() {
