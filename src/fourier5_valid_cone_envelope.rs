@@ -215,6 +215,41 @@ impl FrozenConePolicy {
         Ok(Self { envelopes, observed_geometry })
     }
 
+    /// Require independent VALID seeds for every admitted geometry. Repeated
+    /// measurements of one seed cannot masquerade as independent support.
+    /// The ordinary stratified safety and latency oracle is applied first.
+    pub fn calibrate_seed_replicated(
+        valid: &[(u64, ValidObservation)],
+        min_distinct_seeds: usize,
+        memory_limit_kib: u64,
+        margin_percent: u8,
+    ) -> Result<Self, CalibrationError> {
+        if min_distinct_seeds == 0 || valid.is_empty() {
+            return Err(CalibrationError::Empty);
+        }
+        let mut seeds: BTreeMap<(u32, u64, u64), BTreeSet<u64>> = BTreeMap::new();
+        let mut rows = Vec::with_capacity(valid.len());
+        for &(seed, observation) in valid {
+            seeds.entry((observation.cone_class, observation.gates, observation.cone_gates))
+                .or_default()
+                .insert(seed);
+            rows.push(observation);
+        }
+        let mut policy = Self::calibrate_stratified_with_margin(
+            &rows, min_distinct_seeds, memory_limit_kib, margin_percent,
+        )?;
+        for (&class, geometry) in &mut policy.observed_geometry {
+            geometry.retain(|&(gates, cone)| {
+                seeds.get(&(class, gates, cone))
+                    .is_some_and(|unique| unique.len() >= min_distinct_seeds)
+            });
+        }
+        policy.envelopes.retain(|class, _| {
+            policy.observed_geometry.get(class).is_some_and(|g| !g.is_empty())
+        });
+        Ok(policy)
+    }
+
     /// Only exact geometry pairs observed during VALID are admitted; an interval
     /// between measured sizes is not evidence of safe incremental execution.
     /// Runtime routing uses only frozen VALID evidence and current geometry.
@@ -269,6 +304,22 @@ pub enum SequentialRoute {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn independent_seed_replicate_oracle() {
+        let repeated = [(7, sample(1, 52)), (7, sample(2, 52))];
+        let policy = FrozenConePolicy::calibrate_seed_replicated(&repeated, 2, 2048, 0).unwrap();
+        assert!(!policy.admits(52, 100, 10));
+        let distinct = [(7, sample(1, 52)), (8, sample(2, 52))];
+        let policy = FrozenConePolicy::calibrate_seed_replicated(&distinct, 2, 2048, 0).unwrap();
+        assert!(policy.admits(52, 100, 10));
+        let mut divergent = sample(2, 52);
+        divergent.decision_equal = false;
+        let policy = FrozenConePolicy::calibrate_seed_replicated(
+            &[(7, sample(1, 52)), (8, divergent)], 2, 2048, 0,
+        ).unwrap();
+        assert!(!policy.admits(52, 100, 10));
+    }
 
     #[test]
     fn sequential_route_requires_current_verified_cache_and_valid_geometry() {
