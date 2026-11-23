@@ -40,6 +40,37 @@ pub struct FrozenConePolicy {
     admitted_geometries: BTreeSet<(u32, u64, u64)>,
 }
 
+/// Cache generation is advanced by the caller after every accepted mutation.
+/// An incremental evaluation is never permitted against a stale generation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SequentialRoute {
+    Full,
+    Incremental,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SequentialCacheState {
+    /// Generation of the committed circuit.
+    pub circuit_epoch: u64,
+    /// Generation for which the cache was constructed and verified.
+    pub cache_epoch: Option<u64>,
+}
+
+impl SequentialCacheState {
+    /// Accepting a mutation invalidates the previous cache, including when
+    /// its topology is unchanged. Overflow fails closed rather than wrapping.
+    pub fn accept_mutation(&mut self) {
+        self.circuit_epoch = self.circuit_epoch.saturating_add(1);
+        self.cache_epoch = None;
+    }
+
+    /// Call only after rebuilding the cache from the committed Full state
+    /// and checking its output against the independent Full oracle.
+    pub fn mark_cache_verified(&mut self) {
+        self.cache_epoch = Some(self.circuit_epoch);
+    }
+}
+
 impl FrozenConePolicy {
     /// Fail closed on any invalid VALID observation. A class is admitted only
     /// when every VALID observation agrees with Full and has a positive margin.
@@ -116,6 +147,25 @@ impl FrozenConePolicy {
         })
     }
 
+    /// Sequential dispatch is safe only for a cache verified for the current
+    /// committed circuit generation and a geometry admitted on frozen VALID.
+    /// Full is the mandatory fallback; this method does not rebuild caches.
+    pub fn route_sequential(
+        &self,
+        state: SequentialCacheState,
+        cone_class: u32,
+        gates: u64,
+        cone_gates: u64,
+    ) -> SequentialRoute {
+        if state.cache_epoch == Some(state.circuit_epoch)
+            && self.admits(cone_class, gates, cone_gates)
+        {
+            SequentialRoute::Incremental
+        } else {
+            SequentialRoute::Full
+        }
+    }
+
     /// Runtime routing uses only frozen VALID evidence and current geometry.
     /// No TEST/OOD outcomes or measured timings are fed back into calibration.
     pub fn admits(&self, cone_class: u32, gates: u64, cone_gates: u64) -> bool {
@@ -147,6 +197,38 @@ mod tests {
             decision_equal: true,
             vm_hwm_kib: Some(1024),
         }
+    }
+
+    #[test]
+    fn sequential_cache_epoch_oracle_never_reuses_stale_cache() {
+        let policy = FrozenConePolicy::calibrate(&[sample(1, 3), sample(2, 3)], 2, 2048)
+            .unwrap();
+        let mut state = SequentialCacheState {
+            circuit_epoch: 7,
+            cache_epoch: None,
+        };
+        assert_eq!(policy.route_sequential(state, 3, 100, 10), SequentialRoute::Full);
+        state.mark_cache_verified();
+        assert_eq!(policy.route_sequential(state, 3, 100, 10), SequentialRoute::Incremental);
+        assert_eq!(policy.route_sequential(state, 3, 100, 11), SequentialRoute::Full);
+        state.accept_mutation();
+        assert_eq!(state.circuit_epoch, 8);
+        assert_eq!(policy.route_sequential(state, 3, 100, 10), SequentialRoute::Full);
+        state.mark_cache_verified();
+        assert_eq!(policy.route_sequential(state, 3, 100, 10), SequentialRoute::Incremental);
+    }
+
+    #[test]
+    fn sequential_epoch_overflow_fails_closed() {
+        let policy = FrozenConePolicy::calibrate(&[sample(1, 3), sample(2, 3)], 2, 2048)
+            .unwrap();
+        let mut state = SequentialCacheState {
+            circuit_epoch: u64::MAX,
+            cache_epoch: Some(u64::MAX),
+        };
+        state.accept_mutation();
+        assert_eq!(state.cache_epoch, None);
+        assert_eq!(policy.route_sequential(state, 3, 100, 10), SequentialRoute::Full);
     }
 
     #[test]
