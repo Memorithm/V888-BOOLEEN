@@ -22,17 +22,20 @@ pub struct ExactSequentialCache {
     inputs: Vec<bool>,
     values: Vec<bool>,
     dependents: Vec<Vec<usize>>,
+    input_roots: Vec<Vec<usize>>,
 }
 
 impl ExactSequentialCache {
     pub fn new(gates: Vec<Gate>, inputs: Vec<bool>) -> Result<Self, CacheError> {
         let mut dependents = vec![Vec::new(); gates.len()];
+        let mut input_roots = vec![Vec::new(); inputs.len()];
         for (index, gate) in gates.iter().enumerate() {
             let parents: &[usize] = match gate {
                 Gate::Input(input) => {
                     if *input >= inputs.len() {
                         return Err(CacheError::InvalidInput);
                     }
+                    input_roots[*input].push(index);
                     &[]
                 }
                 Gate::Not(parent) => std::slice::from_ref(parent),
@@ -57,6 +60,7 @@ impl ExactSequentialCache {
             gates,
             inputs,
             dependents,
+            input_roots,
         };
         cache.rebuild();
         Ok(cache)
@@ -88,27 +92,16 @@ impl ExactSequentialCache {
             return Ok(0);
         }
         self.inputs[input] = value;
-        let mut dirty = vec![false; self.gates.len()];
-        for (index, gate) in self.gates.iter().enumerate() {
-            if matches!(gate, Gate::Input(i) if *i == input) {
-                dirty[index] = true;
-            }
-        }
-        // Gates are topologically ordered. Mark descendants even if an
-        // intermediate gate's Boolean value happens not to change.
-        for index in 0..self.gates.len() {
-            if dirty[index] {
-                for &child in &self.dependents[index] {
-                    dirty[child] = true;
-                }
-            }
-        }
+        // A sparse, topologically ordered worklist avoids scanning every gate
+        // for a small intervention cone. Each descendant is evaluated once,
+        // including reconvergent paths, after all its parents are current.
+        let mut pending = std::collections::BTreeSet::new();
+        pending.extend(self.input_roots[input].iter().copied());
         let mut evaluated = 0;
-        for (index, &needs_update) in dirty.iter().enumerate() {
-            if needs_update {
-                self.values[index] = self.evaluate(index);
-                evaluated += 1;
-            }
+        while let Some(index) = pending.pop_first() {
+            self.values[index] = self.evaluate(index);
+            evaluated += 1;
+            pending.extend(self.dependents[index].iter().copied());
         }
         Ok(evaluated)
     }
@@ -158,4 +151,31 @@ mod tests {
         assert_eq!(cache.values(), &[false]);
         assert_eq!(cache.update_input(0, false), Ok(0));
     }
+    #[test]
+    fn sparse_cone_matches_independent_scalar_oracle() {
+        let mut gates = Vec::new();
+        for i in 0..128 {
+            gates.push(Gate::Input(i));
+        }
+        gates.push(Gate::And(0, 1)); // 128
+        gates.push(Gate::Xor(128, 2)); // 129
+        gates.push(Gate::Not(128)); // 130, reconvergent
+        gates.push(Gate::Xor(129, 130)); // 131
+        let mut cache = ExactSequentialCache::new(gates.clone(), vec![false; 128]).unwrap();
+        for (input, value) in [(0, true), (2, true), (1, true), (0, false), (127, true)] {
+            let visited = cache.update_input(input, value).unwrap();
+            assert!(visited <= 5);
+            let mut expected = vec![false; gates.len()];
+            for (index, gate) in gates.iter().enumerate() {
+                expected[index] = match *gate {
+                    Gate::Input(i) => cache.inputs()[i],
+                    Gate::Not(a) => !expected[a],
+                    Gate::And(a, b) => expected[a] && expected[b],
+                    Gate::Xor(a, b) => expected[a] ^ expected[b],
+                };
+            }
+            assert_eq!(cache.values(), expected);
+        }
+    }
+
 }
