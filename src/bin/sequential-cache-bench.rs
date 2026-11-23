@@ -46,6 +46,15 @@ impl WorkloadTiming {
         let rank = (full.len().saturating_mul(95).saturating_add(99) / 100).saturating_sub(1);
         if inc[rank] < full[rank] { "Incremental" } else { "Full" }
     }
+    // TRAIN-only conservative calibration: require both lower total cost and
+    // lower nearest-rank p95 on paired samples. A tie or insufficient evidence
+    // always selects Full. Never fit this rule on VALID/TEST/OOD.
+    fn calibrated_engine(&self) -> &'static str {
+        if self.pairs_ns.len() < 20 || self.incremental_ns >= self.full_ns {
+            return "Full";
+        }
+        self.tail_preferred_engine()
+    }
     fn preferred_engine(&self) -> &'static str {
         if self.samples == 0 || self.incremental_ns >= self.full_ns {
             "Full"
@@ -81,7 +90,8 @@ fn main() {
     let mut incremental_ns = 0u128;
     let mut total_evaluated = 0usize;
     let mut total_noop_batches = 0usize;
-    // Four disjoint seed domains; no tuning or adaptation on VALID/TEST/OOD.
+    // Four disjoint seed domains; freeze per-class TRAIN choices for evaluation.
+    let mut frozen_train_policy = ["Full"; 3];
     for (split, seed) in [("TRAIN", 11u64), ("VALID", 23), ("TEST", 37), ("OOD", 53)] {
         // Each split starts from the same baseline; no state crosses split boundaries.
         let mut full = ExactSequentialCache::new(gates.clone(), vec![false; width]).unwrap();
@@ -137,11 +147,16 @@ fn main() {
             total_evaluated += evaluated;
             workload[workload_class].record(elapsed_full, elapsed_inc, evaluated);
         }
-        for (class, timing) in ["single", "forced_false", "burst"].iter().zip(workload.iter()) {
+        if split == "TRAIN" {
+            for (index, timing) in workload.iter().enumerate() {
+                frozen_train_policy[index] = timing.calibrated_engine();
+            }
+        }
+        for (class_index, (class, timing)) in ["single", "forced_false", "burst"].iter().zip(workload.iter()).enumerate() {
             println!(
-                "split={split} workload={class} samples={} full_ns={} incremental_ns={} evaluated={} preferred={} p95_preferred={} full_updates_per_sec={:.2} incremental_updates_per_sec={:.2}",
+                "split={split} workload={class} samples={} full_ns={} incremental_ns={} evaluated={} preferred={} p95_preferred={} train_frozen={} full_updates_per_sec={:.2} incremental_updates_per_sec={:.2}",
                 timing.samples, timing.full_ns, timing.incremental_ns, timing.evaluated,
-                timing.preferred_engine(), timing.tail_preferred_engine(),
+                timing.preferred_engine(), timing.tail_preferred_engine(), frozen_train_policy[class_index],
                 throughput(timing.samples, timing.full_ns),
                 throughput(timing.samples, timing.incremental_ns)
             );
@@ -204,6 +219,21 @@ mod tests {
         let mut t = WorkloadTiming::default();
         for _ in 0..20 { t.record(0, 0, 0); }
         assert_eq!(t.tail_preferred_engine(), "Full");
+    }
+    #[test]
+    fn calibrated_policy_requires_mean_and_tail_improvement() {
+        let mut t = WorkloadTiming::default();
+        for _ in 0..19 { t.record(100, 1, 0); }
+        assert_eq!(t.calibrated_engine(), "Full");
+        t.record(100, 1, 0);
+        assert_eq!(t.calibrated_engine(), "Incremental");
+        // Total incremental cost remains lower, but the p95 now regresses.
+        t.record(100, 1_000, 0);
+        t.record(100, 1_000, 0);
+        assert_eq!(t.calibrated_engine(), "Full");
+        let mut tied = WorkloadTiming::default();
+        for _ in 0..20 { tied.record(100, 100, 0); }
+        assert_eq!(tied.calibrated_engine(), "Full");
     }
     #[test]
     fn throughput_is_measured_in_updates_per_second() {
