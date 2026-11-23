@@ -174,6 +174,55 @@ impl ExactSequentialCache {
         Ok((evaluated, exact))
     }
 
+    /// Conservative budget dispatcher: count the full structural cone before
+    /// choosing a sparse update. A zero budget always selects Full for changes.
+    /// This is a deterministic safety baseline, NOT a measured latency policy.
+    /// The return flag is true only when the incremental path was selected.
+    pub fn update_inputs_bounded(
+        &mut self,
+        changes: &[(usize, bool)],
+        max_cone_gates: usize,
+    ) -> Result<(usize, bool), CacheError> {
+        if changes.iter().any(|(index, _)| *index >= self.inputs.len()) {
+            return Err(CacheError::InvalidInput);
+        }
+        let mut final_values = std::collections::BTreeMap::new();
+        for &(index, value) in changes {
+            final_values.insert(index, value);
+        }
+        let mut pending = std::collections::BTreeSet::new();
+        for (&input, &value) in &final_values {
+            if self.inputs[input] != value {
+                pending.extend(self.input_roots[input].iter().copied());
+            }
+        }
+        if pending.is_empty() {
+            return Ok((0, true));
+        }
+        // Count all structurally reachable gates, including reconvergence,
+        // without relying on value-dependent pruning or mutating state.
+        let mut cone = pending.clone();
+        while let Some(index) = pending.pop_first() {
+            for &child in &self.dependents[index] {
+                if cone.insert(child) {
+                    pending.insert(child);
+                }
+            }
+            if cone.len() > max_cone_gates {
+                break;
+            }
+        }
+        if cone.len() > max_cone_gates {
+            for (input, value) in final_values {
+                self.inputs[input] = value;
+            }
+            self.rebuild();
+            return Ok((self.gates.len(), false));
+        }
+        let evaluated = self.update_inputs_atomic(changes)?;
+        Ok((evaluated, true))
+    }
+
     pub fn values(&self) -> &[bool] {
         &self.values
     }
@@ -339,6 +388,50 @@ mod tests {
         let previous = cache.values().to_vec();
         assert_eq!(cache.update_inputs_verified(&[(3, true)]), Err(CacheError::InvalidInput));
         assert_eq!(cache.values(), previous);
+    }
+
+    #[test]
+    fn bounded_dispatch_matches_scalar_oracle_across_sequential_batches() {
+        let gates = vec![
+            Gate::Input(0),
+            Gate::Input(1),
+            Gate::And(0, 1),
+            Gate::Not(2),
+            Gate::Xor(2, 3),
+            Gate::Xor(4, 1),
+        ];
+        for budget in [0, 1, 2, 3, 6, usize::MAX] {
+            let mut cache = ExactSequentialCache::new(gates.clone(), vec![false; 2]).unwrap();
+            for changes in [
+                vec![(0, true)],
+                vec![(1, true)],
+                vec![(0, false), (1, false)],
+                vec![(0, true), (0, false)],
+            ] {
+                let (evaluated, incremental) =
+                    cache.update_inputs_bounded(&changes, budget).unwrap();
+                assert!(evaluated <= gates.len());
+                if budget == 0 && evaluated > 0 {
+                    assert!(!incremental);
+                }
+                let mut oracle = vec![false; gates.len()];
+                for (i, gate) in gates.iter().enumerate() {
+                    oracle[i] = match *gate {
+                        Gate::Input(j) => cache.inputs()[j],
+                        Gate::Not(a) => !oracle[a],
+                        Gate::And(a, b) => oracle[a] & oracle[b],
+                        Gate::Xor(a, b) => oracle[a] ^ oracle[b],
+                    };
+                }
+                assert_eq!(cache.values(), oracle);
+            }
+            let before = cache.values().to_vec();
+            assert_eq!(
+                cache.update_inputs_bounded(&[(2, true)], budget),
+                Err(CacheError::InvalidInput)
+            );
+            assert_eq!(cache.values(), before);
+        }
     }
 
     #[test]
