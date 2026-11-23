@@ -361,6 +361,59 @@ impl SequentialCacheTracker {
     }
 }
 
+/// Cache verification is scoped to the exact circuit geometry, not just epoch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GeometryBoundCache {
+    tracker: SequentialCacheTracker,
+    verified_geometry: Option<(u32, u64, u64)>,
+}
+
+impl GeometryBoundCache {
+    pub fn new() -> Self {
+        Self { tracker: SequentialCacheTracker::new(), verified_geometry: None }
+    }
+
+    pub fn accept_mutation(&mut self) -> Result<u64, CalibrationError> {
+        self.verified_geometry = None;
+        self.tracker.accept_mutation()
+    }
+
+    /// A successful independent Full comparison is required for this geometry.
+    pub fn confirm_rebuild(
+        &mut self,
+        cone_class: u32,
+        gates: u64,
+        cone_gates: u64,
+        oracle_equal: bool,
+    ) -> bool {
+        self.verified_geometry = None;
+        let valid = gates > 0 && cone_gates > 0 && cone_gates <= gates;
+        let accepted = self.tracker.confirm_rebuild(valid && oracle_equal);
+        if accepted {
+            self.verified_geometry = Some((cone_class, gates, cone_gates));
+        }
+        accepted
+    }
+
+    pub fn route(
+        &self,
+        policy: &FrozenConePolicy,
+        cone_class: u32,
+        gates: u64,
+        cone_gates: u64,
+    ) -> SequentialRoute {
+        if self.verified_geometry != Some((cone_class, gates, cone_gates)) {
+            SequentialRoute::Full
+        } else {
+            self.tracker.route(policy, cone_class, gates, cone_gates)
+        }
+    }
+}
+
+impl Default for GeometryBoundCache {
+    fn default() -> Self { Self::new() }
+}
+
 impl Default for SequentialCacheTracker {
     fn default() -> Self { Self::new() }
 }
@@ -438,6 +491,34 @@ mod tests {
             }
         }
         assert_eq!(policy.route_sequential(44, 101, 10, 9, Some(9)), SequentialRoute::Full);
+    }
+
+    #[test]
+    fn geometry_bound_cache_rejects_cross_geometry_reuse() {
+        let mut a = sample(1, 77);
+        a.cone_gates = 10;
+        let mut b = sample(2, 77);
+        b.cone_gates = 11;
+        let policy = FrozenConePolicy::calibrate_stratified(&[a, b], 1, 2048).unwrap();
+        let mut cache = GeometryBoundCache::new();
+        assert!(cache.confirm_rebuild(77, 100, 10, true));
+        assert_eq!(cache.route(&policy, 77, 100, 10), SequentialRoute::Incremental);
+        assert_eq!(cache.route(&policy, 77, 100, 11), SequentialRoute::Full);
+        cache.accept_mutation().unwrap();
+        assert_eq!(cache.route(&policy, 77, 100, 10), SequentialRoute::Full);
+        assert!(!cache.confirm_rebuild(77, 100, 11, false));
+        assert_eq!(cache.route(&policy, 77, 100, 11), SequentialRoute::Full);
+        assert!(cache.confirm_rebuild(77, 100, 11, true));
+        assert_eq!(cache.route(&policy, 77, 100, 11), SequentialRoute::Incremental);
+        assert_eq!(cache.route(&policy, 77, 100, 10), SequentialRoute::Full);
+    }
+
+    #[test]
+    fn geometry_bound_cache_rejects_invalid_geometry() {
+        let mut cache = GeometryBoundCache::new();
+        assert!(!cache.confirm_rebuild(1, 100, 101, true));
+        assert!(!cache.confirm_rebuild(1, 100, 0, true));
+        assert!(!cache.confirm_rebuild(1, 0, 0, true));
     }
 
     fn sample(id: u64, class: u32) -> ValidObservation {
