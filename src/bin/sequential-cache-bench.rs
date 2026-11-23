@@ -19,12 +19,14 @@ fn throughput(steps: usize, nanoseconds: u128) -> f64 {
 }
 
 // Independent per-workload timing counters; zero-duration samples are retained.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 struct WorkloadTiming {
     samples: usize,
     full_ns: u128,
     incremental_ns: u128,
     evaluated: usize,
+    // Exact paired samples: preserve tails rather than inferring from aggregate means.
+    pairs_ns: Vec<(u128, u128)>,
 }
 impl WorkloadTiming {
     fn record(&mut self, full_ns: u128, incremental_ns: u128, evaluated: usize) {
@@ -32,6 +34,17 @@ impl WorkloadTiming {
         self.full_ns += full_ns;
         self.incremental_ns += incremental_ns;
         self.evaluated += evaluated;
+        self.pairs_ns.push((full_ns, incremental_ns));
+    }
+    // Nearest-rank p95: no interpolation, saturating arithmetic, conservative tie.
+    fn tail_preferred_engine(&self) -> &'static str {
+        if self.pairs_ns.len() < 20 { return "Full"; }
+        let mut full = self.pairs_ns.iter().map(|p| p.0).collect::<Vec<_>>();
+        let mut inc = self.pairs_ns.iter().map(|p| p.1).collect::<Vec<_>>();
+        full.sort_unstable();
+        inc.sort_unstable();
+        let rank = (full.len().saturating_mul(95).saturating_add(99) / 100).saturating_sub(1);
+        if inc[rank] < full[rank] { "Incremental" } else { "Full" }
     }
     fn preferred_engine(&self) -> &'static str {
         if self.samples == 0 || self.incremental_ns >= self.full_ns {
@@ -126,9 +139,9 @@ fn main() {
         }
         for (class, timing) in ["single", "forced_false", "burst"].iter().zip(workload.iter()) {
             println!(
-                "split={split} workload={class} samples={} full_ns={} incremental_ns={} evaluated={} preferred={} full_updates_per_sec={:.2} incremental_updates_per_sec={:.2}",
+                "split={split} workload={class} samples={} full_ns={} incremental_ns={} evaluated={} preferred={} p95_preferred={} full_updates_per_sec={:.2} incremental_updates_per_sec={:.2}",
                 timing.samples, timing.full_ns, timing.incremental_ns, timing.evaluated,
-                timing.preferred_engine(),
+                timing.preferred_engine(), timing.tail_preferred_engine(),
                 throughput(timing.samples, timing.full_ns),
                 throughput(timing.samples, timing.incremental_ns)
             );
@@ -174,6 +187,23 @@ mod tests {
         assert_eq!(buckets.iter().map(|b| b.samples).sum::<usize>(), 4);
         assert_eq!(buckets.iter().map(|b| b.full_ns).sum::<u128>(), 100);
         assert_eq!(buckets.iter().map(|b| b.incremental_ns).sum::<u128>(), 75);
+    }
+    #[test]
+    fn p95_policy_rejects_small_samples_and_tail_regression() {
+        let mut t = WorkloadTiming::default();
+        for _ in 0..19 { t.record(100, 1, 1); }
+        assert_eq!(t.tail_preferred_engine(), "Full");
+        t.record(100, 1000, 1);
+        // At n=20, nearest-rank p95 is index 18; one outlier is not p95.
+        assert_eq!(t.tail_preferred_engine(), "Incremental");
+        t.record(100, 1000, 1);
+        assert_eq!(t.tail_preferred_engine(), "Full");
+    }
+    #[test]
+    fn p95_policy_handles_ties_and_zero_cost() {
+        let mut t = WorkloadTiming::default();
+        for _ in 0..20 { t.record(0, 0, 0); }
+        assert_eq!(t.tail_preferred_engine(), "Full");
     }
     #[test]
     fn throughput_is_measured_in_updates_per_second() {
