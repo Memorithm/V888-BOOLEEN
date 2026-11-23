@@ -34,6 +34,7 @@ pub enum CalibrationError {
     DuplicateSample,
     InvalidObservation,
     InvalidMargin,
+    GenerationExhausted,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -301,9 +302,107 @@ pub enum SequentialRoute {
     Incremental,
 }
 
+/// Transactional cache validity for successive accepted circuit mutations.
+/// This tracks verification; it does not reconstruct the engine cache.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SequentialCacheTracker {
+    generation: u64,
+    verified_generation: Option<u64>,
+    exhausted: bool,
+}
+
+impl SequentialCacheTracker {
+    pub fn new() -> Self {
+        Self { generation: 0, verified_generation: None, exhausted: false }
+    }
+
+    /// A mutation is accepted only when the generation can advance.
+    /// On overflow, permanently fail closed instead of reusing a cache token.
+    pub fn accept_mutation(&mut self) -> Result<u64, CalibrationError> {
+        self.verified_generation = None;
+        match self.generation.checked_add(1) {
+            Some(next) if !self.exhausted => {
+                self.generation = next;
+                Ok(next)
+            }
+            _ => {
+                self.exhausted = true;
+                Err(CalibrationError::GenerationExhausted)
+            }
+        }
+    }
+
+    /// A rebuild is trusted only after an independent Full equality check.
+    /// A failed comparison invalidates any previous verified generation.
+    pub fn confirm_rebuild(&mut self, oracle_equal: bool) -> bool {
+        self.verified_generation = None;
+        if oracle_equal && !self.exhausted {
+            self.verified_generation = Some(self.generation);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn route(
+        &self,
+        policy: &FrozenConePolicy,
+        cone_class: u32,
+        gates: u64,
+        cone_gates: u64,
+    ) -> SequentialRoute {
+        if self.exhausted {
+            SequentialRoute::Full
+        } else {
+            policy.route_sequential(
+                cone_class, gates, cone_gates, self.generation, self.verified_generation,
+            )
+        }
+    }
+}
+
+impl Default for SequentialCacheTracker {
+    fn default() -> Self { Self::new() }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transactional_cache_tracker_oracle_after_sequential_mutations() {
+        let policy = FrozenConePolicy::calibrate_stratified(
+            &[sample(1, 61), sample(2, 61)], 2, 2048,
+        ).unwrap();
+        let mut tracker = SequentialCacheTracker::new();
+        assert_eq!(tracker.route(&policy, 61, 100, 10), SequentialRoute::Full);
+        assert!(tracker.confirm_rebuild(true));
+        assert_eq!(tracker.route(&policy, 61, 100, 10), SequentialRoute::Incremental);
+        for generation in 1..=4 {
+            assert_eq!(tracker.accept_mutation(), Ok(generation));
+            assert_eq!(tracker.route(&policy, 61, 100, 10), SequentialRoute::Full);
+            assert!(!tracker.confirm_rebuild(false));
+            assert_eq!(tracker.route(&policy, 61, 100, 10), SequentialRoute::Full);
+            assert!(tracker.confirm_rebuild(true));
+            assert_eq!(tracker.route(&policy, 61, 100, 10), SequentialRoute::Incremental);
+            assert_eq!(tracker.route(&policy, 61, 100, 11), SequentialRoute::Full);
+        }
+    }
+
+    #[test]
+    fn transactional_cache_tracker_fails_closed_on_generation_overflow() {
+        let policy = FrozenConePolicy::calibrate_stratified(
+            &[sample(1, 62), sample(2, 62)], 2, 2048,
+        ).unwrap();
+        let mut tracker = SequentialCacheTracker {
+            generation: u64::MAX, verified_generation: Some(u64::MAX), exhausted: false,
+        };
+        assert_eq!(tracker.accept_mutation(), Err(CalibrationError::GenerationExhausted));
+        assert!(!tracker.confirm_rebuild(true));
+        assert_eq!(tracker.route(&policy, 62, 100, 10), SequentialRoute::Full);
+        assert_eq!(tracker.accept_mutation(), Err(CalibrationError::GenerationExhausted));
+    }
+
 
     #[test]
     fn independent_seed_replicate_oracle() {
