@@ -106,6 +106,37 @@ impl ExactSequentialCache {
         Ok(evaluated)
     }
 
+    /// Atomically apply a batch of interventions. Validate all indices before
+    /// mutating state; repeated indices use their last requested value.
+    /// Every affected gate is evaluated at most once in topological order.
+    /// Returns the number of evaluated gates, including input roots.
+    pub fn update_inputs_atomic(
+        &mut self,
+        changes: &[(usize, bool)],
+    ) -> Result<usize, CacheError> {
+        if changes.iter().any(|(index, _)| *index >= self.inputs.len()) {
+            return Err(CacheError::InvalidInput);
+        }
+        let mut final_values = std::collections::BTreeMap::new();
+        for &(index, value) in changes {
+            final_values.insert(index, value);
+        }
+        let mut pending = std::collections::BTreeSet::new();
+        for (index, value) in final_values {
+            if self.inputs[index] != value {
+                self.inputs[index] = value;
+                pending.extend(self.input_roots[index].iter().copied());
+            }
+        }
+        let mut evaluated = 0;
+        while let Some(index) = pending.pop_first() {
+            self.values[index] = self.evaluate(index);
+            evaluated += 1;
+            pending.extend(self.dependents[index].iter().copied());
+        }
+        Ok(evaluated)
+    }
+
     pub fn values(&self) -> &[bool] {
         &self.values
     }
@@ -176,6 +207,41 @@ mod tests {
             }
             assert_eq!(cache.values(), expected);
         }
+    }
+
+    #[test]
+    fn atomic_batch_matches_independent_scalar_full_oracle() {
+        let gates = vec![
+            Gate::Input(0), Gate::Input(1), Gate::Input(2),
+            Gate::Xor(0, 1), Gate::And(3, 2), Gate::Not(3),
+            Gate::Xor(4, 5), Gate::And(6, 3),
+        ];
+        let mut cache = ExactSequentialCache::new(gates.clone(), vec![false; 3]).unwrap();
+        for changes in [
+            vec![(0, true), (1, true), (2, true)],
+            vec![(0, false), (0, true), (1, false)],
+            vec![(2, false), (0, false)],
+            vec![(1, true), (1, false)],
+        ] {
+            let visited = cache.update_inputs_atomic(&changes).unwrap();
+            assert!(visited <= gates.len());
+            let mut expected = vec![false; gates.len()];
+            for (i, gate) in gates.iter().enumerate() {
+                expected[i] = match *gate {
+                    Gate::Input(j) => cache.inputs()[j],
+                    Gate::Not(a) => !expected[a],
+                    Gate::And(a, b) => expected[a] && expected[b],
+                    Gate::Xor(a, b) => expected[a] ^ expected[b],
+                };
+            }
+            assert_eq!(cache.values(), expected);
+        }
+        let previous_inputs = cache.inputs().to_vec();
+        let previous_values = cache.values().to_vec();
+        assert_eq!(cache.update_inputs_atomic(&[(0, true), (3, true)]), Err(CacheError::InvalidInput));
+        assert_eq!(cache.inputs(), previous_inputs);
+        assert_eq!(cache.values(), previous_values);
+        assert_eq!(cache.update_inputs_atomic(&[]), Ok(0));
     }
 
 }
