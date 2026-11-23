@@ -64,6 +64,30 @@ impl WorkloadTiming {
     }
 }
 
+// Replay the frozen TRAIN choice against paired held-out measurements.
+// This is counterfactual accounting, not an execution-time speedup claim.
+fn frozen_policy_cost(policy: &[&str; 3], buckets: &[WorkloadTiming; 3]) -> (u128, u128, u128) {
+    let mut chosen = 0u128;
+    let mut full = 0u128;
+    let mut oracle = 0u128;
+    for (choice, bucket) in policy.iter().zip(buckets.iter()) {
+        chosen += if *choice == "Incremental" { bucket.incremental_ns } else { bucket.full_ns };
+        full += bucket.full_ns;
+        oracle += bucket.full_ns.min(bucket.incremental_ns);
+    }
+    (chosen, full, oracle)
+}
+
+// Last-write-wins semantics without allocating/copying the entire input vector.
+fn batch_is_noop(inputs: &[bool], changes: &[(usize, bool)]) -> bool {
+    changes.iter().enumerate().all(|(position, &(index, _))| {
+        let final_value = changes[position + 1..].iter()
+            .rev().find(|(later, _)| *later == index)
+            .map(|(_, value)| *value).unwrap_or(changes[position].1);
+        inputs[index] == final_value
+    })
+}
+
 fn circuit(width: usize) -> Vec<Gate> {
     let mut gates = (0..width).map(Gate::Input).collect::<Vec<_>>();
     for i in 0..width {
@@ -117,7 +141,7 @@ fn main() {
             } else {
                 vec![(index, (rng & 1) != 0)]
             };
-            let unchanged = changes.iter().fold(full.inputs().to_vec(), |mut state, &(i, value)| { state[i] = value; state }) == full.inputs();
+            let unchanged = batch_is_noop(full.inputs(), &changes);
             if unchanged { split_noop_batches += 1; }
             // Alternate execution order to avoid a systematic first-run advantage.
             let (elapsed_full, elapsed_inc, evaluated) = if step % 2 == 0 {
@@ -161,6 +185,10 @@ fn main() {
                 throughput(timing.samples, timing.incremental_ns)
             );
         }
+        let (chosen_ns, baseline_full_ns, hindsight_oracle_ns) = frozen_policy_cost(&frozen_train_policy, &workload);
+        println!("split={split} frozen_policy_ns={chosen_ns} full_baseline_ns={baseline_full_ns} hindsight_oracle_ns={hindsight_oracle_ns} regret_vs_full_ns={} regret_vs_oracle_ns={}",
+            chosen_ns as i128 - baseline_full_ns as i128,
+            chosen_ns.saturating_sub(hindsight_oracle_ns));
         total_noop_batches += split_noop_batches;
         full_ns += split_full;
         incremental_ns += split_inc;
@@ -234,6 +262,27 @@ mod tests {
         let mut tied = WorkloadTiming::default();
         for _ in 0..20 { tied.record(100, 100, 0); }
         assert_eq!(tied.calibrated_engine(), "Full");
+    }
+    #[test]
+    fn frozen_policy_reports_held_out_regressions_without_refitting() {
+        let mut buckets = std::array::from_fn(|_| WorkloadTiming::default());
+        buckets[0].record(100, 200, 1);
+        buckets[1].record(100, 20, 1);
+        buckets[2].record(100, 80, 1);
+        let frozen = ["Incremental", "Full", "Incremental"];
+        assert_eq!(frozen_policy_cost(&frozen, &buckets), (380, 300, 200));
+        assert_eq!(frozen, ["Incremental", "Full", "Incremental"]);
+    }
+    #[test]
+    fn last_write_wins_noop_matches_independent_state_replay() {
+        let state = [false, true, false];
+        for changes in [vec![(0, true), (0, false)], vec![(1, false), (1, true)],
+                        vec![(0, true), (2, true)], vec![(1, false), (1, false)]] {
+            let mut reference = state;
+            for &(i, value) in &changes { reference[i] = value; }
+            assert_eq!(batch_is_noop(&state, &changes), reference == state);
+        }
+        assert!(batch_is_noop(&state, &[]));
     }
     #[test]
     fn throughput_is_measured_in_updates_per_second() {
