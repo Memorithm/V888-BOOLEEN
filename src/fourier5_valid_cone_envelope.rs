@@ -147,6 +147,80 @@ impl FrozenConePolicy {
         })
     }
 
+    /// Calibrate each exact VALID geometry independently, avoiding the class-wide
+    /// penalty when another geometry in the same cone class regresses.
+    /// TEST/OOD observations must never be supplied to this method.
+    pub fn calibrate_stratified(
+        valid: &[ValidObservation],
+        min_samples_per_geometry: usize,
+        memory_limit_kib: u64,
+        minimum_saving_ns: u64,
+    ) -> Result<Self, CalibrationError> {
+        if valid.is_empty() || min_samples_per_geometry == 0 {
+            return Err(CalibrationError::Empty);
+        }
+        let mut seen = BTreeSet::new();
+        let mut groups: BTreeMap<(u32, u64, u64), Vec<ValidObservation>> = BTreeMap::new();
+        for &sample in valid {
+            if !seen.insert(sample.sample_id) {
+                return Err(CalibrationError::DuplicateSample);
+            }
+            if sample.gates == 0
+                || sample.cone_gates == 0
+                || sample.cone_gates > sample.gates
+                || sample.full_ns == 0
+                || sample.vm_hwm_kib.is_none()
+            {
+                return Err(CalibrationError::InvalidObservation);
+            }
+            groups
+                .entry((sample.cone_class, sample.gates, sample.cone_gates))
+                .or_default()
+                .push(sample);
+        }
+        let mut envelopes: BTreeMap<u32, ConeEnvelope> = BTreeMap::new();
+        let mut admitted_geometries = BTreeSet::new();
+        for ((cone_class, gates, cone_gates), samples) in groups {
+            if samples.len() < min_samples_per_geometry {
+                continue;
+            }
+            let min_full_ns = samples.iter().map(|s| s.full_ns).min().unwrap_or(0);
+            let max_incremental_total_ns = samples
+                .iter()
+                .map(|s| u128::from(s.refresh_ns) + u128::from(s.incremental_ns))
+                .max()
+                .unwrap_or(u128::MAX);
+            let safe = samples.iter().all(|s| {
+                s.oracle_equal
+                    && s.decision_equal
+                    && s.vm_hwm_kib.is_some_and(|m| m <= memory_limit_kib)
+            });
+            if !safe
+                || max_incremental_total_ns + u128::from(minimum_saving_ns)
+                    >= u128::from(min_full_ns)
+            {
+                continue;
+            }
+            admitted_geometries.insert((cone_class, gates, cone_gates));
+            let entry = envelopes.entry(cone_class).or_insert(ConeEnvelope {
+                cone_class,
+                max_cone_gates: 0,
+                min_full_ns: u64::MAX,
+                max_incremental_total_ns: 0,
+                samples: 0,
+            });
+            entry.max_cone_gates = entry.max_cone_gates.max(cone_gates);
+            entry.min_full_ns = entry.min_full_ns.min(min_full_ns);
+            entry.max_incremental_total_ns =
+                entry.max_incremental_total_ns.max(max_incremental_total_ns);
+            entry.samples += samples.len();
+        }
+        Ok(Self {
+            envelopes,
+            admitted_geometries,
+        })
+    }
+
     /// Sequential dispatch is safe only for a cache verified for the current
     /// committed circuit generation and a geometry admitted on frozen VALID.
     /// Full is the mandatory fallback; this method does not rebuild caches.
@@ -197,6 +271,27 @@ mod tests {
             decision_equal: true,
             vm_hwm_kib: Some(1024),
         }
+    }
+
+    #[test]
+    fn stratified_oracle_isolates_regressing_geometry_and_enforces_margin() {
+        let mut rows = vec![sample(1, 4), sample(2, 4), sample(3, 4), sample(4, 4)];
+        rows[2].gates = 200;
+        rows[2].cone_gates = 20;
+        rows[3].gates = 200;
+        rows[3].cone_gates = 20;
+        rows[3].refresh_ns = 90;
+        let old = FrozenConePolicy::calibrate(&rows, 2, 2048).unwrap();
+        assert!(!old.admits(4, 100, 10));
+        let policy = FrozenConePolicy::calibrate_stratified(&rows, 2, 2048, 49).unwrap();
+        assert!(policy.admits(4, 100, 10));
+        assert!(!policy.admits(4, 200, 20));
+        assert!(!policy.admits(4, 150, 15));
+        let boundary = FrozenConePolicy::calibrate_stratified(&rows, 2, 2048, 50).unwrap();
+        assert!(!boundary.admits(4, 100, 10));
+        rows[1].decision_equal = false;
+        let unsafe_policy = FrozenConePolicy::calibrate_stratified(&rows, 2, 2048, 0).unwrap();
+        assert!(!unsafe_policy.admits(4, 100, 10));
     }
 
     #[test]
