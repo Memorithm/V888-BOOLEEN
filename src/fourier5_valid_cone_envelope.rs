@@ -21,6 +21,8 @@ pub struct ValidObservation {
 pub struct ConeEnvelope {
     pub cone_class: u32,
     pub max_cone_gates: u64,
+    pub min_gates: u64,
+    pub max_gates: u64,
     pub min_full_ns: u64,
     pub max_incremental_total_ns: u128,
     pub samples: usize,
@@ -31,44 +33,14 @@ pub enum CalibrationError {
     Empty,
     DuplicateSample,
     InvalidObservation,
+    InvalidMargin,
+    GenerationExhausted,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FrozenConePolicy {
     envelopes: BTreeMap<u32, ConeEnvelope>,
-    /// Only geometries actually sampled sufficiently on VALID may use Incremental.
-    admitted_geometries: BTreeSet<(u32, u64, u64)>,
-}
-
-/// Cache generation is advanced by the caller after every accepted mutation.
-/// An incremental evaluation is never permitted against a stale generation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SequentialRoute {
-    Full,
-    Incremental,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SequentialCacheState {
-    /// Generation of the committed circuit.
-    pub circuit_epoch: u64,
-    /// Generation for which the cache was constructed and verified.
-    pub cache_epoch: Option<u64>,
-}
-
-impl SequentialCacheState {
-    /// Accepting a mutation invalidates the previous cache, including when
-    /// its topology is unchanged. Overflow fails closed rather than wrapping.
-    pub fn accept_mutation(&mut self) {
-        self.circuit_epoch = self.circuit_epoch.saturating_add(1);
-        self.cache_epoch = None;
-    }
-
-    /// Call only after rebuilding the cache from the committed Full state
-    /// and checking its output against the independent Full oracle.
-    pub fn mark_cache_verified(&mut self) {
-        self.cache_epoch = Some(self.circuit_epoch);
-    }
+    observed_geometry: BTreeMap<u32, BTreeSet<(u64, u64)>>,
 }
 
 impl FrozenConePolicy {
@@ -99,7 +71,7 @@ impl FrozenConePolicy {
             groups.entry(sample.cone_class).or_default().push(sample);
         }
         let mut envelopes = BTreeMap::new();
-        let mut admitted_geometries = BTreeSet::new();
+        let mut observed_geometry = BTreeMap::new();
         for (cone_class, samples) in groups {
             if samples.len() < min_samples_per_class {
                 continue;
@@ -116,15 +88,17 @@ impl FrozenConePolicy {
                     && s.vm_hwm_kib.is_some_and(|m| m <= memory_limit_kib)
             });
             if safe && max_incremental_total_ns < u128::from(min_full_ns) {
-                let mut geometry_counts = BTreeMap::<(u64, u64), usize>::new();
+                let mut counts = BTreeMap::new();
                 for sample in &samples {
-                    *geometry_counts.entry((sample.gates, sample.cone_gates)).or_default() += 1;
+                    *counts.entry((sample.gates, sample.cone_gates)).or_insert(0usize) += 1;
                 }
-                for ((gates, cone_gates), count) in geometry_counts {
-                    if count >= min_samples_per_class {
-                        admitted_geometries.insert((cone_class, gates, cone_gates));
-                    }
-                }
+                let supported = counts
+                    .into_iter()
+                    .filter_map(|(geometry, count)| {
+                        (count >= min_samples_per_class).then_some(geometry)
+                    })
+                    .collect();
+                observed_geometry.insert(cone_class, supported);
                 envelopes.insert(
                     cone_class,
                     ConeEnvelope {
@@ -134,6 +108,8 @@ impl FrozenConePolicy {
                             .map(|s| s.cone_gates)
                             .max()
                             .unwrap_or(0),
+                        min_gates: samples.iter().map(|s| s.gates).min().unwrap_or(0),
+                        max_gates: samples.iter().map(|s| s.gates).max().unwrap_or(0),
                         min_full_ns,
                         max_incremental_total_ns,
                         samples: samples.len(),
@@ -143,24 +119,39 @@ impl FrozenConePolicy {
         }
         Ok(Self {
             envelopes,
-            admitted_geometries,
+            observed_geometry,
         })
     }
 
-    /// Calibrate each exact VALID geometry independently, avoiding the class-wide
-    /// penalty when another geometry in the same cone class regresses.
-    /// TEST/OOD observations must never be supplied to this method.
+    /// Calibrate each exact geometry independently. A slow geometry must not
+    /// suppress a distinct, repeatedly measured safe geometry in the same class.
+    /// All observations remain VALID-only; no TEST/OOD feedback is consumed.
     pub fn calibrate_stratified(
         valid: &[ValidObservation],
         min_samples_per_geometry: usize,
         memory_limit_kib: u64,
-        minimum_saving_ns: u64,
     ) -> Result<Self, CalibrationError> {
+        Self::calibrate_stratified_with_margin(valid, min_samples_per_geometry, memory_limit_kib, 0)
+    }
+
+    /// Freeze a worst-case VALID admission margin per exact geometry.
+    /// margin_percent is a minimum fractional saving relative to the fastest
+    /// Full observation, including the entire Incremental cache refresh cost.
+    /// This policy is frozen before TEST/OOD and never learns from runtime outcomes.
+    pub fn calibrate_stratified_with_margin(
+        valid: &[ValidObservation],
+        min_samples_per_geometry: usize,
+        memory_limit_kib: u64,
+        margin_percent: u8,
+    ) -> Result<Self, CalibrationError> {
+        if margin_percent > 99 {
+            return Err(CalibrationError::InvalidMargin);
+        }
         if valid.is_empty() || min_samples_per_geometry == 0 {
             return Err(CalibrationError::Empty);
         }
         let mut seen = BTreeSet::new();
-        let mut groups: BTreeMap<(u32, u64, u64), Vec<ValidObservation>> = BTreeMap::new();
+        let mut strata: BTreeMap<(u32, u64, u64), Vec<ValidObservation>> = BTreeMap::new();
         for &sample in valid {
             if !seen.insert(sample.sample_id) {
                 return Err(CalibrationError::DuplicateSample);
@@ -173,65 +164,124 @@ impl FrozenConePolicy {
             {
                 return Err(CalibrationError::InvalidObservation);
             }
-            groups
+            strata
                 .entry((sample.cone_class, sample.gates, sample.cone_gates))
                 .or_default()
                 .push(sample);
         }
+
         let mut envelopes: BTreeMap<u32, ConeEnvelope> = BTreeMap::new();
-        let mut admitted_geometries = BTreeSet::new();
-        for ((cone_class, gates, cone_gates), samples) in groups {
-            if samples.len() < min_samples_per_geometry {
+        let mut observed_geometry: BTreeMap<u32, BTreeSet<(u64, u64)>> = BTreeMap::new();
+        for ((class, gates, cone), rows) in strata {
+            if rows.len() < min_samples_per_geometry {
                 continue;
             }
-            let min_full_ns = samples.iter().map(|s| s.full_ns).min().unwrap_or(0);
-            let max_incremental_total_ns = samples
+            let min_full = rows.iter().map(|r| r.full_ns).min().unwrap_or(0);
+            let max_incremental = rows
                 .iter()
-                .map(|s| u128::from(s.refresh_ns) + u128::from(s.incremental_ns))
+                .map(|r| u128::from(r.refresh_ns) + u128::from(r.incremental_ns))
                 .max()
                 .unwrap_or(u128::MAX);
-            let safe = samples.iter().all(|s| {
-                s.oracle_equal
-                    && s.decision_equal
-                    && s.vm_hwm_kib.is_some_and(|m| m <= memory_limit_kib)
-            });
-            if !safe
-                || max_incremental_total_ns + u128::from(minimum_saving_ns)
-                    >= u128::from(min_full_ns)
+            // Checked arithmetic: overflow must reject, never admit.
+            let conservative_cost = max_incremental.checked_mul(100);
+            let permitted_cost = u128::from(min_full)
+                .checked_mul(u128::from(100 - margin_percent));
+            if !matches!((conservative_cost, permitted_cost), (Some(cost), Some(limit)) if cost < limit)
+                || rows.iter().any(|r| {
+                    !r.oracle_equal
+                        || !r.decision_equal
+                        || !r.vm_hwm_kib.is_some_and(|m| m <= memory_limit_kib)
+                })
             {
                 continue;
             }
-            admitted_geometries.insert((cone_class, gates, cone_gates));
-            let entry = envelopes.entry(cone_class).or_insert(ConeEnvelope {
-                cone_class,
-                max_cone_gates: 0,
-                min_full_ns: u64::MAX,
-                max_incremental_total_ns: 0,
+            observed_geometry.entry(class).or_default().insert((gates, cone));
+            let envelope = envelopes.entry(class).or_insert(ConeEnvelope {
+                cone_class: class,
+                max_cone_gates: cone,
+                min_gates: gates,
+                max_gates: gates,
+                min_full_ns: min_full,
+                max_incremental_total_ns: max_incremental,
                 samples: 0,
             });
-            entry.max_cone_gates = entry.max_cone_gates.max(cone_gates);
-            entry.min_full_ns = entry.min_full_ns.min(min_full_ns);
-            entry.max_incremental_total_ns =
-                entry.max_incremental_total_ns.max(max_incremental_total_ns);
-            entry.samples += samples.len();
+            envelope.max_cone_gates = envelope.max_cone_gates.max(cone);
+            envelope.min_gates = envelope.min_gates.min(gates);
+            envelope.max_gates = envelope.max_gates.max(gates);
+            envelope.min_full_ns = envelope.min_full_ns.min(min_full);
+            envelope.max_incremental_total_ns =
+                envelope.max_incremental_total_ns.max(max_incremental);
+            envelope.samples += rows.len();
         }
-        Ok(Self {
-            envelopes,
-            admitted_geometries,
+        Ok(Self { envelopes, observed_geometry })
+    }
+
+    /// Require independent VALID seeds for every admitted geometry. Repeated
+    /// measurements of one seed cannot masquerade as independent support.
+    /// The ordinary stratified safety and latency oracle is applied first.
+    pub fn calibrate_seed_replicated(
+        valid: &[(u64, ValidObservation)],
+        min_distinct_seeds: usize,
+        memory_limit_kib: u64,
+        margin_percent: u8,
+    ) -> Result<Self, CalibrationError> {
+        if min_distinct_seeds == 0 || valid.is_empty() {
+            return Err(CalibrationError::Empty);
+        }
+        let mut seeds: BTreeMap<(u32, u64, u64), BTreeSet<u64>> = BTreeMap::new();
+        let mut rows = Vec::with_capacity(valid.len());
+        for &(seed, observation) in valid {
+            seeds.entry((observation.cone_class, observation.gates, observation.cone_gates))
+                .or_default()
+                .insert(seed);
+            rows.push(observation);
+        }
+        let mut policy = Self::calibrate_stratified_with_margin(
+            &rows, min_distinct_seeds, memory_limit_kib, margin_percent,
+        )?;
+        for (&class, geometry) in &mut policy.observed_geometry {
+            geometry.retain(|&(gates, cone)| {
+                seeds.get(&(class, gates, cone))
+                    .is_some_and(|unique| unique.len() >= min_distinct_seeds)
+            });
+        }
+        policy.envelopes.retain(|class, _| {
+            policy.observed_geometry.get(class).is_some_and(|g| !g.is_empty())
+        });
+        Ok(policy)
+    }
+
+    /// Only exact geometry pairs observed during VALID are admitted; an interval
+    /// between measured sizes is not evidence of safe incremental execution.
+    /// Runtime routing uses only frozen VALID evidence and current geometry.
+    /// No TEST/OOD outcomes or measured timings are fed back into calibration.
+    pub fn admits(&self, cone_class: u32, gates: u64, cone_gates: u64) -> bool {
+        self.envelopes.get(&cone_class).is_some_and(|e| {
+            gates >= e.min_gates
+                && gates <= e.max_gates
+                && cone_gates > 0
+                && cone_gates <= gates
+                && cone_gates <= e.max_cone_gates
+                && self.observed_geometry.get(&cone_class).is_some_and(|geometry| {
+                    geometry.contains(&(gates, cone_gates))
+                })
         })
     }
 
-    /// Sequential dispatch is safe only for a cache verified for the current
-    /// committed circuit generation and a geometry admitted on frozen VALID.
-    /// Full is the mandatory fallback; this method does not rebuild caches.
+    /// Select a route for a sequential intervention. An accepted mutation makes
+    /// every previously computed cache generation stale; only a completed
+    /// rebuild for the current circuit generation permits Incremental.
+    /// The caller must acknowledge cache rebuild only after independent Full
+    /// equality verification. This function never repairs a stale cache.
     pub fn route_sequential(
         &self,
-        state: SequentialCacheState,
         cone_class: u32,
         gates: u64,
         cone_gates: u64,
+        circuit_generation: u64,
+        verified_cache_generation: Option<u64>,
     ) -> SequentialRoute {
-        if state.cache_epoch == Some(state.circuit_epoch)
+        if verified_cache_generation == Some(circuit_generation)
             && self.admits(cone_class, gates, cone_gates)
         {
             SequentialRoute::Incremental
@@ -240,95 +290,236 @@ impl FrozenConePolicy {
         }
     }
 
-    /// Runtime routing uses only frozen VALID evidence and current geometry.
-    /// No TEST/OOD outcomes or measured timings are fed back into calibration.
-    pub fn admits(&self, cone_class: u32, gates: u64, cone_gates: u64) -> bool {
-        self.envelopes.contains_key(&cone_class)
-            && self
-                .admitted_geometries
-                .contains(&(cone_class, gates, cone_gates))
-    }
-
     pub fn envelopes(&self) -> &BTreeMap<u32, ConeEnvelope> {
         &self.envelopes
     }
 }
 
-
-/// A measured sequential intervention, including cache rebuild/refresh cost.
-/// The caller supplies timings and VmHWM from a bounded RemoteOps run.
+/// Conservative dispatch decision, independent of the runtime engine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SequentialMeasurement {
-    pub sample_id: u64,
-    pub cone_class: u32,
-    pub gates: u64,
-    pub cone_gates: u64,
-    pub full_ns: u64,
-    pub incremental_ns: u64,
-    pub rebuild_ns: u64,
-    pub vm_hwm_kib: Option<u64>,
-    pub oracle_equal: bool,
-    pub decision_equal: bool,
+pub enum SequentialRoute {
+    Full,
+    Incremental,
 }
 
-/// Aggregated observed costs for a heterogeneous sequential workload.
-/// No synthetic timings are generated by this aggregator.
+/// Transactional cache validity for successive accepted circuit mutations.
+/// This tracks verification; it does not reconstruct the engine cache.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SequentialSummary {
-    pub interventions: usize,
-    pub full_total_ns: u128,
-    pub incremental_total_ns: u128,
-    pub peak_vm_hwm_kib: u64,
-    pub oracle_equal: bool,
-    pub decision_equal: bool,
+pub struct SequentialCacheTracker {
+    generation: u64,
+    verified_generation: Option<u64>,
+    exhausted: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SequentialMeasureError {
-    Empty,
-    DuplicateSample,
-    InvalidMeasurement,
-}
-
-/// Summarize a disjoint measured sequence without using TEST/OOD for calibration.
-/// All rebuild costs are charged to Incremental, including after accepted mutations.
-pub fn summarize_sequential(
-    measurements: &[SequentialMeasurement],
-) -> Result<SequentialSummary, SequentialMeasureError> {
-    if measurements.is_empty() {
-        return Err(SequentialMeasureError::Empty);
+impl SequentialCacheTracker {
+    pub fn new() -> Self {
+        Self { generation: 0, verified_generation: None, exhausted: false }
     }
-    let mut seen = BTreeSet::new();
-    let mut result = SequentialSummary {
-        interventions: 0,
-        full_total_ns: 0,
-        incremental_total_ns: 0,
-        peak_vm_hwm_kib: 0,
-        oracle_equal: true,
-        decision_equal: true,
-    };
-    for m in measurements {
-        if !seen.insert(m.sample_id) {
-            return Err(SequentialMeasureError::DuplicateSample);
+
+    /// A mutation is accepted only when the generation can advance.
+    /// On overflow, permanently fail closed instead of reusing a cache token.
+    pub fn accept_mutation(&mut self) -> Result<u64, CalibrationError> {
+        self.verified_generation = None;
+        match self.generation.checked_add(1) {
+            Some(next) if !self.exhausted => {
+                self.generation = next;
+                Ok(next)
+            }
+            _ => {
+                self.exhausted = true;
+                Err(CalibrationError::GenerationExhausted)
+            }
         }
-        if m.gates == 0 || m.cone_gates == 0 || m.cone_gates > m.gates
-            || m.full_ns == 0 || m.vm_hwm_kib.is_none()
-        {
-            return Err(SequentialMeasureError::InvalidMeasurement);
-        }
-        result.interventions += 1;
-        result.full_total_ns += u128::from(m.full_ns);
-        result.incremental_total_ns += u128::from(m.rebuild_ns) + u128::from(m.incremental_ns);
-        result.peak_vm_hwm_kib = result.peak_vm_hwm_kib.max(m.vm_hwm_kib.unwrap_or(0));
-        result.oracle_equal &= m.oracle_equal;
-        result.decision_equal &= m.decision_equal;
     }
-    Ok(result)
+
+    /// A rebuild is trusted only after an independent Full equality check.
+    /// A failed comparison invalidates any previous verified generation.
+    pub fn confirm_rebuild(&mut self, oracle_equal: bool) -> bool {
+        self.verified_generation = None;
+        if oracle_equal && !self.exhausted {
+            self.verified_generation = Some(self.generation);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn route(
+        &self,
+        policy: &FrozenConePolicy,
+        cone_class: u32,
+        gates: u64,
+        cone_gates: u64,
+    ) -> SequentialRoute {
+        if self.exhausted {
+            SequentialRoute::Full
+        } else {
+            policy.route_sequential(
+                cone_class, gates, cone_gates, self.generation, self.verified_generation,
+            )
+        }
+    }
+}
+
+/// Cache verification is scoped to the exact circuit geometry, not just epoch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GeometryBoundCache {
+    tracker: SequentialCacheTracker,
+    verified_geometry: Option<(u32, u64, u64)>,
+}
+
+impl GeometryBoundCache {
+    pub fn new() -> Self {
+        Self { tracker: SequentialCacheTracker::new(), verified_geometry: None }
+    }
+
+    pub fn accept_mutation(&mut self) -> Result<u64, CalibrationError> {
+        self.verified_geometry = None;
+        self.tracker.accept_mutation()
+    }
+
+    /// A successful independent Full comparison is required for this geometry.
+    pub fn confirm_rebuild(
+        &mut self,
+        cone_class: u32,
+        gates: u64,
+        cone_gates: u64,
+        oracle_equal: bool,
+    ) -> bool {
+        self.verified_geometry = None;
+        let valid = gates > 0 && cone_gates > 0 && cone_gates <= gates;
+        let accepted = self.tracker.confirm_rebuild(valid && oracle_equal);
+        if accepted {
+            self.verified_geometry = Some((cone_class, gates, cone_gates));
+        }
+        accepted
+    }
+
+    pub fn route(
+        &self,
+        policy: &FrozenConePolicy,
+        cone_class: u32,
+        gates: u64,
+        cone_gates: u64,
+    ) -> SequentialRoute {
+        if self.verified_geometry != Some((cone_class, gates, cone_gates)) {
+            SequentialRoute::Full
+        } else {
+            self.tracker.route(policy, cone_class, gates, cone_gates)
+        }
+    }
+}
+
+impl Default for GeometryBoundCache {
+    fn default() -> Self { Self::new() }
+}
+
+impl Default for SequentialCacheTracker {
+    fn default() -> Self { Self::new() }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transactional_cache_tracker_oracle_after_sequential_mutations() {
+        let policy = FrozenConePolicy::calibrate_stratified(
+            &[sample(1, 61), sample(2, 61)], 2, 2048,
+        ).unwrap();
+        let mut tracker = SequentialCacheTracker::new();
+        assert_eq!(tracker.route(&policy, 61, 100, 10), SequentialRoute::Full);
+        assert!(tracker.confirm_rebuild(true));
+        assert_eq!(tracker.route(&policy, 61, 100, 10), SequentialRoute::Incremental);
+        for generation in 1..=4 {
+            assert_eq!(tracker.accept_mutation(), Ok(generation));
+            assert_eq!(tracker.route(&policy, 61, 100, 10), SequentialRoute::Full);
+            assert!(!tracker.confirm_rebuild(false));
+            assert_eq!(tracker.route(&policy, 61, 100, 10), SequentialRoute::Full);
+            assert!(tracker.confirm_rebuild(true));
+            assert_eq!(tracker.route(&policy, 61, 100, 10), SequentialRoute::Incremental);
+            assert_eq!(tracker.route(&policy, 61, 100, 11), SequentialRoute::Full);
+        }
+    }
+
+    #[test]
+    fn transactional_cache_tracker_fails_closed_on_generation_overflow() {
+        let policy = FrozenConePolicy::calibrate_stratified(
+            &[sample(1, 62), sample(2, 62)], 2, 2048,
+        ).unwrap();
+        let mut tracker = SequentialCacheTracker {
+            generation: u64::MAX, verified_generation: Some(u64::MAX), exhausted: false,
+        };
+        assert_eq!(tracker.accept_mutation(), Err(CalibrationError::GenerationExhausted));
+        assert!(!tracker.confirm_rebuild(true));
+        assert_eq!(tracker.route(&policy, 62, 100, 10), SequentialRoute::Full);
+        assert_eq!(tracker.accept_mutation(), Err(CalibrationError::GenerationExhausted));
+    }
+
+
+    #[test]
+    fn independent_seed_replicate_oracle() {
+        let repeated = [(7, sample(1, 52)), (7, sample(2, 52))];
+        let policy = FrozenConePolicy::calibrate_seed_replicated(&repeated, 2, 2048, 0).unwrap();
+        assert!(!policy.admits(52, 100, 10));
+        let distinct = [(7, sample(1, 52)), (8, sample(2, 52))];
+        let policy = FrozenConePolicy::calibrate_seed_replicated(&distinct, 2, 2048, 0).unwrap();
+        assert!(policy.admits(52, 100, 10));
+        let mut divergent = sample(2, 52);
+        divergent.decision_equal = false;
+        let policy = FrozenConePolicy::calibrate_seed_replicated(
+            &[(7, sample(1, 52)), (8, divergent)], 2, 2048, 0,
+        ).unwrap();
+        assert!(!policy.admits(52, 100, 10));
+    }
+
+    #[test]
+    fn sequential_route_requires_current_verified_cache_and_valid_geometry() {
+        let rows = [sample(1, 44), sample(2, 44)];
+        let policy = FrozenConePolicy::calibrate_stratified(&rows, 2, 2048).unwrap();
+        // Independent oracle: only exact generation equality AND admitted
+        // geometry can route Incremental. Every other case is Full.
+        for circuit_generation in [0_u64, 1, 9, u64::MAX] {
+            for cache_generation in [None, Some(0), Some(1), Some(9), Some(u64::MAX)] {
+                for cone in [0_u64, 10, 11] {
+                    let expected = cache_generation == Some(circuit_generation) && cone == 10;
+                    assert_eq!(
+                        policy.route_sequential(44, 100, cone, circuit_generation, cache_generation),
+                        if expected { SequentialRoute::Incremental } else { SequentialRoute::Full },
+                    );
+                }
+            }
+        }
+        assert_eq!(policy.route_sequential(44, 101, 10, 9, Some(9)), SequentialRoute::Full);
+    }
+
+    #[test]
+    fn geometry_bound_cache_rejects_cross_geometry_reuse() {
+        let mut a = sample(1, 77);
+        a.cone_gates = 10;
+        let mut b = sample(2, 77);
+        b.cone_gates = 11;
+        let policy = FrozenConePolicy::calibrate_stratified(&[a, b], 1, 2048).unwrap();
+        let mut cache = GeometryBoundCache::new();
+        assert!(cache.confirm_rebuild(77, 100, 10, true));
+        assert_eq!(cache.route(&policy, 77, 100, 10), SequentialRoute::Incremental);
+        assert_eq!(cache.route(&policy, 77, 100, 11), SequentialRoute::Full);
+        cache.accept_mutation().unwrap();
+        assert_eq!(cache.route(&policy, 77, 100, 10), SequentialRoute::Full);
+        assert!(!cache.confirm_rebuild(77, 100, 11, false));
+        assert_eq!(cache.route(&policy, 77, 100, 11), SequentialRoute::Full);
+        assert!(cache.confirm_rebuild(77, 100, 11, true));
+        assert_eq!(cache.route(&policy, 77, 100, 11), SequentialRoute::Incremental);
+        assert_eq!(cache.route(&policy, 77, 100, 10), SequentialRoute::Full);
+    }
+
+    #[test]
+    fn geometry_bound_cache_rejects_invalid_geometry() {
+        let mut cache = GeometryBoundCache::new();
+        assert!(!cache.confirm_rebuild(1, 100, 101, true));
+        assert!(!cache.confirm_rebuild(1, 100, 0, true));
+        assert!(!cache.confirm_rebuild(1, 0, 0, true));
+    }
 
     fn sample(id: u64, class: u32) -> ValidObservation {
         ValidObservation {
@@ -345,103 +536,75 @@ mod tests {
         }
     }
 
-
     #[test]
-    fn sequential_heterogeneous_oracle_charges_every_rebuild_and_reports_regression() {
-        let rows = [
-            SequentialMeasurement { sample_id: 1, cone_class: 1, gates: 100, cone_gates: 5,
-                full_ns: 100, incremental_ns: 20, rebuild_ns: 30,
-                vm_hwm_kib: Some(1000), oracle_equal: true, decision_equal: true },
-            SequentialMeasurement { sample_id: 2, cone_class: 2, gates: 1000, cone_gates: 200,
-                full_ns: 200, incremental_ns: 150, rebuild_ns: 100,
-                vm_hwm_kib: Some(2000), oracle_equal: true, decision_equal: false },
-        ];
-        let summary = summarize_sequential(&rows).unwrap();
-        assert_eq!(summary.interventions, 2);
-        assert_eq!(summary.full_total_ns, 300);
-        assert_eq!(summary.incremental_total_ns, 300);
-        assert_eq!(summary.peak_vm_hwm_kib, 2000);
-        assert!(summary.oracle_equal);
-        assert!(!summary.decision_equal);
-        assert_eq!(summarize_sequential(&[rows[0], rows[0]]),
-            Err(SequentialMeasureError::DuplicateSample));
-        let mut bad = rows[0];
-        bad.vm_hwm_kib = None;
-        assert_eq!(summarize_sequential(&[bad]),
-            Err(SequentialMeasureError::InvalidMeasurement));
-    }
-
-    #[test]
-    fn stratified_oracle_isolates_regressing_geometry_and_enforces_margin() {
-        let mut rows = vec![sample(1, 4), sample(2, 4), sample(3, 4), sample(4, 4)];
-        rows[2].gates = 200;
-        rows[2].cone_gates = 20;
-        rows[3].gates = 200;
-        rows[3].cone_gates = 20;
-        rows[3].refresh_ns = 90;
-        let old = FrozenConePolicy::calibrate(&rows, 2, 2048).unwrap();
-        assert!(!old.admits(4, 100, 10));
-        let policy = FrozenConePolicy::calibrate_stratified(&rows, 2, 2048, 49).unwrap();
-        assert!(policy.admits(4, 100, 10));
-        assert!(!policy.admits(4, 200, 20));
-        assert!(!policy.admits(4, 150, 15));
-        let boundary = FrozenConePolicy::calibrate_stratified(&rows, 2, 2048, 50).unwrap();
-        assert!(!boundary.admits(4, 100, 10));
-        rows[1].decision_equal = false;
-        let unsafe_policy = FrozenConePolicy::calibrate_stratified(&rows, 2, 2048, 0).unwrap();
-        assert!(!unsafe_policy.admits(4, 100, 10));
-    }
-
-    #[test]
-    fn sequential_cache_epoch_oracle_never_reuses_stale_cache() {
-        let policy = FrozenConePolicy::calibrate(&[sample(1, 3), sample(2, 3)], 2, 2048)
-            .unwrap();
-        let mut state = SequentialCacheState {
-            circuit_epoch: 7,
-            cache_epoch: None,
-        };
-        assert_eq!(policy.route_sequential(state, 3, 100, 10), SequentialRoute::Full);
-        state.mark_cache_verified();
-        assert_eq!(policy.route_sequential(state, 3, 100, 10), SequentialRoute::Incremental);
-        assert_eq!(policy.route_sequential(state, 3, 100, 11), SequentialRoute::Full);
-        state.accept_mutation();
-        assert_eq!(state.circuit_epoch, 8);
-        assert_eq!(policy.route_sequential(state, 3, 100, 10), SequentialRoute::Full);
-        state.mark_cache_verified();
-        assert_eq!(policy.route_sequential(state, 3, 100, 10), SequentialRoute::Incremental);
-    }
-
-    #[test]
-    fn sequential_epoch_overflow_fails_closed() {
-        let policy = FrozenConePolicy::calibrate(&[sample(1, 3), sample(2, 3)], 2, 2048)
-            .unwrap();
-        let mut state = SequentialCacheState {
-            circuit_epoch: u64::MAX,
-            cache_epoch: Some(u64::MAX),
-        };
-        state.accept_mutation();
-        assert_eq!(state.cache_epoch, None);
-        assert_eq!(policy.route_sequential(state, 3, 100, 10), SequentialRoute::Full);
-    }
-
-    #[test]
-    fn oracle_requires_repeated_exact_valid_geometry_not_interpolation() {
-        let rows = [
-            sample(1, 7),
-            sample(2, 7),
-            ValidObservation { sample_id: 3, gates: 1000, cone_gates: 20, ..sample(3, 7) },
-            ValidObservation { sample_id: 4, gates: 1000, cone_gates: 20, ..sample(4, 7) },
-            ValidObservation { sample_id: 5, gates: 500, cone_gates: 15, ..sample(5, 7) },
-        ];
-        let policy = FrozenConePolicy::calibrate(&rows, 2, 2048).unwrap();
-        for gates in [99, 100, 101, 500, 999, 1000, 1001] {
-            for cone in [9, 10, 15, 20, 21] {
-                let expected = (gates == 100 && cone == 10)
-                    || (gates == 1000 && cone == 20);
-                assert_eq!(policy.admits(7, gates, cone), expected);
-            }
+    fn frozen_margin_oracle_checks_worst_case_per_geometry() {
+        let mut rows = vec![sample(1, 31), sample(2, 31)];
+        rows[0].refresh_ns = 10;
+        rows[0].incremental_ns = 40;
+        rows[1].refresh_ns = 20;
+        rows[1].incremental_ns = 40;
+        // Independent integer oracle: worst 60ns, fastest Full 100ns.
+        for margin in [0u8, 20, 39, 40, 41, 99] {
+            let policy = FrozenConePolicy::calibrate_stratified_with_margin(&rows, 2, 2048, margin).unwrap();
+            assert_eq!(policy.admits(31, 100, 10), margin < 40, "margin={margin}");
         }
-        assert!(!policy.admits(8, 100, 10));
+        assert_eq!(
+            FrozenConePolicy::calibrate_stratified_with_margin(&rows, 2, 2048, 100),
+            Err(CalibrationError::InvalidMargin)
+        );
+    }
+
+    #[test]
+    fn margin_oracle_rejects_full_timing_tail_and_overflow() {
+        let mut rows = vec![sample(1, 32), sample(2, 32)];
+        rows[1].full_ns = 70;
+        rows[1].refresh_ns = 20;
+        rows[1].incremental_ns = 40;
+        assert!(!FrozenConePolicy::calibrate_stratified_with_margin(&rows, 2, 2048, 20)
+            .unwrap().admits(32, 100, 10));
+        assert!(FrozenConePolicy::calibrate_stratified_with_margin(&rows, 2, 2048, 10)
+            .unwrap().admits(32, 100, 10));
+        rows[1].incremental_ns = u64::MAX;
+        assert!(!FrozenConePolicy::calibrate_stratified_with_margin(&rows, 2, 2048, 0)
+            .unwrap().admits(32, 100, 10));
+    }
+
+    #[test]
+    fn stratified_oracle_preserves_safe_geometry_despite_slow_neighbor() {
+        let mut rows = Vec::new();
+        for (id, cone, refresh) in [(1, 4, 10), (2, 4, 20), (3, 8, 90), (4, 8, 90)] {
+            let mut r = sample(id, 7);
+            r.cone_gates = cone;
+            r.refresh_ns = refresh;
+            rows.push(r);
+        }
+        let policy = FrozenConePolicy::calibrate_stratified(&rows, 2, 2048).unwrap();
+        assert!(policy.admits(7, 100, 4));
+        assert!(!policy.admits(7, 100, 8));
+        assert!(!policy.admits(7, 100, 6));
+        assert!(!FrozenConePolicy::calibrate(&rows, 2, 2048)
+            .unwrap()
+            .admits(7, 100, 4));
+    }
+
+    #[test]
+    fn stratified_oracle_fails_closed_on_bad_provenance_and_decisions() {
+        let mut rows = vec![sample(1, 3), sample(2, 3)];
+        rows[1].decision_equal = false;
+        assert!(!FrozenConePolicy::calibrate_stratified(&rows, 2, 2048)
+            .unwrap()
+            .admits(3, 100, 10));
+        rows[1].decision_equal = true;
+        rows[1].vm_hwm_kib = Some(2049);
+        assert!(!FrozenConePolicy::calibrate_stratified(&rows, 2, 2048)
+            .unwrap()
+            .admits(3, 100, 10));
+        rows[1].vm_hwm_kib = Some(1024);
+        rows[1].sample_id = 1;
+        assert_eq!(
+            FrozenConePolicy::calibrate_stratified(&rows, 2, 2048),
+            Err(CalibrationError::DuplicateSample)
+        );
     }
 
     #[test]
@@ -453,6 +616,51 @@ mod tests {
         assert!(policy.admits(9, 100, 10));
         assert!(!policy.admits(9, 100, 11));
         assert!(!policy.admits(10, 100, 10));
+    }
+
+    #[test]
+    fn oracle_rejects_unseen_circuit_sizes_even_for_known_cone_class() {
+        let mut low = sample(1, 7);
+        low.gates = 100;
+        let mut high = sample(2, 7);
+        high.gates = 200;
+        let policy = FrozenConePolicy::calibrate(&[low, high], 1, 2048).unwrap();
+        // Independent range oracle: only observed circuit-size interval is admissible.
+        for gates in [0, 1, 99, 100, 150, 200, 201, 1_000_000] {
+            let expected = gates == 100 || gates == 200;
+            assert_eq!(policy.admits(7, gates, 10), expected, "gates={gates}");
+        }
+        assert!(!policy.admits(7, 200, 11));
+        assert!(!policy.admits(7, 150, 10));
+    }
+
+    #[test]
+    fn independent_exact_geometry_oracle_rejects_unmeasured_cones() {
+        let mut first = sample(1, 12);
+        first.cone_gates = 4;
+        let mut second = sample(2, 12);
+        second.cone_gates = 8;
+        let policy = FrozenConePolicy::calibrate(&[first, second], 1, 2048).unwrap();
+        for cone in 0..=12 {
+            let expected = cone == 4 || cone == 8;
+            assert_eq!(policy.admits(12, 100, cone), expected, "cone={cone}");
+        }
+        assert!(!policy.admits(12, 101, 4));
+    }
+
+    #[test]
+    fn independent_geometry_support_oracle() {
+        let mut rows = Vec::new();
+        for (id, cone) in [(1, 4), (2, 4), (3, 8), (4, 10), (5, 10)] {
+            let mut observation = sample(id, 15);
+            observation.cone_gates = cone;
+            rows.push(observation);
+        }
+        let policy = FrozenConePolicy::calibrate(&rows, 2, 2048).unwrap();
+        for cone in 0..=12 {
+            let expected = cone == 4 || cone == 10;
+            assert_eq!(policy.admits(15, 100, cone), expected, "cone={cone}");
+        }
     }
 
     #[test]
