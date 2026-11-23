@@ -143,6 +143,37 @@ impl ExactSequentialCache {
         Ok(evaluated)
     }
 
+    /// Checked execution mode for qualification and safety-critical routing.
+    /// The independent full topological pass is evaluated after each accepted
+    /// batch. If incremental state diverges, replace it with the full result.
+    /// This mode deliberately trades speed for an exact, fail-closed decision.
+    /// The returned flag reports whether incremental agreed with Full.
+    pub fn update_inputs_verified(
+        &mut self,
+        changes: &[(usize, bool)],
+    ) -> Result<(usize, bool), CacheError> {
+        // Invalid batches must not change either the inputs or the cache.
+        if changes.iter().any(|(index, _)| *index >= self.inputs.len()) {
+            return Err(CacheError::InvalidInput);
+        }
+        let evaluated = self.update_inputs_atomic(changes)?;
+        // Compute the reference without consulting cached intermediate values.
+        let mut reference = vec![false; self.gates.len()];
+        for (index, gate) in self.gates.iter().enumerate() {
+            reference[index] = match *gate {
+                Gate::Input(input) => self.inputs[input],
+                Gate::Not(parent) => !reference[parent],
+                Gate::And(a, b) => reference[a] & reference[b],
+                Gate::Xor(a, b) => reference[a] ^ reference[b],
+            };
+        }
+        let exact = reference == self.values;
+        if !exact {
+            self.values = reference;
+        }
+        Ok((evaluated, exact))
+    }
+
     pub fn values(&self) -> &[bool] {
         &self.values
     }
@@ -276,5 +307,52 @@ mod tests {
         assert_eq!(cache.values(), previous_values);
         assert_eq!(cache.update_inputs_atomic(&[]), Ok(0));
     }
+
+    #[test]
+    fn verified_sequential_batches_match_independent_full_oracle() {
+        let gates = vec![
+            Gate::Input(0), Gate::Input(1), Gate::Input(2),
+            Gate::Xor(0, 1), Gate::And(3, 2), Gate::Not(3),
+            Gate::Xor(4, 5), Gate::And(6, 3),
+        ];
+        let mut cache = ExactSequentialCache::new(gates.clone(), vec![false; 3]).unwrap();
+        for changes in [
+            vec![(0, true), (1, true)],
+            vec![(2, true)],
+            vec![(0, false), (1, false)],
+            vec![(2, false), (2, true)],
+            vec![(0, true), (0, false)],
+        ] {
+            let (_, exact) = cache.update_inputs_verified(&changes).unwrap();
+            assert!(exact);
+            let mut oracle = vec![false; gates.len()];
+            for (index, gate) in gates.iter().enumerate() {
+                oracle[index] = match *gate {
+                    Gate::Input(i) => cache.inputs()[i],
+                    Gate::Not(a) => !oracle[a],
+                    Gate::And(a, b) => oracle[a] & oracle[b],
+                    Gate::Xor(a, b) => oracle[a] ^ oracle[b],
+                };
+            }
+            assert_eq!(cache.values(), oracle);
+        }
+        let previous = cache.values().to_vec();
+        assert_eq!(cache.update_inputs_verified(&[(3, true)]), Err(CacheError::InvalidInput));
+        assert_eq!(cache.values(), previous);
+    }
+
+    #[test]
+    fn verified_mode_repairs_stale_cached_state() {
+        let mut cache = ExactSequentialCache::new(
+            vec![Gate::Input(0), Gate::Not(0), Gate::Xor(0, 1)],
+            vec![false],
+        ).unwrap();
+        cache.values[2] = !cache.values[2];
+        let (_, exact) = cache.update_inputs_verified(&[]).unwrap();
+        assert!(!exact);
+        assert_eq!(cache.values(), &[false, true, true]);
+        assert_eq!(cache.update_inputs_verified(&[]), Ok((0, true)));
+    }
+
 
 }
