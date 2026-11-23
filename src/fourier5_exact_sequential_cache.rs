@@ -223,6 +223,55 @@ impl ExactSequentialCache {
         Ok((evaluated, true))
     }
 
+    /// Execute a TRAIN-calibrated policy only for its exact measured geometry.
+    /// Unseen geometries, rejected calibration and any invalid batch use Full.
+    /// This does not recalibrate on VALID, TEST or OOD observations.
+    pub fn update_inputs_calibrated(
+        &mut self,
+        changes: &[(usize, bool)],
+        policy: &crate::fourier5_measured_dispatch::BucketPolicy,
+    ) -> Result<(usize, bool), CacheError> {
+        use crate::fourier5_measured_dispatch::EngineChoice;
+        if changes.iter().any(|(index, _)| *index >= self.inputs.len()) {
+            return Err(CacheError::InvalidInput);
+        }
+        let mut final_values = std::collections::BTreeMap::new();
+        for &(input, value) in changes {
+            final_values.insert(input, value);
+        }
+        let mut pending = std::collections::BTreeSet::new();
+        for (&input, &value) in &final_values {
+            if self.inputs[input] != value {
+                pending.extend(self.input_roots[input].iter().copied());
+            }
+        }
+        if pending.is_empty() {
+            return Ok((0, true));
+        }
+        let mut cone = pending.clone();
+        while let Some(index) = pending.pop_first() {
+            for &child in &self.dependents[index] {
+                if cone.insert(child) {
+                    pending.insert(child);
+                }
+            }
+        }
+        let bucket = policy.bucket;
+        let admitted = bucket.accepted
+            && bucket.gates == self.gates.len()
+            && bucket.cone_gates == cone.len()
+            && policy.choice == EngineChoice::Incremental;
+        if admitted {
+            self.update_inputs_atomic(changes).map(|count| (count, true))
+        } else {
+            for (input, value) in final_values {
+                self.inputs[input] = value;
+            }
+            self.rebuild();
+            Ok((self.gates.len(), false))
+        }
+    }
+
     pub fn values(&self) -> &[bool] {
         &self.values
     }
@@ -447,5 +496,45 @@ mod tests {
         assert_eq!(cache.update_inputs_verified(&[]), Ok((0, true)));
     }
 
+
+    #[test]
+    fn calibrated_dispatch_is_exact_and_fails_closed_on_unseen_cones() {
+        use crate::fourier5_measured_dispatch::{BucketPolicy, ConeBucket, EngineChoice};
+        let gates = vec![
+            Gate::Input(0), Gate::Input(1), Gate::And(0, 1),
+            Gate::Not(2), Gate::Xor(2, 3),
+        ];
+        let mut cache = ExactSequentialCache::new(gates.clone(), vec![false; 2]).unwrap();
+        let policy = BucketPolicy {
+            bucket: ConeBucket { gates: 5, cone_gates: 4, accepted: true },
+            choice: EngineChoice::Incremental,
+            pairs: 3,
+            full_total_ns: 300,
+            incremental_total_ns: 100,
+        };
+        // Input 0 reaches four gates (0, 2, 3, 4).
+        let (_, incremental) = cache.update_inputs_calibrated(&[(0, true)], &policy).unwrap();
+        assert!(incremental);
+        // Input 1 reaches four gates too; unchanged AND prunes descendants.
+        let (_, incremental) = cache.update_inputs_calibrated(&[(1, true)], &policy).unwrap();
+        assert!(incremental);
+        let mut rejected = policy;
+        rejected.bucket.cone_gates = 2;
+        let (_, incremental) = cache.update_inputs_calibrated(&[(0, false)], &rejected).unwrap();
+        assert!(!incremental);
+        let mut oracle = vec![false; gates.len()];
+        for (i, gate) in gates.iter().enumerate() {
+            oracle[i] = match *gate {
+                Gate::Input(j) => cache.inputs()[j],
+                Gate::Not(a) => !oracle[a],
+                Gate::And(a, b) => oracle[a] & oracle[b],
+                Gate::Xor(a, b) => oracle[a] ^ oracle[b],
+            };
+        }
+        assert_eq!(cache.values(), oracle);
+        let before = cache.values().to_vec();
+        assert_eq!(cache.update_inputs_calibrated(&[(2, true)], &policy), Err(CacheError::InvalidInput));
+        assert_eq!(cache.values(), before);
+    }
 
 }
