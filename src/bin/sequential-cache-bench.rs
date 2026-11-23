@@ -59,10 +59,12 @@ fn main() {
                 vec![(index, (rng & 1) != 0)]
             };
             let start = Instant::now();
+            // Reconstruct an independent Full instance from final input values.
+            let mut next_inputs = full.inputs().to_vec();
             for &(i, value) in &changes {
-                full.update_input(i, value).unwrap();
+                next_inputs[i] = value;
             }
-            full.rebuild();
+            full = ExactSequentialCache::new(gates.clone(), next_inputs).unwrap();
             let elapsed_full = start.elapsed().as_nanos();
             let start = Instant::now();
             let evaluated = incremental.update_inputs_atomic(&changes).unwrap();
