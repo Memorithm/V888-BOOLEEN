@@ -232,14 +232,63 @@ impl FrozenConePolicy {
         })
     }
 
+    /// Select a route for a sequential intervention. An accepted mutation makes
+    /// every previously computed cache generation stale; only a completed
+    /// rebuild for the current circuit generation permits Incremental.
+    /// The caller must acknowledge cache rebuild only after independent Full
+    /// equality verification. This function never repairs a stale cache.
+    pub fn route_sequential(
+        &self,
+        cone_class: u32,
+        gates: u64,
+        cone_gates: u64,
+        circuit_generation: u64,
+        verified_cache_generation: Option<u64>,
+    ) -> SequentialRoute {
+        if verified_cache_generation == Some(circuit_generation)
+            && self.admits(cone_class, gates, cone_gates)
+        {
+            SequentialRoute::Incremental
+        } else {
+            SequentialRoute::Full
+        }
+    }
+
     pub fn envelopes(&self) -> &BTreeMap<u32, ConeEnvelope> {
         &self.envelopes
     }
 }
 
+/// Conservative dispatch decision, independent of the runtime engine.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SequentialRoute {
+    Full,
+    Incremental,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sequential_route_requires_current_verified_cache_and_valid_geometry() {
+        let rows = [sample(1, 44), sample(2, 44)];
+        let policy = FrozenConePolicy::calibrate_stratified(&rows, 2, 2048).unwrap();
+        // Independent oracle: only exact generation equality AND admitted
+        // geometry can route Incremental. Every other case is Full.
+        for circuit_generation in [0_u64, 1, 9, u64::MAX] {
+            for cache_generation in [None, Some(0), Some(1), Some(9), Some(u64::MAX)] {
+                for cone in [0_u64, 10, 11] {
+                    let expected = cache_generation == Some(circuit_generation) && cone == 10;
+                    assert_eq!(
+                        policy.route_sequential(44, 100, cone, circuit_generation, cache_generation),
+                        if expected { SequentialRoute::Incremental } else { SequentialRoute::Full },
+                    );
+                }
+            }
+        }
+        assert_eq!(policy.route_sequential(44, 101, 10, 9, Some(9)), SequentialRoute::Full);
+    }
 
     fn sample(id: u64, class: u32) -> ValidObservation {
         ValidObservation {
