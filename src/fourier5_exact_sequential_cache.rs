@@ -14,6 +14,8 @@ pub enum Gate {
 pub enum CacheError {
     InvalidDependency,
     InvalidInput,
+    InvalidOutput,
+    OutputMismatch,
 }
 
 #[derive(Clone, Debug)]
@@ -270,6 +272,44 @@ impl ExactSequentialCache {
             self.rebuild();
             Ok((self.gates.len(), false))
         }
+    }
+
+    /// Transactional intervention: commit only if independently rebuilt Full
+    /// values satisfy every requested output constraint. Rejected interventions
+    /// leave inputs and cached values unchanged. This is an exact acceptance
+    /// mechanism, not a learned biological plasticity rule.
+    pub fn update_inputs_guarded(
+        &mut self,
+        changes: &[(usize, bool)],
+        required_outputs: &[(usize, bool)],
+    ) -> Result<usize, CacheError> {
+        if changes.iter().any(|(i, _)| *i >= self.inputs.len()) {
+            return Err(CacheError::InvalidInput);
+        }
+        if required_outputs.iter().any(|(i, _)| *i >= self.gates.len()) {
+            return Err(CacheError::InvalidOutput);
+        }
+        let mut candidate_inputs = self.inputs.clone();
+        for &(i, value) in changes {
+            candidate_inputs[i] = value;
+        }
+        // Recompute from candidate inputs without consulting mutable cache state.
+        let mut reference = vec![false; self.gates.len()];
+        for (i, gate) in self.gates.iter().enumerate() {
+            reference[i] = match *gate {
+                Gate::Input(input) => candidate_inputs[input],
+                Gate::Not(parent) => !reference[parent],
+                Gate::And(a, b) => reference[a] & reference[b],
+                Gate::Xor(a, b) => reference[a] ^ reference[b],
+            };
+        }
+        if required_outputs.iter().any(|&(i, expected)| reference[i] != expected) {
+            return Err(CacheError::OutputMismatch);
+        }
+        let changed = candidate_inputs != self.inputs;
+        self.inputs = candidate_inputs;
+        self.values = reference;
+        Ok(if changed { self.gates.len() } else { 0 })
     }
 
     pub fn values(&self) -> &[bool] {
@@ -535,6 +575,21 @@ mod tests {
         let before = cache.values().to_vec();
         assert_eq!(cache.update_inputs_calibrated(&[(2, true)], &policy), Err(CacheError::InvalidInput));
         assert_eq!(cache.values(), before);
+    }
+
+    #[test]
+    fn guarded_sequential_commit_and_rejection_match_independent_oracle() {
+        let gates = vec![Gate::Input(0), Gate::Input(1), Gate::Xor(0, 1), Gate::Not(2)];
+        let mut cache = ExactSequentialCache::new(gates, vec![false, false]).unwrap();
+        let before = cache.values().to_vec();
+        assert_eq!(cache.update_inputs_guarded(&[(0, true)], &[(3, true)]), Err(CacheError::OutputMismatch));
+        assert_eq!(cache.inputs(), &[false, false]);
+        assert_eq!(cache.values(), before);
+        assert_eq!(cache.update_inputs_guarded(&[(0, true), (1, true)], &[(2, false), (3, true)]), Ok(4));
+        assert_eq!(cache.values(), &[true, true, false, true]);
+        assert_eq!(cache.update_inputs_guarded(&[(0, false)], &[(4, true)]), Err(CacheError::InvalidOutput));
+        assert_eq!(cache.update_inputs_guarded(&[(2, false)], &[]), Err(CacheError::InvalidInput));
+        assert_eq!(cache.inputs(), &[true, true]);
     }
 
 }
