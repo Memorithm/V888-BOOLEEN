@@ -99,9 +99,12 @@ impl ExactSequentialCache {
         pending.extend(self.input_roots[input].iter().copied());
         let mut evaluated = 0;
         while let Some(index) = pending.pop_first() {
-            self.values[index] = self.evaluate(index);
+            let next = self.evaluate(index);
             evaluated += 1;
-            pending.extend(self.dependents[index].iter().copied());
+            if next != self.values[index] {
+                self.values[index] = next;
+                pending.extend(self.dependents[index].iter().copied());
+            }
         }
         Ok(evaluated)
     }
@@ -130,9 +133,12 @@ impl ExactSequentialCache {
         }
         let mut evaluated = 0;
         while let Some(index) = pending.pop_first() {
-            self.values[index] = self.evaluate(index);
+            let next = self.evaluate(index);
             evaluated += 1;
-            pending.extend(self.dependents[index].iter().copied());
+            if next != self.values[index] {
+                self.values[index] = next;
+                pending.extend(self.dependents[index].iter().copied());
+            }
         }
         Ok(evaluated)
     }
@@ -207,6 +213,33 @@ mod tests {
             }
             assert_eq!(cache.values(), expected);
         }
+    }
+
+    #[test]
+    fn unchanged_intermediate_gate_prunes_descendants_without_changing_oracle() {
+        let gates = vec![
+            Gate::Input(0),
+            Gate::Input(1),
+            Gate::And(0, 1),
+            Gate::Not(2),
+            Gate::Xor(3, 2),
+        ];
+        let mut cache = ExactSequentialCache::new(gates.clone(), vec![false, false]).unwrap();
+        // Input 0 changes but AND(false, false) remains false: no descendant work.
+        assert_eq!(cache.update_input(0, true), Ok(2));
+        assert_eq!(cache.values(), &[true, false, false, true, true]);
+        // The second intervention changes AND and propagates to both descendants.
+        assert_eq!(cache.update_inputs_atomic(&[(1, true)]), Ok(4));
+        let mut oracle = vec![false; gates.len()];
+        for (index, gate) in gates.iter().enumerate() {
+            oracle[index] = match *gate {
+                Gate::Input(i) => cache.inputs()[i],
+                Gate::Not(a) => !oracle[a],
+                Gate::And(a, b) => oracle[a] && oracle[b],
+                Gate::Xor(a, b) => oracle[a] ^ oracle[b],
+            };
+        }
+        assert_eq!(cache.values(), oracle);
     }
 
     #[test]
